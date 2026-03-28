@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
 import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { Landmark } from '../../src/types';
+import HelpModal from '../../src/components/HelpModal';
+
+const MAP_HELP = [
+  { q: 'マップの見方は？', a: '青い点が現在地、黄色ピンがスポット、青いラインが現在の記録ルートです。' },
+  { q: 'スポットをタップすると？', a: 'スポット名・カテゴリ・来訪回数がポップアップ表示されます。' },
+  { q: '記録中バッジの意味は？', a: '「記録中 ○pt」は現在のルート記録ポイント数です。記録タブで停止できます。' },
+  { q: 'マップが動かない？', a: 'インターネット接続を確認してください。地図タイルはOpenStreetMapを使用しています。' },
+];
 
 const MAP_HTML = `<!DOCTYPE html>
 <html>
@@ -120,6 +128,7 @@ export default function MapScreen() {
   const landmarksRef = useRef<Landmark[]>([]);
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPointsLen = useRef(0);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -185,6 +194,10 @@ export default function MapScreen() {
 
   return (
     <View style={styles.container}>
+      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="マップ画面の使い方" items={MAP_HELP} />
+      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
+        <Text style={styles.helpBtnText}>?</Text>
+      </TouchableOpacity>
       <WebView
         ref={webviewRef}
         source={{ html: MAP_HTML }}
@@ -213,6 +226,8 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
+  helpBtn: { position: 'absolute', top: 16, left: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   recordingBadge: {
     position: 'absolute', top: 16, right: 16,
     backgroundColor: 'rgba(255,255,255,0.95)',

@@ -223,6 +223,23 @@ export async function uploadLandmarkPhoto(
   return { url, storagePath: path, takenAt: Date.now() };
 }
 
+// Google Places の一時URLをFirebase Storageに永続保存
+export async function uploadLandmarkPhotoFromUrl(
+  userId: string, landmarkId: string, googleUrl: string
+): Promise<LandmarkPhoto | null> {
+  try {
+    const res = await fetch(googleUrl);
+    const blob = await res.blob();
+    const path = `landmarks/${userId}/${landmarkId}/${Date.now()}.jpg`;
+    const storageRef = ref(storage, path);
+    await uploadBytes(storageRef, blob);
+    const url = await getDownloadURL(storageRef);
+    return { url, storagePath: path, takenAt: Date.now() };
+  } catch {
+    return null;
+  }
+}
+
 // --- 愛車 CRUD ---
 export async function getUserCars(userId: string): Promise<Car[]> {
   const q = query(collection(db, 'cars'), where('userId', '==', userId));

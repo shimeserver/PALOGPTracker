@@ -14,6 +14,15 @@ import {
 import { Landmark } from '../../src/types';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../src/firebase/config';
+import HelpModal from '../../src/components/HelpModal';
+
+const LANDMARKS_HELP = [
+  { q: 'スポットの追加方法は？', a: '「＋ 現在地にスポットを追加」ボタンで現在地にスポットを登録できます。' },
+  { q: '来訪回数を増やすには？', a: 'スポット詳細画面の「来訪を記録」ボタンを押すと来訪回数が増えます。' },
+  { q: 'スポットを削除するには？', a: 'リスト右のゴミ箱アイコンをタップすると削除できます。' },
+  { q: '写真はどこに保存される？', a: '写真はFirebase Storageに保存され、永続的に表示されます。' },
+  { q: 'カテゴリの変更は？', a: 'スポット詳細画面から編集できます。' },
+];
 
 const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
 type SortKey = 'visitCount' | 'category' | 'lastVisit';
@@ -30,6 +39,7 @@ export default function LandmarksScreen() {
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const load = async () => {
     if (!user) return;
@@ -138,6 +148,10 @@ export default function LandmarksScreen() {
 
   return (
     <View style={styles.container}>
+      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="スポット画面の使い方" items={LANDMARKS_HELP} />
+      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
+        <Text style={styles.helpBtnText}>?</Text>
+      </TouchableOpacity>
       <TouchableOpacity style={styles.addButton} onPress={() => setShowAdd(true)}>
         <Text style={styles.addButtonText}>＋ 現在地にスポットを追加</Text>
       </TouchableOpacity>
@@ -232,6 +246,8 @@ export default function LandmarksScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
+  helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   sortBar: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, gap: 8, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e8eaed' },
   sortBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e8eaed' },
   sortBtnActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },

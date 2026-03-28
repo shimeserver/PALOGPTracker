@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getUserLandmarks, getVisits, deleteLandmark, updateLandmark, mergeLandmarks, deleteVisit } from '../firebase/data';
+import { getUserLandmarks, getVisits, deleteLandmark, updateLandmark, mergeLandmarks, deleteVisit, uploadLandmarkPhotoFromUrl } from '../firebase/data';
 import type { Landmark, Visit } from '../firebase/data';
 
 const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
@@ -122,7 +122,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     }
 
     setConfirming(true);
-    const photoUrl = pendingPlace.photos?.[0]?.getUrl({ maxWidth: 600 });
+    const googlePhotoUrl = pendingPlace.photos?.[0]?.getUrl({ maxWidth: 600 });
     const newLat = pendingPlace.geometry?.location?.lat();
     const newLng = pendingPlace.geometry?.location?.lng();
     const patch: Parameters<typeof updateLandmark>[1] = {
@@ -130,7 +130,11 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       category: placeTypeToCategory(pendingPlace.types || []),
       placeId: pid,
     };
-    if (photoUrl) patch.photos = [{ url: photoUrl, storagePath: '', takenAt: Date.now() }];
+    // Google Places の一時URLをFirebase Storageに永続保存
+    if (googlePhotoUrl && selected.id) {
+      const stored = await uploadLandmarkPhotoFromUrl(userId, selected.id, googlePhotoUrl);
+      if (stored) patch.photos = [stored];
+    }
     if (newLat !== undefined && newLng !== undefined) { patch.lat = newLat; patch.lng = newLng; }
 
     if (forceMerge && mergeCandidate) {
