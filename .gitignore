@@ -1,0 +1,35 @@
+# ===== 機密情報 =====
+.env
+.env.local
+.env.production
+web/.env
+mobile/.env
+mobile/android/app/google-services.json
+mobile/android/app/debug.keystore
+mobile/android/app/*.keystore
+mobile/android/app/*.jks
+
+# ===== 依存関係 =====
+node_modules/
+web/node_modules/
+mobile/node_modules/
+shared/node_modules/
+
+# ===== ビルド成果物 =====
+web/dist/
+mobile/android/build/
+mobile/android/app/build/
+mobile/.expo/
+mobile/android/.gradle/
+*.apk
+*.aab
+*.ipa
+
+# ===== OS / エディタ =====
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.log
+
+# ===== Expo =====
+mobile/.expo-shared/
