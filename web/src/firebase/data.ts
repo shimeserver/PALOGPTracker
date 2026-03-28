@@ -56,11 +56,12 @@ export interface MaintenanceLog {
 }
 
 export interface TrackPoint { lat: number; lng: number; timestamp: number; speed: number; }
+export type TrackingMode = 'car' | 'walk';
 export interface Route {
   id?: string; userId: string; name: string; tags: string[];
   startTime: number; endTime: number; totalDistance: number;
   avgSpeed: number; maxSpeed: number; points: TrackPoint[];
-  source: 'recorded' | 'imported'; createdAt: number;
+  source: 'recorded' | 'imported'; mode?: TrackingMode; createdAt: number;
 }
 export interface TagDef {
   id?: string; userId: string; name: string; color: string;

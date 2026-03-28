@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { TrackPoint, Route } from '../types';
+import { TrackPoint, Route, TrackingMode } from '../types';
 import { saveRoute } from '../firebase/routes';
 
 export const LOCATION_TASK = 'gps-background-tracking';
@@ -23,6 +23,8 @@ interface TrackingState {
   currentPoints: TrackPoint[];
   currentSpeed: number;
   startTime: number | null;
+  trackingMode: TrackingMode;
+  setTrackingMode: (mode: TrackingMode) => void;
   addPoints: (locations: Location.LocationObject[]) => void;
   startTracking: () => Promise<void>;
   stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | null>;
@@ -34,6 +36,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   currentPoints: [],
   currentSpeed: 0,
   startTime: null,
+  trackingMode: 'car',
+  setTrackingMode: (mode) => set({ trackingMode: mode }),
 
   addPoints: (locations) => {
     const newPoints: TrackPoint[] = locations.map(loc => ({
@@ -89,6 +93,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     const maxSpeed = speeds.length > 0 ? speeds.reduce((m, s) => s > m ? s : m, 0) : 0;
     const endTime = currentPoints[currentPoints.length - 1].timestamp;
 
+    const { trackingMode } = get();
     const route: Omit<Route, 'id'> = {
       userId,
       name: name || `ルート ${new Date(startTime!).toLocaleDateString('ja-JP')}`,
@@ -100,6 +105,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       maxSpeed,
       points: currentPoints,
       source: 'recorded',
+      mode: trackingMode,
       createdAt: Date.now(),
     };
 

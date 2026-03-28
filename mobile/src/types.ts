@@ -7,6 +7,8 @@ export interface TrackPoint {
   speed: number;
 }
 
+export type TrackingMode = 'car' | 'walk';
+
 export interface Route {
   id?: string;
   userId: string;
@@ -19,6 +21,7 @@ export interface Route {
   maxSpeed: number;
   points: TrackPoint[];
   source: 'recorded' | 'imported';
+  mode?: TrackingMode;
   createdAt: number;
 }
 

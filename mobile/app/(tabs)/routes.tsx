@@ -51,6 +51,9 @@ export default function RoutesScreen() {
       onLongPress={() => handleDelete(item)}
     >
       <View style={styles.cardHeader}>
+        <Text style={styles.modeIcon}>
+          {item.mode === 'walk' ? '🚶' : '🚗'}
+        </Text>
         <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
           <Text style={[styles.badge, item.source === 'imported' && styles.badgeImported]}>
@@ -99,6 +102,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3, borderLeftColor: '#2563eb',
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  modeIcon: { fontSize: 16, marginRight: 6 },
   cardName: { color: '#1f2937', fontSize: 15, fontWeight: '600', flex: 1, marginRight: 8 },
   badge: { backgroundColor: '#f0fdf4', color: '#15803d', fontSize: 11, fontWeight: '500', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 },
   badgeImported: { backgroundColor: '#fff7ed', color: '#c2410c' },
