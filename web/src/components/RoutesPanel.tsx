@@ -238,7 +238,11 @@ export default function RoutesPanel({
                     style={{ flex: 1, background: '#f8f9fa', border: '1.5px solid #2563eb', borderRadius: 6, padding: '2px 8px', fontSize: 14, color: '#1f2937', outline: 'none', marginRight: 8 }}
                   />
                 ) : (
-                  <span style={styles.cardName}>{route.name || '（無名）'}</span>
+                  <><span style={{ marginRight: 4 }}>
+                    {route.mode === 'walk' ? '🚶' : '🚗'}
+                  </span>
+                  <span style={styles.cardName}>{route.name || '（無名）'}</span></>
+
                 )}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
                   {isSelected && <span style={{ fontSize: 14 }}>✓</span>}

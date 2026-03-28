@@ -65,8 +65,13 @@ function haversine(p1: { lat: number; lng: number }, p2: { lat: number; lng: num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+const MODE_CONFIG = {
+  car:  { label: '車',   icon: '🚗' },
+  walk: { label: '徒歩', icon: '🚶' },
+} as const;
+
 export default function TrackScreen() {
-  const { isTracking, currentPoints, currentSpeed, startTime, startTracking, stopTracking } = useTrackingStore();
+  const { isTracking, currentPoints, currentSpeed, startTime, startTracking, stopTracking, trackingMode, setTrackingMode } = useTrackingStore();
   const { user } = useAuthStore();
   const { activeCar } = useCarStore();
   const [elapsed, setElapsed] = useState(0);
@@ -119,10 +124,10 @@ export default function TrackScreen() {
     setShowNameModal(false);
     if (!user) return;
     try {
-      const tagIds = activeCar?.tagId ? [activeCar.tagId] : undefined;
+      const tagIds = trackingMode === 'car' && activeCar?.tagId ? [activeCar.tagId] : undefined;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
       if (id) {
-        const carMsg = activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
+        const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
         Alert.alert('保存完了', `ルートを保存しました（${currentPoints.length}ポイント）${carMsg}`);
       }
     } catch (error) {
@@ -138,11 +143,26 @@ export default function TrackScreen() {
       <View style={styles.statusBar}>
         <View style={[styles.statusDot, isTracking && styles.statusDotActive]} />
         <Text style={styles.statusText}>{isTracking ? '記録中' : '待機中'}</Text>
-        {activeCar && (
-          <View style={styles.activeCarBadge}>
-            <Text style={styles.activeCarText}>🚗 {activeCar.nickname}</Text>
+        <View style={styles.statusRight}>
+          {activeCar && trackingMode === 'car' && (
+            <View style={styles.activeCarBadge}>
+              <Text style={styles.activeCarText}>🚗 {activeCar.nickname}</Text>
+            </View>
+          )}
+          {/* モード選択（記録前のみ変更可） */}
+          <View style={styles.modePicker}>
+            {(Object.keys(MODE_CONFIG) as (keyof typeof MODE_CONFIG)[]).map(m => (
+              <TouchableOpacity
+                key={m}
+                style={[styles.modeBtn, trackingMode === m && styles.modeBtnActive]}
+                onPress={() => !isTracking && setTrackingMode(m)}
+                disabled={isTracking}
+              >
+                <Text style={styles.modeBtnText}>{MODE_CONFIG[m].icon}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        )}
+        </View>
       </View>
 
       {/* メトリクス */}
@@ -229,6 +249,11 @@ export default function TrackScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9', padding: 24 },
   statusBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  statusRight: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  modePicker: { flexDirection: 'row', gap: 4 },
+  modeBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  modeBtnActive: { backgroundColor: '#2563eb' },
+  modeBtnText: { fontSize: 16 },
   statusDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#d1d5db', marginRight: 8 },
   statusDotActive: { backgroundColor: '#22c55e' },
   statusText: { color: '#6b7280', fontSize: 16, fontWeight: '500' },
@@ -254,7 +279,7 @@ const styles = StyleSheet.create({
   },
   stopButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14, textAlign: 'center' },
   bgNote: { color: '#9ca3af', textAlign: 'center', marginTop: 20, fontSize: 13 },
-  activeCarBadge: { marginLeft: 'auto', backgroundColor: '#eff6ff', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  activeCarBadge: { backgroundColor: '#eff6ff', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
   activeCarText: { color: '#2563eb', fontSize: 12, fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 32 },
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 24, elevation: 10 },

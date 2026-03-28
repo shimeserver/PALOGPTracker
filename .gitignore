@@ -17,6 +17,7 @@ shared/node_modules/
 
 # ===== ビルド成果物 =====
 web/dist/
+web/release/
 mobile/android/build/
 mobile/android/app/build/
 mobile/.expo/
@@ -24,6 +25,8 @@ mobile/android/.gradle/
 *.apk
 *.aab
 *.ipa
+*.exe
+*.blockmap
 
 # ===== OS / エディタ =====
 .DS_Store
