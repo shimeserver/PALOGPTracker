@@ -147,6 +147,11 @@ export default function MapScreen() {
     if (user) getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
+      // WebViewが既に初期化済みの場合はスポットを即時更新
+      if (initialized.current) {
+        const lms = data.map(lm => ({ lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount }));
+        webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lms)});true;`);
+      }
     });
   }, [user]);
 
