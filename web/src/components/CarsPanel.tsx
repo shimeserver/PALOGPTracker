@@ -583,7 +583,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                           const nextKmOk = log.nextDueKm ? kmDriven < log.nextDueKm : true;
                           const isWarning = !nextMonthsOk || !nextKmOk;
                           return (
-                            <div key={log.id} style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', marginBottom: 8, border: `1px solid ${isWarning ? '#fca5a5' : '#e8eaed'}`, background: isWarning ? '#fff5f5' : '#fff' }}>
+                            <div key={log.id} style={{ borderRadius: 8, padding: '10px 12px', marginBottom: 8, border: `1px solid ${isWarning ? '#fca5a5' : '#e8eaed'}`, background: isWarning ? '#fff5f5' : '#fff' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <div>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -605,10 +605,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                                       <input
                                         autoFocus
                                         type="number"
-                                        value={editOdometer.value}
+                                        value={editOdometer?.value ?? ''}
                                         onChange={e => setEditOdometer(prev => prev ? { ...prev, value: e.target.value } : null)}
-                                        onBlur={() => handleSaveOdometer(car.id!, log.id!, editOdometer.value)}
-                                        onKeyDown={e => { if (e.key === 'Enter') handleSaveOdometer(car.id!, log.id!, editOdometer.value); if (e.key === 'Escape') setEditOdometer(null); }}
+                                        onBlur={() => editOdometer && handleSaveOdometer(car.id!, log.id!, editOdometer.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter' && editOdometer) handleSaveOdometer(car.id!, log.id!, editOdometer.value); if (e.key === 'Escape') setEditOdometer(null); }}
                                         style={{ width: 80, fontSize: 11, padding: '1px 4px', border: '1px solid #2563eb', borderRadius: 4, outline: 'none' }}
                                         onClick={e => e.stopPropagation()}
                                       />
