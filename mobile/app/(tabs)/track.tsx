@@ -42,8 +42,8 @@ window.updateRoute=function(coords){
   locMarker=L.marker(last,{icon:makeLocIcon(),zIndexOffset:1000}).addTo(map);
   if(coords.length<2){map.setView(last,15);}
 };
-window.addEventListener('message',function(e){try{var m=JSON.parse(e.data);if(m.type==='updateRoute')window.updateRoute(m.coords);}catch(err){}});
-document.addEventListener('message',function(e){try{var m=JSON.parse(e.data);if(m.type==='updateRoute')window.updateRoute(m.coords);}catch(err){}});
+window.addEventListener('message',function(e){try{var m=JSON.parse(e.data);if(m.type==='updateRoute')window.updateRoute(m.coords);}catch(err){console.error('Message parse error:',err);}});
+document.addEventListener('message',function(e){try{var m=JSON.parse(e.data);if(m.type==='updateRoute')window.updateRoute(m.coords);}catch(err){console.error('Message parse error:',err);}});
 </script>
 </body>
 </html>`;
@@ -110,8 +110,8 @@ export default function TrackScreen() {
   const handleStart = async () => {
     try {
       await startTracking();
-    } catch (e: any) {
-      Alert.alert('エラー', e.message);
+    } catch (error) {
+      Alert.alert('エラー', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -125,8 +125,8 @@ export default function TrackScreen() {
         const carMsg = activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
         Alert.alert('保存完了', `ルートを保存しました（${currentPoints.length}ポイント）${carMsg}`);
       }
-    } catch (e: any) {
-      Alert.alert('保存エラー', e.message);
+    } catch (error) {
+      Alert.alert('保存エラー', error instanceof Error ? error.message : String(error));
     }
     setRouteName('');
     setElapsed(0);

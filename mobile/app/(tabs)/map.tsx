@@ -123,10 +123,14 @@ export default function MapScreen() {
 
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
-      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const loc = await Location.getCurrentPositionAsync({});
+        setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      } catch (error) {
+        console.error('Location error:', error);
+      }
     })();
   }, []);
 
@@ -154,11 +158,18 @@ export default function MapScreen() {
   useEffect(() => {
     if (!initialized.current || !currentLocation) return;
     if (locUpdateTimer.current) clearTimeout(locUpdateTimer.current);
+    let isMounted = true;
     locUpdateTimer.current = setTimeout(() => {
-      webviewRef.current?.injectJavaScript(
-        `window.updateLocation(${currentLocation.lat},${currentLocation.lng});true;`
-      );
+      if (isMounted && webviewRef.current) {
+        webviewRef.current.injectJavaScript(
+          `window.updateLocation(${currentLocation.lat},${currentLocation.lng});true;`
+        );
+      }
     }, 2000);
+    return () => {
+      isMounted = false;
+      if (locUpdateTimer.current) clearTimeout(locUpdateTimer.current);
+    };
   }, [currentLocation]);
 
   // ルート更新（5点ごと）

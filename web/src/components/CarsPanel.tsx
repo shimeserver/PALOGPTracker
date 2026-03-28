@@ -131,7 +131,11 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    getUserCars(userId).then(c => { setCars(c); onCarsChange(c); setLoading(false); });
+    let isMounted = true;
+    getUserCars(userId).then(c => {
+      if (isMounted) { setCars(c); onCarsChange(c); setLoading(false); }
+    }).catch(() => { if (isMounted) setLoading(false); });
+    return () => { isMounted = false; };
   }, [open, userId]);
 
   const loadFuel = async (carId: string) => {
@@ -166,7 +170,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     const f = e.target.files?.[0];
     if (!f) return;
     setPhotoFile(f);
-    setPhotoPreview(URL.createObjectURL(f));
+    setPhotoPreview(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(f);
+    });
   };
 
   const handleSaveCar = async () => {

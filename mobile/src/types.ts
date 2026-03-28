@@ -53,7 +53,7 @@ export interface Visit {
 }
 
 export interface Car {
-  id?: string;
+  id: string;
   userId: string;
   nickname: string;
   make?: string;

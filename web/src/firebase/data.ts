@@ -6,7 +6,7 @@ import { db, storage } from './config';
 
 // --- 愛車 ---
 export interface Car {
-  id?: string;
+  id: string;
   userId: string;
   nickname: string;
   make?: string;
@@ -233,7 +233,7 @@ export async function getUserCars(userId: string): Promise<Car[]> {
 
 export async function createCar(car: Omit<Car, 'id'>): Promise<Car> {
   const docRef = await addDoc(collection(db, 'cars'), car);
-  return { ...car, id: docRef.id };
+  return { id: docRef.id, ...car };
 }
 
 export async function updateCar(carId: string, patch: Partial<Omit<Car, 'id' | 'userId'>>): Promise<void> {
