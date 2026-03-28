@@ -233,7 +233,7 @@ export default function MapScreen() {
       </TouchableOpacity>
       <WebView
         ref={webviewRef}
-        source={{ html: MAP_HTML }}
+        source={{ html: MAP_HTML, baseUrl: 'https://localhost' }}
         style={styles.map}
         javaScriptEnabled
         domStorageEnabled

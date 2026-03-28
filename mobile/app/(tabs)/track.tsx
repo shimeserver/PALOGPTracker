@@ -236,7 +236,7 @@ export default function TrackScreen() {
       <View style={styles.miniMapContainer}>
         <WebView
           ref={miniMapRef}
-          source={{ html: MINI_MAP_HTML }}
+          source={{ html: MINI_MAP_HTML, baseUrl: 'https://localhost' }}
           style={styles.miniMap}
           javaScriptEnabled
           domStorageEnabled

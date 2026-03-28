@@ -264,7 +264,7 @@ export default function RouteDetailScreen() {
     <View style={styles.container}>
       <WebView
         ref={webviewRef}
-        source={{ html: MAP_HTML }}
+        source={{ html: MAP_HTML, baseUrl: 'https://localhost' }}
         style={styles.map}
         javaScriptEnabled
         domStorageEnabled
