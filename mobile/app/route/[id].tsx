@@ -69,9 +69,22 @@ window.initRoute = function(points) {
 window.setStopCandidates = function(stops) {
   stopMarkers.forEach(function(m){map.removeLayer(m);});
   stopMarkers = [];
-  stops.forEach(function(stop, idx){
+  stops.forEach(function(stop){
     var m = L.marker([stop.lat,stop.lng],{icon:makeStopIcon()}).addTo(map);
-    m.bindPopup('<b style="font-size:13px">🔵 未登録スポット候補</b><br><span style="font-size:11px;color:#6b7280">'+Math.round(stop.durationMs/60000)+'分滞在</span><br><button onclick="window.ReactNativeWebView.postMessage(JSON.stringify({type:\'addStop\',idx:'+idx+',lat:'+stop.lat+',lng:'+stop.lng+',durationMs:'+stop.durationMs+'}))" style="margin-top:6px;background:#2563eb;color:#fff;border:none;padding:5px 12px;border-radius:8px;font-size:12px;cursor:pointer">＋ スポットに追加</button>',{maxWidth:200});
+    m.bindPopup(
+      '<b style="font-size:13px">🔵 未登録スポット候補</b><br>' +
+      '<span style="font-size:11px;color:#6b7280">' + Math.round(stop.durationMs/60000) + '分滞在</span><br>' +
+      '<span style="font-size:11px;color:#2563eb">タップしてスポット追加</span>',
+      {maxWidth:200}
+    );
+    m.on('click', function(){
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'addStop',
+        lat: stop.lat,
+        lng: stop.lng,
+        durationMs: stop.durationMs
+      }));
+    });
     stopMarkers.push(m);
   });
 };
