@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
 import WebView from 'react-native-webview';
 import HelpModal from '../../src/components/HelpModal';
+import { useTrackingStore } from '../../src/store/trackingStore';
+import { useAuthStore } from '../../src/store/authStore';
+import { useCarStore } from '../../src/store/carStore';
 
 const TRACK_HELP = [
   { q: '記録を開始するには？', a: '「▶ 記録開始」ボタンをタップしてください。GPS取得が始まり、移動に合わせてポイントが記録されます。' },
@@ -10,9 +13,6 @@ const TRACK_HELP = [
   { q: '保存時のルート名は？', a: '停止後にルート名を入力できます。空欄のまま保存すると日付が自動で入ります。' },
   { q: '下のミニマップは？', a: '記録中の軌跡をリアルタイムで表示します。3ポイントごとに更新されます。' },
 ];
-import { useTrackingStore } from '../../src/store/trackingStore';
-import { useAuthStore } from '../../src/store/authStore';
-import { useCarStore } from '../../src/store/carStore';
 
 const MINI_MAP_HTML = `<!DOCTYPE html>
 <html>
