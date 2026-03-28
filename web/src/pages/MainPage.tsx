@@ -29,7 +29,7 @@ export default function MainPage({ user }: Props) {
   const [carsOpen, setCarsOpen]             = useState(false);
   const [landmarkCount, setLandmarkCount]   = useState(0);
   const [tags, setTags]                     = useState<TagDef[]>([]);
-  const [cars, setCars]                     = useState<Car[]>([]);
+  const [, setCars]                         = useState<Car[]>([]);
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
