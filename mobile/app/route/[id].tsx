@@ -63,18 +63,22 @@ window.initRoute = function(points) {
   }
 };
 
-window.updatePlayback = function(points, index) {
-  var slice = points.slice(0, index+1);
+// 再生用ポイントキャッシュ（startPlaybackで一度だけセット）
+var playbackPoints = null;
+
+window.startPlayback = function(points) {
+  playbackPoints = points;
+  if(endMarker){ endMarker.remove(); endMarker=null; }
+};
+
+window.updatePlayback = function(index) {
+  if(!playbackPoints) return;
+  var slice = playbackPoints.slice(0, index+1);
   var latlngs = slice.map(function(p){return[p.lat,p.lng];});
 
-  // ルートラインを再生分だけ更新
   if(routeLine) routeLine.setLatLngs(latlngs);
 
-  // ゴールマーカー非表示
-  if(endMarker){ endMarker.remove(); endMarker=null; }
-
-  // カーソル移動
-  var cur = points[index];
+  var cur = playbackPoints[index];
   if(!cursorMarker){
     cursorMarker = L.marker([cur.lat,cur.lng],{icon:makeCursor(),zIndexOffset:1000}).addTo(map);
   } else {
@@ -129,6 +133,9 @@ export default function RouteDetailScreen() {
 
   const startPlayback = () => {
     if (!route) return;
+    // ポイントは開始時に1回だけWebViewへ送る
+    const pts = JSON.stringify(route.points);
+    webviewRef.current?.injectJavaScript(`window.startPlayback(${pts});true;`);
     setPlayIndex(0);
     setPlayback(true);
     playRef.current = setInterval(() => {
@@ -139,8 +146,8 @@ export default function RouteDetailScreen() {
           setPlayback(false);
           return i;
         }
-        const pts = JSON.stringify(route.points);
-        webviewRef.current?.injectJavaScript(`window.updatePlayback(${pts},${next});true;`);
+        // indexだけ送る（O(1)）
+        webviewRef.current?.injectJavaScript(`window.updatePlayback(${next});true;`);
         return next;
       });
     }, 100);
