@@ -68,10 +68,24 @@ window.initMap = function(lat,lng,routeCoords,landmarks){
   window.setLandmarks(landmarks);
 };
 
+var followMode = false;
+
 window.updateLocation = function(lat,lng){
   if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(),zIndexOffset:1000}).addTo(map); }
   else { locMarker.setLatLng([lat,lng]); }
+  if(followMode){ map.panTo([lat,lng],{animate:true,duration:0.5}); }
 };
+
+window.panToLocation = function(lat,lng){
+  map.setView([lat,lng],16,{animate:true});
+};
+
+window.setFollowMode = function(enabled){
+  followMode = enabled;
+};
+
+// ユーザーが手動でマップを動かしたら追随を解除
+map.on('dragstart', function(){ if(followMode){ followMode=false; window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'followOff'})); } });
 
 window.updateRoute = function(coords){
   if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
@@ -80,7 +94,7 @@ window.updateRoute = function(coords){
   routeLine = L.polyline(coords,{color:'#2563eb',weight:5,opacity:0.85}).addTo(map);
   var sIcon = L.divIcon({html:'<div class="route-start">START</div>',className:'',iconAnchor:[24,12]});
   startMarker = L.marker(coords[0],{icon:sIcon}).addTo(map);
-  map.panTo(coords[coords.length-1]);
+  // panToはfollowModeのupdateLocationに任せる（ここでは移動しない）
 };
 
 window.setLandmarks = function(landmarks){
@@ -129,18 +143,24 @@ export default function MapScreen() {
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPointsLen = useRef(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [following, setFollowing] = useState(false);
 
   useEffect(() => {
+    let sub: Location.LocationSubscription | null = null;
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({});
-        setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        // 継続購読で常に最新位置を保持
+        sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced, timeInterval: 3000, distanceInterval: 5 },
+          (loc) => setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude })
+        );
       } catch (error) {
         console.error('Location error:', error);
       }
     })();
+    return () => { sub?.remove(); };
   }, []);
 
   useEffect(() => {
@@ -154,6 +174,14 @@ export default function MapScreen() {
       }
     });
   }, [user]);
+
+  // 記録終了時に追随解除
+  useEffect(() => {
+    if (!isTracking && following) {
+      setFollowing(false);
+      webviewRef.current?.injectJavaScript(`window.setFollowMode(false);true;`);
+    }
+  }, [isTracking]);
 
   // WebView読み込み完了後に初期データを送信
   const handleLoad = () => {
@@ -215,9 +243,47 @@ export default function MapScreen() {
         mixedContentMode="always"
         onLoad={handleLoad}
         onError={(e) => console.log('WebView error:', e.nativeEvent)}
+        onMessage={(e) => {
+          try {
+            const msg = JSON.parse(e.nativeEvent.data);
+            if (msg.type === 'followOff') setFollowing(false);
+          } catch {}
+        }}
         overScrollMode="never"
         bounces={false}
       />
+
+      {/* 現在位置ボタン */}
+      <TouchableOpacity
+        style={styles.locBtn}
+        onPress={() => {
+          if (currentLocation) {
+            webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
+          }
+        }}
+      >
+        <Text style={styles.locBtnText}>◎</Text>
+      </TouchableOpacity>
+
+      {/* 追随ボタン（記録中のみ表示） */}
+      {isTracking && (
+        <TouchableOpacity
+          style={[styles.followBtn, following && styles.followBtnActive]}
+          onPress={() => {
+            const next = !following;
+            setFollowing(next);
+            webviewRef.current?.injectJavaScript(`window.setFollowMode(${next});true;`);
+            if (next && currentLocation) {
+              webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
+            }
+          }}
+        >
+          <Text style={[styles.followBtnText, following && styles.followBtnTextActive]}>
+            {following ? '追随中' : '追随'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {isTracking && (
         <View style={styles.recordingBadge}>
           <View style={styles.recordingDot} />
@@ -233,6 +299,12 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   helpBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
+  locBtn: { position: 'absolute', bottom: 100, right: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  locBtnText: { fontSize: 22, color: '#2563eb' },
+  followBtn: { position: 'absolute', bottom: 152, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  followBtnActive: { backgroundColor: '#2563eb' },
+  followBtnText: { fontSize: 13, fontWeight: '700', color: '#2563eb' },
+  followBtnTextActive: { color: '#fff' },
   recordingBadge: {
     position: 'absolute', top: 16, right: 16,
     backgroundColor: 'rgba(255,255,255,0.95)',
