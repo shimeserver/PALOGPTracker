@@ -226,7 +226,7 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-  helpBtn: { position: 'absolute', top: 16, left: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  helpBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   recordingBadge: {
     position: 'absolute', top: 16, right: 16,
