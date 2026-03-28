@@ -124,10 +124,10 @@ export default function TrackScreen() {
     setShowNameModal(false);
     if (!user) return;
     try {
-      const tagIds = activeCar?.tagId ? [activeCar.tagId] : undefined;
+      const tagIds = trackingMode === 'car' && activeCar?.tagId ? [activeCar.tagId] : undefined;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
       if (id) {
-        const carMsg = activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
+        const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
         Alert.alert('保存完了', `ルートを保存しました（${currentPoints.length}ポイント）${carMsg}`);
       }
     } catch (error) {
