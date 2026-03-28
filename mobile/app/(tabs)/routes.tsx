@@ -65,9 +65,9 @@ export default function RoutesScreen() {
         </Text>
         <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-          <Text style={[styles.badge, item.source === 'imported' && styles.badgeImported]}>
-            {item.source === 'imported' ? 'インポート' : '記録'}
-          </Text>
+          {item.source === 'imported' && (
+            <Text style={[styles.badge, styles.badgeImported]}>インポート</Text>
+          )}
           <TouchableOpacity onPress={() => handleDelete(item)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Text style={styles.deleteIcon}>🗑</Text>
           </TouchableOpacity>

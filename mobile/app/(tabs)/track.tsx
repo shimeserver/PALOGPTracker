@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
 import WebView from 'react-native-webview';
+import { router } from 'expo-router';
 import HelpModal from '../../src/components/HelpModal';
 import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
+import { updateCar } from '../../src/firebase/cars';
 
 const TRACK_HELP = [
   { q: '記録を開始するには？', a: '「▶ 記録開始」ボタンをタップしてください。GPS取得が始まり、移動に合わせてポイントが記録されます。' },
@@ -125,6 +127,7 @@ export default function TrackScreen() {
   const handleStart = async () => {
     try {
       await startTracking();
+      router.replace('/(tabs)/map');
     } catch (error) {
       Alert.alert('エラー', error instanceof Error ? error.message : String(error));
     }
@@ -135,10 +138,21 @@ export default function TrackScreen() {
     if (!user) return;
     try {
       const tagIds = trackingMode === 'car' && activeCar?.tagId ? [activeCar.tagId] : undefined;
+      const savedPoints = currentPoints;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
       if (id) {
+        // 愛車モードかつアクティブ車があればオドメーターに走行距離を加算
+        if (trackingMode === 'car' && activeCar?.id) {
+          const dist = savedPoints.length > 1
+            ? savedPoints.reduce((acc, p, i) => i === 0 ? 0 : acc + haversine(savedPoints[i - 1], p), 0)
+            : 0;
+          if (dist > 0) {
+            const newOdometer = (activeCar.odometerKm ?? 0) + dist;
+            await updateCar(activeCar.id, { odometerKm: newOdometer }).catch(() => {});
+          }
+        }
         const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
-        Alert.alert('保存完了', `ルートを保存しました（${currentPoints.length}ポイント）${carMsg}`);
+        Alert.alert('保存完了', `ルートを保存しました（${savedPoints.length}ポイント）${carMsg}`);
       }
     } catch (error) {
       Alert.alert('保存エラー', error instanceof Error ? error.message : String(error));
@@ -151,8 +165,8 @@ export default function TrackScreen() {
     <View style={styles.container}>
       {/* ステータス */}
       <View style={styles.statusBar}>
-        <View style={[styles.statusDot, isTracking && styles.statusDotActive]} />
-        <Text style={styles.statusText}>{isTracking ? '記録中' : '待機中'}</Text>
+        {isTracking && <View style={styles.statusDotActive} />}
+        {isTracking && <Text style={styles.statusText}>記録中</Text>}
         <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
           <Text style={styles.helpBtnText}>?</Text>
         </TouchableOpacity>
