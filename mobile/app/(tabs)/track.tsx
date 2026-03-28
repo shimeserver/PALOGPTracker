@@ -7,6 +7,9 @@ import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { updateCar } from '../../src/firebase/cars';
+import { getUserLandmarks } from '../../src/firebase/landmarks';
+import { recordVisit } from '../../src/firebase/landmarks';
+import { detectStops, matchStopsToLandmarks } from '../../src/utils/visitDetection';
 
 const TRACK_HELP = [
   { q: '記録を開始するには？', a: '「▶ 記録開始」ボタンをタップしてください。GPS取得が始まり、移動に合わせてポイントが記録されます。' },
@@ -151,8 +154,27 @@ export default function TrackScreen() {
             await updateCar(activeCar.id, { odometerKm: newOdometer }).catch(() => {});
           }
         }
-        const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
-        Alert.alert('保存完了', `ルートを保存しました（${savedPoints.length}ポイント）${carMsg}`);
+
+        // 来訪自動判定（API不使用）
+        if (user) {
+          const stops = detectStops(savedPoints);
+          if (stops.length > 0) {
+            const landmarks = await getUserLandmarks(user.uid).catch(() => []);
+            const { matchedLandmarkIds, unmatchedStops } = matchStopsToLandmarks(stops, landmarks);
+            // 既存スポットに来訪記録
+            await Promise.all(matchedLandmarkIds.map(lmId =>
+              recordVisit(lmId, { landmarkId: lmId, userId: user.uid, timestamp: Date.now(), routeId: id }).catch(() => {})
+            ));
+            // 未登録スポットはroute詳細に渡すためrouteIdで取得できるよう保存済み
+            const visitMsg = matchedLandmarkIds.length > 0 ? `\n📍 ${matchedLandmarkIds.length}か所のスポットに来訪記録` : '';
+            const newPlaceMsg = unmatchedStops.length > 0 ? `\n🔵 ${unmatchedStops.length}か所の未登録スポット候補あり（ルート詳細で確認）` : '';
+            const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
+            Alert.alert('保存完了', `ルートを保存しました（${savedPoints.length}ポイント）${carMsg}${visitMsg}${newPlaceMsg}`);
+          } else {
+            const carMsg = trackingMode === 'car' && activeCar ? `\n🚗 ${activeCar.nickname} でタグ付け` : '';
+            Alert.alert('保存完了', `ルートを保存しました（${savedPoints.length}ポイント）${carMsg}`);
+          }
+        }
       }
     } catch (error) {
       Alert.alert('保存エラー', error instanceof Error ? error.message : String(error));
