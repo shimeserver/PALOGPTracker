@@ -22,7 +22,7 @@ export async function getUserCars(userId: string): Promise<Car[]> {
 
 export async function createCar(car: Omit<Car, 'id'>): Promise<Car> {
   const docRef = await addDoc(collection(db, 'cars'), car);
-  return { ...car, id: docRef.id };
+  return { id: docRef.id, ...car };
 }
 
 export async function updateCar(carId: string, patch: Partial<Omit<Car, 'id' | 'userId'>>): Promise<void> {
@@ -104,13 +104,18 @@ export async function getRouteStatsByTag(userId: string, tagId: string): Promise
   const q = ids.length === 1
     ? query(collection(db, 'routes'), where('userId', '==', userId), where('tags', 'array-contains', ids[0]))
     : query(collection(db, 'routes'), where('userId', '==', userId), where('tags', 'array-contains-any', ids));
-  const snap = await getDocs(q);
-  const docs = snap.docs.map(d => d.data());
-  if (docs.length === 0) return { totalDistance: 0, maxSpeed: 0, avgSpeed: 0, count: 0 };
-  return {
-    totalDistance: docs.reduce((s, r) => s + (r.totalDistance || 0), 0),
-    maxSpeed: Math.max(...docs.map(r => r.maxSpeed || 0)),
-    avgSpeed: docs.reduce((s, r) => s + (r.avgSpeed || 0), 0) / docs.length,
-    count: docs.length,
-  };
+  try {
+    const snap = await getDocs(q);
+    const docs = snap.docs.map(d => d.data());
+    if (docs.length === 0) return { totalDistance: 0, maxSpeed: 0, avgSpeed: 0, count: 0 };
+    return {
+      totalDistance: docs.reduce((s, r) => s + (r.totalDistance || 0), 0),
+      maxSpeed: Math.max(...docs.map(r => r.maxSpeed || 0)),
+      avgSpeed: docs.reduce((s, r) => s + (r.avgSpeed || 0), 0) / docs.length,
+      count: docs.length,
+    };
+  } catch (error) {
+    console.error('getRouteStatsByTag failed:', error);
+    throw error;
+  }
 }

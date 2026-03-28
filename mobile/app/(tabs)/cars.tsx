@@ -34,6 +34,9 @@ function useToast() {
     setToast(msg);
     timer.current = setTimeout(() => setToast(null), 2500);
   };
+  useEffect(() => {
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, []);
   return { toast, show };
 }
 
@@ -79,8 +82,12 @@ export default function CarsScreen() {
 
   useEffect(() => {
     if (!user) return;
-    getUserCars(user.uid).then(c => { setCars(c); setLoading(false); });
-    getUserTags(user.uid).then(setUserTags).catch(() => {});
+    let isMounted = true;
+    getUserCars(user.uid)
+      .then(c => { if (isMounted) { setCars(c); setLoading(false); } })
+      .catch(() => { if (isMounted) { setLoading(false); Alert.alert('エラー', 'データの読み込みに失敗しました'); } });
+    getUserTags(user.uid).then(t => { if (isMounted) setUserTags(t); }).catch(() => {});
+    return () => { isMounted = false; };
   }, [user?.uid]);
 
   const loadFuel = async (carId: string, force = false) => {
@@ -139,10 +146,14 @@ export default function CarsScreen() {
       if (form.year) carData.year = parseInt(form.year);
       if (form.color.trim()) carData.color = form.color.trim();
       const car = await createCar(carData);
-      if (photoUri) {
-        const { url } = await uploadCarPhoto(user.uid, car.id!, photoUri);
-        await updateCar(car.id!, { photoUrl: url });
-        car.photoUrl = url;
+      if (photoUri && car.id) {
+        try {
+          const { url } = await uploadCarPhoto(user.uid, car.id, photoUri);
+          await updateCar(car.id, { photoUrl: url });
+          car.photoUrl = url;
+        } catch {
+          Alert.alert('警告', 'カーを作成しましたが、写真のアップロードに失敗しました');
+        }
       }
       setCars(prev => [...prev, car]);
       setShowAddCar(false);
