@@ -94,7 +94,7 @@ window.updateRoute = function(coords){
   routeLine = L.polyline(coords,{color:'#2563eb',weight:5,opacity:0.85}).addTo(map);
   var sIcon = L.divIcon({html:'<div class="route-start">START</div>',className:'',iconAnchor:[24,12]});
   startMarker = L.marker(coords[0],{icon:sIcon}).addTo(map);
-  map.panTo(coords[coords.length-1]);
+  // panToはfollowModeのupdateLocationに任せる（ここでは移動しない）
 };
 
 window.setLandmarks = function(landmarks){
@@ -146,16 +146,21 @@ export default function MapScreen() {
   const [following, setFollowing] = useState(false);
 
   useEffect(() => {
+    let sub: Location.LocationSubscription | null = null;
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({});
-        setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        // 継続購読で常に最新位置を保持
+        sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced, timeInterval: 3000, distanceInterval: 5 },
+          (loc) => setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude })
+        );
       } catch (error) {
         console.error('Location error:', error);
       }
     })();
+    return () => { sub?.remove(); };
   }, []);
 
   useEffect(() => {
