@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import MapView, { Polyline, UrlTile, Marker } from 'react-native-maps';
+import WebView from 'react-native-webview';
 import { getRoute } from '../../src/firebase/routes';
-import { Route, TrackPoint } from '../../src/types';
+import { Route } from '../../src/types';
 
 function formatDate(ms: number) {
   return new Date(ms).toLocaleString('ja-JP');
@@ -14,17 +14,93 @@ function formatDuration(startMs: number, endMs: number) {
   return `${Math.floor(mins / 60)}時間${mins % 60}分`;
 }
 
-// 速度に応じた色
-function speedColor(speed: number): string {
-  if (speed < 30) return '#4caf50';
-  if (speed < 60) return '#ffeb3b';
-  if (speed < 100) return '#ff9800';
-  return '#f44336';
+const MAP_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+    .leaflet-control-attribution{font-size:9px}
+    .pin-start{background:#22c55e;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);white-space:nowrap}
+    .pin-end{background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);white-space:nowrap}
+    .pin-cursor{width:16px;height:16px;background:#4fc3f7;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(79,195,247,0.4)}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = L.map('map',{zoomControl:true}).setView([35.681236,139.767125],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom:19
+}).addTo(map);
+
+var routeLine = null;
+var startMarker = null;
+var endMarker = null;
+var cursorMarker = null;
+
+function makeIcon(cls){
+  return L.divIcon({html:'<div class="'+cls+'"></div>',className:'',iconAnchor:[20,10]});
 }
+function makeCursor(){
+  return L.divIcon({html:'<div class="pin-cursor"></div>',className:'',iconSize:[16,16],iconAnchor:[8,8]});
+}
+
+window.initRoute = function(points) {
+  if(!points||points.length===0) return;
+  var latlngs = points.map(function(p){return[p.lat,p.lng];});
+
+  routeLine = L.polyline(latlngs,{color:'#4fc3f7',weight:4,opacity:0.9}).addTo(map);
+  map.fitBounds(routeLine.getBounds(),{padding:[40,40]});
+
+  startMarker = L.marker([points[0].lat,points[0].lng],{icon:makeIcon('pin-start')}).addTo(map);
+  if(points.length>1){
+    endMarker = L.marker([points[points.length-1].lat,points[points.length-1].lng],{icon:makeIcon('pin-end')}).addTo(map);
+  }
+};
+
+window.updatePlayback = function(points, index) {
+  var slice = points.slice(0, index+1);
+  var latlngs = slice.map(function(p){return[p.lat,p.lng];});
+
+  // ルートラインを再生分だけ更新
+  if(routeLine) routeLine.setLatLngs(latlngs);
+
+  // ゴールマーカー非表示
+  if(endMarker){ endMarker.remove(); endMarker=null; }
+
+  // カーソル移動
+  var cur = points[index];
+  if(!cursorMarker){
+    cursorMarker = L.marker([cur.lat,cur.lng],{icon:makeCursor(),zIndexOffset:1000}).addTo(map);
+  } else {
+    cursorMarker.setLatLng([cur.lat,cur.lng]);
+  }
+  map.panTo([cur.lat,cur.lng],{animate:true,duration:0.2});
+};
+
+window.resetPlayback = function(points) {
+  if(!points||points.length===0) return;
+  var latlngs = points.map(function(p){return[p.lat,p.lng];});
+  if(routeLine) routeLine.setLatLngs(latlngs);
+  if(cursorMarker){ cursorMarker.remove(); cursorMarker=null; }
+  if(!endMarker && points.length>1){
+    endMarker = L.marker([points[points.length-1].lat,points[points.length-1].lng],{icon:makeIcon('pin-end')}).addTo(map);
+  }
+  map.fitBounds(L.polyline(latlngs).getBounds(),{padding:[40,40]});
+};
+</script>
+</body>
+</html>`;
 
 export default function RouteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const mapRef = useRef<MapView>(null);
+  const webviewRef = useRef<WebView>(null);
+  const initialized = useRef(false);
   const [route, setRoute] = useState<Route | null>(null);
   const [loading, setLoading] = useState(true);
   const [playback, setPlayback] = useState(false);
@@ -33,100 +109,82 @@ export default function RouteDetailScreen() {
 
   useEffect(() => {
     if (!id) return;
-    getRoute(id).then(r => {
-      setRoute(r);
-      setLoading(false);
-    });
+    getRoute(id).then(r => { setRoute(r); setLoading(false); });
   }, [id]);
 
-  // ルート全体が見えるように地図をフィット
+  const handleLoad = () => {
+    if (!route) return;
+    const pts = JSON.stringify(route.points);
+    webviewRef.current?.injectJavaScript(`window.initRoute(${pts});true;`);
+    initialized.current = true;
+  };
+
+  // routeが後から来た場合にも初期化
   useEffect(() => {
-    if (!route || !mapRef.current) return;
-    const coords = route.points.map(p => ({ latitude: p.lat, longitude: p.lng }));
-    if (coords.length === 0) return;
-    mapRef.current.fitToCoordinates(coords, {
-      edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-      animated: true,
-    });
+    if (route && initialized.current) {
+      const pts = JSON.stringify(route.points);
+      webviewRef.current?.injectJavaScript(`window.initRoute(${pts});true;`);
+    }
   }, [route]);
 
-  // 再生
   const startPlayback = () => {
     if (!route) return;
     setPlayIndex(0);
     setPlayback(true);
     playRef.current = setInterval(() => {
       setPlayIndex(i => {
-        if (i >= route.points.length - 1) {
+        const next = i + 1;
+        if (next >= route.points.length) {
           clearInterval(playRef.current!);
           setPlayback(false);
           return i;
         }
-        const next = i + 1;
-        mapRef.current?.animateToRegion({
-          latitude: route.points[next].lat,
-          longitude: route.points[next].lng,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }, 200);
+        const pts = JSON.stringify(route.points);
+        webviewRef.current?.injectJavaScript(`window.updatePlayback(${pts},${next});true;`);
         return next;
       });
-    }, 100); // 100ms毎に1ポイント進める
+    }, 100);
   };
 
   const stopPlayback = () => {
     if (playRef.current) clearInterval(playRef.current);
     setPlayback(false);
+    if (route) {
+      const pts = JSON.stringify(route.points);
+      webviewRef.current?.injectJavaScript(`window.resetPlayback(${pts});true;`);
+    }
   };
 
+  useEffect(() => {
+    return () => { if (playRef.current) clearInterval(playRef.current); };
+  }, []);
+
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color="#4fc3f7" size="large" />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator color="#4fc3f7" size="large" /></View>;
   }
   if (!route) {
     return <View style={styles.center}><Text style={styles.errorText}>ルートが見つかりません</Text></View>;
   }
 
-  const displayedPoints = playback ? route.points.slice(0, playIndex + 1) : route.points;
   const currentPlayPoint = route.points[playIndex];
 
   return (
     <View style={styles.container}>
-      <MapView ref={mapRef} style={styles.map}>
-        <UrlTile urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
+      <WebView
+        ref={webviewRef}
+        source={{ html: MAP_HTML }}
+        style={styles.map}
+        javaScriptEnabled
+        domStorageEnabled
+        cacheEnabled
+        cacheMode="LOAD_CACHE_ELSE_NETWORK"
+        originWhitelist={['*']}
+        mixedContentMode="always"
+        onLoad={handleLoad}
+        overScrollMode="never"
+        bounces={false}
+      />
 
-        {/* ルートライン */}
-        <Polyline
-          coordinates={displayedPoints.map(p => ({ latitude: p.lat, longitude: p.lng }))}
-          strokeColor="#4fc3f7"
-          strokeWidth={3}
-        />
-
-        {/* スタート・ゴール */}
-        {route.points.length > 0 && (
-          <Marker coordinate={{ latitude: route.points[0].lat, longitude: route.points[0].lng }}
-            title="スタート" pinColor="green" />
-        )}
-        {!playback && route.points.length > 1 && (
-          <Marker
-            coordinate={{ latitude: route.points[route.points.length - 1].lat, longitude: route.points[route.points.length - 1].lng }}
-            title="ゴール" pinColor="red"
-          />
-        )}
-
-        {/* 再生中のカーソル */}
-        {playback && currentPlayPoint && (
-          <Marker
-            coordinate={{ latitude: currentPlayPoint.lat, longitude: currentPlayPoint.lng }}
-            title={`${currentPlayPoint.speed.toFixed(0)}km/h`}
-          />
-        )}
-      </MapView>
-
-      {/* 下部パネル */}
       <View style={styles.panel}>
         <Text style={styles.routeName}>{route.name}</Text>
         <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
@@ -153,7 +211,7 @@ export default function RouteDetailScreen() {
         {playback ? (
           <View style={styles.playbackRow}>
             <Text style={styles.playbackInfo}>
-              {Math.round((playIndex / route.points.length) * 100)}%  {currentPlayPoint?.speed.toFixed(0)}km/h
+              {Math.round((playIndex / route.points.length) * 100)}%{'  '}{currentPlayPoint?.speed.toFixed(0)}km/h
             </Text>
             <TouchableOpacity style={styles.stopBtn} onPress={stopPlayback}>
               <Text style={styles.stopBtnText}>■ 停止</Text>
