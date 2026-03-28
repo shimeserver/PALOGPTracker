@@ -147,6 +147,11 @@ export default function MapScreen() {
     if (user) getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
+      // WebViewが既に初期化済みの場合はスポットを即時更新
+      if (initialized.current) {
+        const lms = data.map(lm => ({ lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount }));
+        webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lms)});true;`);
+      }
     });
   }, [user]);
 
@@ -226,7 +231,7 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-  helpBtn: { position: 'absolute', top: 16, left: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  helpBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   recordingBadge: {
     position: 'absolute', top: 16, right: 16,
