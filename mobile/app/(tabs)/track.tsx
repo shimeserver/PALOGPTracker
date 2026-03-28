@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } fro
 import WebView from 'react-native-webview';
 import { router } from 'expo-router';
 import HelpModal from '../../src/components/HelpModal';
+import { LEAFLET_JS, LEAFLET_CSS } from '../../src/leaflet-bundle';
 import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
@@ -24,8 +25,8 @@ const MINI_MAP_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>${LEAFLET_CSS}</style>
+  <script>${LEAFLET_JS}</script>
   <style>
     body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
     .leaflet-control-attribution{display:none}

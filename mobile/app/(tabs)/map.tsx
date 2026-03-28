@@ -7,6 +7,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { Landmark } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
+import { LEAFLET_JS, LEAFLET_CSS } from '../../src/leaflet-bundle';
 
 const MAP_HELP = [
   { q: 'マップの見方は？', a: '青い点が現在地、黄色ピンがスポット、青いラインが現在の記録ルートです。' },
@@ -20,8 +21,8 @@ const MAP_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>${LEAFLET_CSS}</style>
+  <script>${LEAFLET_JS}</script>
   <style>
     body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
     .leaflet-control-attribution{font-size:9px}
