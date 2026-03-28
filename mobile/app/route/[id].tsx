@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Tex
 import { useLocalSearchParams } from 'expo-router';
 import WebView from 'react-native-webview';
 import { getRoute } from '../../src/firebase/routes';
-import { saveLandmark, getUserLandmarks } from '../../src/firebase/landmarks';
+import { saveLandmark, getUserLandmarks, recordVisit } from '../../src/firebase/landmarks';
 import { Route } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
 import { detectStops, matchStopsToLandmarks, StopCluster } from '../../src/utils/visitDetection';
@@ -190,7 +190,8 @@ export default function RouteDetailScreen() {
     if (!user || !addStopModal || !newSpotName.trim()) return;
     setSaving(true);
     try {
-      await saveLandmark({
+      const now = Date.now();
+      const landmarkId = await saveLandmark({
         userId: user.uid,
         name: newSpotName.trim(),
         category: newSpotCategory,
@@ -198,11 +199,13 @@ export default function RouteDetailScreen() {
         lng: addStopModal.lng,
         description: '',
         photos: [],
-        visitCount: 1,
-        firstVisit: Date.now(),
-        lastVisit: Date.now(),
-        createdAt: Date.now(),
+        visitCount: 0,
+        firstVisit: now,
+        lastVisit: now,
+        createdAt: now,
       });
+      // visitsサブコレクションに初回来訪ドキュメントを作成（カウントと履歴を一致させる）
+      await recordVisit(landmarkId, { landmarkId, userId: user.uid, timestamp: now, routeId: id ?? undefined });
       // 保存済み候補を除去してマップから消す
       const remaining = stopCandidates.filter(s => s.lat !== addStopModal.lat || s.lng !== addStopModal.lng);
       setStopCandidates(remaining);
