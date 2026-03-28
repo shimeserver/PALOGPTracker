@@ -1,9 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
 import WebView from 'react-native-webview';
+import HelpModal from '../../src/components/HelpModal';
 import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
+
+const TRACK_HELP = [
+  { q: '記録を開始するには？', a: '「▶ 記録開始」ボタンをタップしてください。GPS取得が始まり、移動に合わせてポイントが記録されます。' },
+  { q: '記録中に画面を閉じても大丈夫？', a: 'はい。バックグラウンドでも記録が続きます。ロック画面にしてもOKです。' },
+  { q: '🚗 / 🚶 のモード切り替えは？', a: '記録開始前に右上のアイコンで「車」か「徒歩（散歩・公共交通含む）」を選べます。記録中は変更できません。' },
+  { q: '保存時のルート名は？', a: '停止後にルート名を入力できます。空欄のまま保存すると日付が自動で入ります。' },
+  { q: '下のミニマップは？', a: '記録中の軌跡をリアルタイムで表示します。3ポイントごとに更新されます。' },
+];
 
 const MINI_MAP_HTML = `<!DOCTYPE html>
 <html>
@@ -80,6 +89,7 @@ export default function TrackScreen() {
   const miniMapRef = useRef<WebView>(null);
   const miniMapReady = useRef(false);
   const prevMiniMapLen = useRef(0);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     if (!isTracking || !startTime) return;
@@ -143,6 +153,9 @@ export default function TrackScreen() {
       <View style={styles.statusBar}>
         <View style={[styles.statusDot, isTracking && styles.statusDotActive]} />
         <Text style={styles.statusText}>{isTracking ? '記録中' : '待機中'}</Text>
+        <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
         <View style={styles.statusRight}>
           {activeCar && trackingMode === 'car' && (
             <View style={styles.activeCarBadge}>
@@ -221,6 +234,8 @@ export default function TrackScreen() {
         <Text style={styles.bgNote}>画面をロックしても記録は継続されます</Text>
       )}
 
+      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="記録画面の使い方" items={TRACK_HELP} />
+
       <Modal visible={showNameModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -249,6 +264,8 @@ export default function TrackScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9', padding: 24 },
   statusBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  helpBtn: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   statusRight: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 8 },
   modePicker: { flexDirection: 'row', gap: 4 },
   modeBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },

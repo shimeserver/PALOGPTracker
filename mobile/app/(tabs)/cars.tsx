@@ -13,6 +13,15 @@ import {
   uploadCarPhoto, getRouteStatsByTag, RouteStats, getUserTags, TagDef,
 } from '../../src/firebase/cars';
 import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS } from '../../src/types';
+import HelpModal from '../../src/components/HelpModal';
+
+const CARS_HELP = [
+  { q: '愛車の追加方法は？', a: '「＋ 愛車を追加」ボタンから車名・メーカー・タグカラーなどを入力して登録できます。' },
+  { q: 'アクティブ車とは？', a: '現在記録中のルートに紐づく車です。タップで切り替えられます。' },
+  { q: 'タグとは？', a: 'ルートと車を紐づけるカラータグです。記録時に自動的に選択中の車タグが付きます。' },
+  { q: '燃費はどう記録する？', a: '車のカードを開き「燃料」タブから給油記録を追加できます。' },
+  { q: 'メンテナンス管理は？', a: '「整備」タブからオイル交換・タイヤ交換などの記録と次回予定が管理できます。' },
+];
 
 const TAG_COLORS = ['#ef4444','#f97316','#f59e0b','#22c55e','#2563eb','#8b5cf6','#ec4899','#06b6d4'];
 
@@ -79,6 +88,7 @@ export default function CarsScreen() {
   // Tag picker
   const [userTags, setUserTags] = useState<TagDef[]>([]);
   const [tagPickerCarId, setTagPickerCarId] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -267,6 +277,10 @@ export default function CarsScreen() {
 
   return (
     <View style={styles.container}>
+      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="愛車画面の使い方" items={CARS_HELP} />
+      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
+        <Text style={styles.helpBtnText}>?</Text>
+      </TouchableOpacity>
       {/* アクティブ車バナー */}
       {activeCar && (
         <View style={styles.activeBanner}>
@@ -687,6 +701,8 @@ export default function CarsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
+  helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   activeBanner: { backgroundColor: '#eff6ff', paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#bfdbfe' },
   activeBannerText: { flex: 1, color: '#2563eb', fontSize: 13, fontWeight: '600' },
   activeBannerClear: { color: '#9ca3af', fontSize: 12 },

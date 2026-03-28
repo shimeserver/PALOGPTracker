@@ -4,6 +4,14 @@ import { router } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
 import { getUserRoutes, deleteRoute } from '../../src/firebase/routes';
 import { Route } from '../../src/types';
+import HelpModal from '../../src/components/HelpModal';
+
+const ROUTES_HELP = [
+  { q: 'ルートの見方は？', a: 'タップすると詳細マップが開きます。長押しで削除できます。' },
+  { q: 'アイコンの意味は？', a: '🚗 車での記録、🚶 徒歩・公共交通での記録です。' },
+  { q: 'ルート名を変えるには？', a: '詳細画面から編集できます。' },
+  { q: 'ルートが消えてしまった？', a: '引っ張って更新（プルダウン）してみてください。Firebaseと同期します。' },
+];
 
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -17,6 +25,7 @@ export default function RoutesScreen() {
   const { user } = useAuthStore();
   const [routes, setRoutes] = useState<Route[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
 
   const loadRoutes = async () => {
     if (!user) return;
@@ -75,6 +84,10 @@ export default function RoutesScreen() {
 
   return (
     <View style={styles.container}>
+      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="ルート画面の使い方" items={ROUTES_HELP} />
+      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
+        <Text style={styles.helpBtnText}>?</Text>
+      </TouchableOpacity>
       {loading ? (
         <ActivityIndicator color="#2563eb" style={{ marginTop: 64 }} />
       ) : (
@@ -96,6 +109,8 @@ export default function RoutesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
+  helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   card: {
     backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 10,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
