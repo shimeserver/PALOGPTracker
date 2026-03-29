@@ -3,8 +3,9 @@ import { useFocusEffect } from 'expo-router';
 import { useUiStore } from '../../src/store/uiStore';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert,
-  TextInput, Modal, Switch, Image,
+  TextInput, Modal, Switch,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
@@ -466,7 +467,7 @@ export default function CarsScreen() {
               <TouchableOpacity style={styles.carHeader} onPress={() => handleExpand(car)}>
                 <TouchableOpacity style={styles.carIcon} onPress={() => handleUpdateCarPhoto(car)}>
                   {car.photoUrl
-                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} />
+                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} cachePolicy="disk" />
                     : <Text style={{ fontSize: 28 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</Text>}
                   <View style={styles.carIconEditBadge}><Text style={{ color: '#fff', fontSize: 8 }}>📷</Text></View>
                 </TouchableOpacity>
@@ -500,7 +501,8 @@ export default function CarsScreen() {
                 <Image
                   source={{ uri: car.photoUrl }}
                   style={{ width: '100%', height: 180 }}
-                  resizeMode="cover"
+                  contentFit="cover"
+                  cachePolicy="disk"
                 />
               )}
 

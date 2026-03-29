@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Modal, TextInput, Alert, Image, ScrollView, ActivityIndicator,
+  Modal, TextInput, Alert, ScrollView, ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
@@ -116,7 +117,7 @@ export default function LandmarksScreen() {
   const renderItem = ({ item }: { item: Landmark }) => (
     <TouchableOpacity style={styles.card} onPress={() => router.push(`/landmark/${item.id}`)}>
       {item.photos.length > 0 && (
-        <Image source={{ uri: item.photos[0].url }} style={styles.cardPhoto} />
+        <Image source={{ uri: item.photos[0].url }} style={styles.cardPhoto} cachePolicy="disk" />
       )}
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>

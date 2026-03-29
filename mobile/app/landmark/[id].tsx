@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Image, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, Modal, TextInput, FlatList,
 } from 'react-native';
+import { Image } from 'expo-image';
 import WebView from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
@@ -135,7 +136,7 @@ export default function LandmarkDetailScreen() {
             <Text style={styles.noData}>写真なし</Text>
           ) : (
             landmark.photos.map((p, i) => (
-              <Image key={i} source={{ uri: p.url }} style={styles.photo} />
+              <Image key={i} source={{ uri: p.url }} style={styles.photo} cachePolicy="disk" />
             ))
           )}
         </ScrollView>
