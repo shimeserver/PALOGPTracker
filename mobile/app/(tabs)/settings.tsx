@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../../src/firebase/config';
 import { useAuthStore } from '../../src/store/authStore';
 import { deleteAllUserRoutes } from '../../src/firebase/routes';
 import { collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 
-const VERSION = '1.0.5';
+const VERSION = '1.0.7';
 
 const PRIVACY_POLICY = `プライバシーポリシー
 
@@ -59,6 +60,7 @@ export default function SettingsScreen() {
   const { user } = useAuthStore();
   const [deleting, setDeleting] = useState(false);
   const [modal, setModal] = useState<'privacy' | 'oss' | null>(null);
+  const insets = useSafeAreaInsets();
 
   const handleDeleteAllRoutes = () => {
     Alert.alert('全ルートを削除', '全てのルートを削除しますか？この操作は取り消せません。', [
@@ -146,7 +148,7 @@ export default function SettingsScreen() {
       {/* テキストモーダル */}
       <Modal visible={!!modal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { paddingBottom: 24 + insets.bottom }]}>
             <Text style={styles.modalTitle}>{modalTitle}</Text>
             <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
               <Text style={styles.modalBody}>{modalContent}</Text>

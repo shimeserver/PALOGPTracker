@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Image, TouchableOpacity,
   Alert, ActivityIndicator, Modal, TextInput, FlatList,
 } from 'react-native';
-import MapView, { Marker, UrlTile } from 'react-native-maps';
+import WebView from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
 import {
@@ -12,6 +12,27 @@ import {
 } from '../../src/firebase/landmarks';
 import { useAuthStore } from '../../src/store/authStore';
 import { Landmark, Visit } from '../../src/types';
+
+const LANDMARK_MAP_HTML = (lat: number, lng: number, name: string) => `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <link rel="stylesheet" href="file:///android_asset/leaflet.min.css"/>
+  <script src="file:///android_asset/leaflet.min.js"></script>
+  <style>body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}.leaflet-control-attribution{font-size:9px}</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = L.map('map',{zoomControl:false}).setView([${lat},${lng}],15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19
+}).addTo(map);
+L.marker([${lat},${lng}]).addTo(map).bindPopup(${JSON.stringify(name)});
+</script>
+</body>
+</html>`;
 
 export default function LandmarkDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -77,13 +98,11 @@ export default function LandmarkDetailScreen() {
   return (
     <ScrollView style={styles.container}>
       {/* 地図 */}
-      <MapView
+      <WebView
         style={styles.map}
-        initialRegion={{ latitude: landmark.lat, longitude: landmark.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }}
-      >
-        <UrlTile urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
-        <Marker coordinate={{ latitude: landmark.lat, longitude: landmark.lng }} title={landmark.name} />
-      </MapView>
+        source={{ html: LANDMARK_MAP_HTML(landmark.lat, landmark.lng, landmark.name) }}
+        scrollEnabled={false}
+      />
 
       {/* ヘッダー */}
       <View style={styles.header}>

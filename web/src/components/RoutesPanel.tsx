@@ -17,6 +17,7 @@ interface Props {
   onShowAll: () => void;
   onOpenSettings: () => void;
   onOpenCars: () => void;
+  onOpenActivity: () => void;
   tags: TagDef[];
   onUpdateRoute: (route: Route) => void;
   onTagsChange: () => void;
@@ -33,7 +34,7 @@ function formatDuration(start: number, end: number) {
 
 export default function RoutesPanel({
   userId, routes, loading, selectedRoute, showAllRoutes,
-  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars,
+  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity,
   tags, onUpdateRoute, onTagsChange, activeCar,
 }: Props) {
   const [search, setSearch]               = useState('');
@@ -146,6 +147,7 @@ export default function RoutesPanel({
           </span>
         )}
         {!activeCar && <div style={{ flex: 1 }} />}
+        <button style={styles.iconBtn} onClick={onOpenActivity} title="活動統計">🏃</button>
         <button style={styles.iconBtn} onClick={onOpenCars} title="愛車管理">🚗</button>
         <button style={styles.iconBtn} onClick={() => setShowTagManager(true)} title="タグ管理">🏷️</button>
         <button style={styles.iconBtn} onClick={onOpenSettings} title="設定">⚙️</button>
@@ -239,7 +241,7 @@ export default function RoutesPanel({
                   />
                 ) : (
                   <><span style={{ marginRight: 4 }}>
-                    {route.mode === 'walk' ? '🚶' : '🚗'}
+                    {route.mode === 'walk' ? '🚶' : route.mode === 'bicycle' ? '🚲' : '🚗'}
                   </span>
                   <span style={styles.cardName}>{route.name || '（無名）'}</span></>
 

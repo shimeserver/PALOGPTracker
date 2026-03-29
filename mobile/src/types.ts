@@ -7,7 +7,7 @@ export interface TrackPoint {
   speed: number;
 }
 
-export type TrackingMode = 'car' | 'walk';
+export type TrackingMode = 'car' | 'walk' | 'bicycle';
 
 export interface Route {
   id?: string;
@@ -59,6 +59,7 @@ export interface Car {
   id: string;
   userId: string;
   nickname: string;
+  vehicleType?: 'car' | 'bicycle';
   make?: string;
   model?: string;
   year?: number;

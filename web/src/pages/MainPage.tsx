@@ -6,6 +6,7 @@ import RouteMapView from '../components/RouteMapView';
 import LandmarksPanel from '../components/LandmarksPanel';
 import SettingsPanel from '../components/SettingsPanel';
 import CarsPanel from '../components/CarsPanel';
+import ActivityPanel from '../components/ActivityPanel';
 import { getUserRoutes, deleteRoute, getUserTags } from '../firebase/data';
 import type { Route, TagDef, Car } from '../firebase/data';
 import type { MapSettings } from '../components/SettingsPanel';
@@ -27,6 +28,7 @@ export default function MainPage({ user }: Props) {
   const [mapSettings, setMapSettings]       = useState<MapSettings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen]     = useState(false);
   const [carsOpen, setCarsOpen]             = useState(false);
+  const [activityOpen, setActivityOpen]     = useState(false);
   const [landmarkCount, setLandmarkCount]   = useState(0);
   const [tags, setTags]                     = useState<TagDef[]>([]);
   const [, setCars]                         = useState<Car[]>([]);
@@ -103,6 +105,7 @@ export default function MainPage({ user }: Props) {
               onShowAll={() => { setShowAllRoutes(true); setSelectedRoute(null); }}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenCars={() => setCarsOpen(true)}
+              onOpenActivity={() => setActivityOpen(true)}
               tags={tags}
               onUpdateRoute={handleUpdateRoute}
               onTagsChange={reloadTags}
@@ -147,6 +150,12 @@ export default function MainPage({ user }: Props) {
         onDeleteAllRoutes={() => { setRoutes([]); setSelectedRoute(null); setShowAllRoutes(false); }}
         onDeleteAllLandmarks={() => setLandmarkCount(0)}
         onImportDone={reloadRoutes}
+      />
+
+      <ActivityPanel
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        routes={routes}
       />
 
       <CarsPanel

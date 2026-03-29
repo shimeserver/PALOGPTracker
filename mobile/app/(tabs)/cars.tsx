@@ -12,8 +12,36 @@ import {
   getMaintenanceLogs, addMaintenanceLog, deleteMaintenanceLog, updateMaintenanceLog,
   uploadCarPhoto, getRouteStatsByTag, RouteStats, getUserTags, TagDef,
 } from '../../src/firebase/cars';
-import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS } from '../../src/types';
+import { getUserRoutes } from '../../src/firebase/routes';
+import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS, Route } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
+
+interface PeriodStats { km: number; calories: number; steps?: number; }
+interface ActivityStats {
+  today: PeriodStats; month: PeriodStats; year: PeriodStats; total: PeriodStats;
+}
+
+function calcActivityStats(routes: Route[], mode: 'walk' | 'bicycle', kcalPerKm: number): ActivityStats {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const yearStart  = new Date(now.getFullYear(), 0, 1).getTime();
+  const filtered = routes.filter(r => r.mode === mode);
+  const make = (arr: Route[]): PeriodStats => {
+    const km = arr.reduce((s, r) => s + r.totalDistance, 0);
+    return {
+      km,
+      calories: Math.round(km * kcalPerKm),
+      steps: mode === 'walk' ? Math.round(km * 1300) : undefined,
+    };
+  };
+  return {
+    today: make(filtered.filter(r => r.startTime >= todayStart)),
+    month: make(filtered.filter(r => r.startTime >= monthStart)),
+    year:  make(filtered.filter(r => r.startTime >= yearStart)),
+    total: make(filtered),
+  };
+}
 
 const CARS_HELP = [
   { q: '愛車の追加方法は？', a: '「＋ 愛車を追加」ボタンから車名・メーカー・タグカラーなどを入力して登録できます。' },
@@ -62,9 +90,16 @@ export default function CarsScreen() {
   const [routeStats, setRouteStats] = useState<Record<string, RouteStats>>({});
   const [statsLoading, setStatsLoading] = useState<Record<string, boolean>>({});
 
+  // アクティビティ統計
+  const [allRoutes, setAllRoutes] = useState<Route[]>([]);
+  const walkStats    = calcActivityStats(allRoutes, 'walk',    60);
+  const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
+  const [walkExpanded,    setWalkExpanded]    = useState(false);
+  const [bicycleExpanded, setBicycleExpanded] = useState(false);
+
   // Add car modal
   const [showAddCar, setShowAddCar] = useState(false);
-  const [form, setForm] = useState({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4] });
+  const [form, setForm] = useState({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4], vehicleType: 'car' as 'car' | 'bicycle' });
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -97,6 +132,7 @@ export default function CarsScreen() {
       .then(c => { if (isMounted) { setCars(c); setLoading(false); } })
       .catch(() => { if (isMounted) { setLoading(false); Alert.alert('エラー', 'データの読み込みに失敗しました'); } });
     getUserTags(user.uid).then(t => { if (isMounted) setUserTags(t); }).catch(() => {});
+    getUserRoutes(user.uid).then(r => { if (isMounted) setAllRoutes(r); }).catch(() => {});
     return () => { isMounted = false; };
   }, [user?.uid]);
 
@@ -140,6 +176,22 @@ export default function CarsScreen() {
     if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
   };
 
+  const handleUpdateCarPhoto = async (car: Car) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('エラー', 'カメラロールへのアクセス許可が必要です'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, allowsEditing: true, aspect: [1, 1] });
+    if (!result.canceled && result.assets[0] && car.id) {
+      try {
+        const { url } = await uploadCarPhoto(user!.uid, car.id, result.assets[0].uri);
+        await updateCar(car.id, { photoUrl: url });
+        setCars(prev => prev.map(c => c.id === car.id ? { ...c, photoUrl: url } : c));
+        showToast('写真を更新しました');
+      } catch {
+        showToast('写真の更新に失敗しました');
+      }
+    }
+  };
+
   const handleSaveCar = async () => {
     if (!user || !form.nickname.trim()) return;
     setSaving(true);
@@ -148,6 +200,7 @@ export default function CarsScreen() {
       const carData: Parameters<typeof createCar>[0] = {
         userId: user.uid,
         nickname: form.nickname.trim(),
+        vehicleType: form.vehicleType,
         tagId,
         createdAt: Date.now(),
       };
@@ -167,7 +220,7 @@ export default function CarsScreen() {
       }
       setCars(prev => [...prev, car]);
       setShowAddCar(false);
-      setForm({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4] });
+      setForm({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4], vehicleType: 'car' });
       setPhotoUri(null);
       showToast('愛車を追加しました');
     } finally { setSaving(false); }
@@ -281,17 +334,83 @@ export default function CarsScreen() {
       <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
         <Text style={styles.helpBtnText}>?</Text>
       </TouchableOpacity>
-      {/* アクティブ車バナー */}
-      {activeCar && (
-        <View style={styles.activeBanner}>
-          <Text style={styles.activeBannerText}>🚗 記録中の愛車: {activeCar.nickname}</Text>
-          <TouchableOpacity onPress={() => setActiveCar(null)}>
-            <Text style={styles.activeBannerClear}>解除</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       <ScrollView style={styles.list}>
+        {/* 歩行統計カード */}
+        <TouchableOpacity
+          style={[styles.actCard, { borderLeftColor: '#22c55e' }]}
+          onPress={() => setWalkExpanded(e => !e)}
+          activeOpacity={0.85}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: walkExpanded ? 12 : 0 }}>
+            <Text style={styles.actCardTitle}>🚶 歩行</Text>
+            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{walkExpanded ? '▲' : '▼ 詳細'}</Text>
+          </View>
+          {!walkExpanded ? (
+            <View style={styles.actGrid}>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.today.km.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.year.km.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.km.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{(walkStats.total.steps ?? 0).toLocaleString()}</Text><Text style={styles.actLbl}>累計 歩</Text></View>
+            </View>
+          ) : (
+            <View>
+              {([
+                { label: '今日', p: walkStats.today },
+                { label: '今月', p: walkStats.month },
+                { label: '今年', p: walkStats.year },
+                { label: '累計', p: walkStats.total },
+              ] as const).map(({ label, p }) => (
+                <View key={label} style={styles.actDetailRow}>
+                  <Text style={styles.actDetailPeriod}>{label}</Text>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(2)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.calories.toLocaleString()}</Text><Text style={styles.actDetailLbl}>kcal</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{(p.steps ?? 0).toLocaleString()}</Text><Text style={styles.actDetailLbl}>歩</Text></View>
+                </View>
+              ))}
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* 自転車統計カード */}
+        {(cars.some(c => c.vehicleType === 'bicycle') || bicycleStats.total.km > 0) && (
+          <TouchableOpacity
+            style={[styles.actCard, { borderLeftColor: '#f59e0b' }]}
+            onPress={() => setBicycleExpanded(e => !e)}
+            activeOpacity={0.85}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: bicycleExpanded ? 12 : 0 }}>
+              <Text style={styles.actCardTitle}>🚲 自転車</Text>
+              <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{bicycleExpanded ? '▲' : '▼ 詳細'}</Text>
+            </View>
+            {!bicycleExpanded ? (
+              <View style={styles.actGrid}>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.today.km.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.year.km.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.total.km.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.total.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
+              </View>
+            ) : (
+              <View>
+                {([
+                  { label: '今日', p: bicycleStats.today },
+                  { label: '今月', p: bicycleStats.month },
+                  { label: '今年', p: bicycleStats.year },
+                  { label: '累計', p: bicycleStats.total },
+                ] as const).map(({ label, p }) => (
+                  <View key={label} style={styles.actDetailRow}>
+                    <Text style={styles.actDetailPeriod}>{label}</Text>
+                    <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(2)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                    <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.calories.toLocaleString()}</Text><Text style={styles.actDetailLbl}>kcal</Text></View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
+
         {loading && <Text style={styles.empty}>読み込み中...</Text>}
         {!loading && cars.length === 0 && (
           <Text style={styles.empty}>愛車が登録されていません{'\n'}下の「追加」から登録してください</Text>
@@ -320,11 +439,12 @@ export default function CarsScreen() {
             <View key={car.id} style={[styles.carCard, isActive && styles.carCardActive]}>
               {/* カードヘッダー */}
               <TouchableOpacity style={styles.carHeader} onPress={() => handleExpand(car)}>
-                <View style={styles.carIcon}>
+                <TouchableOpacity style={styles.carIcon} onPress={() => handleUpdateCarPhoto(car)}>
                   {car.photoUrl
-                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 10 }} />
-                    : <Text style={{ fontSize: 28 }}>🚗</Text>}
-                </View>
+                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} />
+                    : <Text style={{ fontSize: 28 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</Text>}
+                  <View style={styles.carIconEditBadge}><Text style={{ color: '#fff', fontSize: 8 }}>📷</Text></View>
+                </TouchableOpacity>
                 <View style={styles.carInfo}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <Text style={styles.carName}>{car.nickname}</Text>
@@ -350,12 +470,24 @@ export default function CarsScreen() {
                 </View>
               </TouchableOpacity>
 
+              {/* フルワイド写真（展開時） */}
+              {isExpanded && car.photoUrl && (
+                <Image
+                  source={{ uri: car.photoUrl }}
+                  style={{ width: '100%', height: 180 }}
+                  resizeMode="cover"
+                />
+              )}
+
               {/* 展開パネル */}
               {isExpanded && (
                 <View style={styles.detailPanel}>
                   {/* タブ */}
                   <View style={styles.tabs}>
-                    {(['stats', 'fuel', 'maintenance'] as DetailTab[]).map(tab => (
+                    {(car.vehicleType === 'bicycle'
+                      ? ['stats', 'maintenance'] as DetailTab[]
+                      : ['stats', 'fuel', 'maintenance'] as DetailTab[]
+                    ).map(tab => (
                       <TouchableOpacity
                         key={tab}
                         style={[styles.tab, detailTab === tab && styles.tabActive]}
@@ -587,7 +719,22 @@ export default function CarsScreen() {
       <Modal visible={showAddCar} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>🚗 愛車を追加</Text>
+            <Text style={styles.modalTitle}>{form.vehicleType === 'bicycle' ? '🚲' : '🚗'} 愛車を追加</Text>
+            {/* 車両タイプ選択 */}
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+              {(['car', 'bicycle'] as const).map(vt => (
+                <TouchableOpacity
+                  key={vt}
+                  onPress={() => setForm(f => ({ ...f, vehicleType: vt }))}
+                  style={[styles.vtBtn, form.vehicleType === vt && styles.vtBtnActive]}
+                >
+                  <Text style={{ fontSize: 20 }}>{vt === 'car' ? '🚗' : '🚲'}</Text>
+                  <Text style={[styles.vtBtnText, form.vehicleType === vt && styles.vtBtnTextActive]}>
+                    {vt === 'car' ? '車' : '自転車'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TouchableOpacity onPress={handlePickPhoto} style={styles.photoPickerBtn}>
               {photoUri
                 ? <Image source={{ uri: photoUri }} style={styles.photoPreview} />
@@ -615,7 +762,7 @@ export default function CarsScreen() {
             <TouchableOpacity style={[styles.modalButton, (!form.nickname.trim() || saving) && { opacity: 0.5 }]} onPress={handleSaveCar} disabled={!form.nickname.trim() || saving}>
               <Text style={styles.modalButtonText}>{saving ? '保存中...' : '追加する'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setShowAddCar(false); setForm({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4] }); setPhotoUri(null); }}>
+            <TouchableOpacity onPress={() => { setShowAddCar(false); setForm({ nickname: '', make: '', model: '', year: '', color: '', tagColor: TAG_COLORS[4], vehicleType: 'car' }); setPhotoUri(null); }}>
               <Text style={styles.modalCancel}>キャンセル</Text>
             </TouchableOpacity>
           </View>
@@ -703,15 +850,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
   helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
-  activeBanner: { backgroundColor: '#eff6ff', paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#bfdbfe' },
-  activeBannerText: { flex: 1, color: '#2563eb', fontSize: 13, fontWeight: '600' },
-  activeBannerClear: { color: '#9ca3af', fontSize: 12 },
   list: { flex: 1 },
   empty: { color: '#9ca3af', textAlign: 'center', marginTop: 40, fontSize: 14, lineHeight: 22 },
   carCard: { backgroundColor: '#fff', marginHorizontal: 12, marginTop: 12, borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
   carCardActive: { borderLeftWidth: 4, borderLeftColor: '#2563eb' },
   carHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  carIcon: { width: 52, height: 52, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
+  carIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', position: 'relative', borderWidth: 2, borderColor: '#e8eaed', overflow: 'hidden' },
+  carIconEditBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#2563eb', borderRadius: 8, width: 16, height: 16, alignItems: 'center', justifyContent: 'center' },
   carInfo: { flex: 1, gap: 3 },
   carName: { fontSize: 16, fontWeight: '700', color: '#1f2937' },
   carDetail: { fontSize: 12, color: '#9ca3af' },
@@ -755,6 +900,23 @@ const styles = StyleSheet.create({
   logDelete: { color: '#d1d5db', fontSize: 10 },
   warnBadge: { backgroundColor: '#ef4444', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
   warnBadgeText: { color: '#fff', fontSize: 9, fontWeight: '700' },
+  // Activity stats cards
+  actCard: { backgroundColor: '#fff', marginHorizontal: 12, marginTop: 12, borderRadius: 14, padding: 14, borderLeftWidth: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
+  actCardTitle: { fontSize: 14, fontWeight: '700', color: '#1f2937' },
+  actGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  actCell: { width: '30%', backgroundColor: '#f8f9fa', borderRadius: 8, padding: 8, alignItems: 'center' },
+  actVal: { fontSize: 16, fontWeight: '800', color: '#1f2937' },
+  actLbl: { fontSize: 9, color: '#9ca3af', marginTop: 2, textAlign: 'center' },
+  actDetailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+  actDetailPeriod: { width: 36, fontSize: 12, fontWeight: '700', color: '#6b7280' },
+  actDetailCell: { flex: 1, alignItems: 'center' },
+  actDetailVal: { fontSize: 15, fontWeight: '800', color: '#1f2937' },
+  actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
+  // Vehicle type selector
+  vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
+  vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
+  vtBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '500' },
+  vtBtnTextActive: { color: '#2563eb', fontWeight: '700' },
   // Toast
   toast: { position: 'absolute', bottom: 90, left: 24, right: 24, backgroundColor: 'rgba(31,41,55,0.92)', borderRadius: 12, padding: 14, alignItems: 'center' },
   toastText: { color: '#fff', fontSize: 14, fontWeight: '600' },
