@@ -117,7 +117,7 @@ export default function LandmarksScreen() {
   const renderItem = ({ item }: { item: Landmark }) => (
     <TouchableOpacity style={styles.card} onPress={() => router.push(`/landmark/${item.id}`)}>
       {item.photos.length > 0 && (
-        <Image source={{ uri: item.photos[0].url }} style={styles.cardPhoto} cachePolicy="disk" />
+        <Image source={{ uri: item.photos[0].url }} style={styles.cardPhoto} cachePolicy="memory-disk" />
       )}
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>

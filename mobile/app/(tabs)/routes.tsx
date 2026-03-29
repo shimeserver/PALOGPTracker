@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
-import { getUserRoutes, deleteRoute } from '../../src/firebase/routes';
-import { Route } from '../../src/types';
+import { getUserRoutesMetadata, deleteRoute, RouteMetadata } from '../../src/firebase/routes';
 import HelpModal from '../../src/components/HelpModal';
 import { useUiStore } from '../../src/store/uiStore';
 
@@ -24,7 +23,7 @@ function formatDuration(start: number, end: number): string {
 
 export default function RoutesScreen() {
   const { user } = useAuthStore();
-  const [routes, setRoutes] = useState<Route[]>([]);
+  const [routes, setRoutes] = useState<RouteMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'routes';
@@ -33,7 +32,7 @@ export default function RoutesScreen() {
     if (!user) return;
     setLoading(true);
     try {
-      const data = await getUserRoutes(user.uid);
+      const data = await getUserRoutesMetadata(user.uid);
       setRoutes(data);
     } finally {
       setLoading(false);
@@ -42,7 +41,7 @@ export default function RoutesScreen() {
 
   useEffect(() => { loadRoutes(); }, [user]);
 
-  const handleDelete = (route: Route) => {
+  const handleDelete = (route: RouteMetadata) => {
     Alert.alert('削除確認', `「${route.name}」を削除しますか？`, [
       { text: 'キャンセル', style: 'cancel' },
       {
@@ -55,7 +54,7 @@ export default function RoutesScreen() {
     ]);
   };
 
-  const renderItem = ({ item }: { item: Route }) => (
+  const renderItem = ({ item }: { item: RouteMetadata }) => (
     <TouchableOpacity
       style={styles.card}
       onPress={() => router.push(`/route/${item.id}`)}

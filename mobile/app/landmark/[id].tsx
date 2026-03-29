@@ -136,7 +136,7 @@ export default function LandmarkDetailScreen() {
             <Text style={styles.noData}>写真なし</Text>
           ) : (
             landmark.photos.map((p, i) => (
-              <Image key={i} source={{ uri: p.url }} style={styles.photo} cachePolicy="disk" />
+              <Image key={i} source={{ uri: p.url }} style={styles.photo} cachePolicy="memory-disk" />
             ))
           )}
         </ScrollView>

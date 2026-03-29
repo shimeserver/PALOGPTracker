@@ -2,8 +2,10 @@ import {
   collection, addDoc, getDocs, doc, getDoc,
   query, where, Timestamp, deleteDoc
 } from 'firebase/firestore';
-import { db } from './config';
-import { Route, TrackPoint } from '../../src/types';
+import { db, auth } from './config';
+import { Route } from '../../src/types';
+
+export type RouteMetadata = Omit<Route, 'points'>;
 
 // ルート保存
 export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
@@ -16,7 +18,68 @@ export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
   return docRef.id;
 }
 
-// ユーザーのルート一覧取得
+// Firestore REST API のフィールド値をデシリアライズ
+function parseFirestoreValue(v: Record<string, unknown>): unknown {
+  if (v.stringValue !== undefined) return v.stringValue;
+  if (v.integerValue !== undefined) return Number(v.integerValue);
+  if (v.doubleValue !== undefined) return v.doubleValue;
+  if (v.booleanValue !== undefined) return v.booleanValue;
+  if (v.nullValue !== undefined) return null;
+  if (v.timestampValue !== undefined) return new Date(v.timestampValue as string).getTime();
+  if (v.arrayValue) {
+    const av = v.arrayValue as { values?: Record<string, unknown>[] };
+    return (av.values ?? []).map(parseFirestoreValue);
+  }
+  return undefined;
+}
+
+// ユーザーのルート一覧取得（メタデータのみ — REST API select で points[] をネットワーク転送から除外）
+export async function getUserRoutesMetadata(userId: string): Promise<RouteMetadata[]> {
+  const projectId = (db.app.options as { projectId: string }).projectId;
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error('Not authenticated');
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      structuredQuery: {
+        select: {
+          fields: [
+            'userId', 'name', 'tags', 'startTime', 'endTime',
+            'totalDistance', 'avgSpeed', 'maxSpeed', 'source', 'mode', 'createdAt',
+          ].map(f => ({ fieldPath: f })),
+        },
+        from: [{ collectionId: 'routes' }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'userId' },
+            op: 'EQUAL',
+            value: { stringValue: userId },
+          },
+        },
+      },
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Firestore REST error: ${res.status}`);
+  const results: Array<{ document?: { name: string; fields: Record<string, Record<string, unknown>> } }> = await res.json();
+
+  return results
+    .filter(r => r.document)
+    .map(r => {
+      const id = r.document!.name.split('/').pop()!;
+      const parsed: Record<string, unknown> = { id };
+      for (const [k, v] of Object.entries(r.document!.fields)) {
+        parsed[k] = parseFirestoreValue(v);
+      }
+      return parsed as unknown as RouteMetadata;
+    })
+    .sort((a, b) => b.startTime - a.startTime);
+}
+
+// ユーザーのルート一覧取得（全データ — points[] 含む）
 export async function getUserRoutes(userId: string): Promise<Route[]> {
   const q = query(collection(db, 'routes'), where('userId', '==', userId));
   const snapshot = await getDocs(q);
