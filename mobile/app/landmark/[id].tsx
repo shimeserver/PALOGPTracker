@@ -57,7 +57,7 @@ export default function LandmarkDetailScreen() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [id, user]);
 
   const handleAddVisit = async () => {
     if (!user || !id) return;

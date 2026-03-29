@@ -4,10 +4,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../../src/firebase/config';
 import { useAuthStore } from '../../src/store/authStore';
+import { useCarStore } from '../../src/store/carStore';
 import { deleteAllUserRoutes } from '../../src/firebase/routes';
 import { collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 
-const VERSION = '1.0.7';
+const VERSION = '1.1.0';
 
 const PRIVACY_POLICY = `プライバシーポリシー
 
@@ -108,7 +109,7 @@ export default function SettingsScreen() {
       <Text style={styles.sectionTitle}>アカウント</Text>
       <View style={styles.card}>
         <Text style={styles.email}>{user?.email}</Text>
-        <TouchableOpacity style={styles.logoutBtn} onPress={() => signOut(auth)}>
+        <TouchableOpacity style={styles.logoutBtn} onPress={() => { useCarStore.getState().setActiveCar(null); signOut(auth); }}>
           <Text style={styles.logoutBtnText}>ログアウト</Text>
         </TouchableOpacity>
       </View>
