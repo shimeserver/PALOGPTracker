@@ -325,6 +325,8 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     setPinDragSaving(true);
     // 保存開始直後に drag mode を解除してタブ切替による意図しないリバートを防ぐ
     stopPinDragMode();
+    const originalLat = selected.lat;
+    const originalLng = selected.lng;
     try {
       await updateLandmark(selected.id!, { lat: pinDragNewPos.lat, lng: pinDragNewPos.lng });
       const updated = { ...selected, lat: pinDragNewPos.lat, lng: pinDragNewPos.lng };
@@ -333,6 +335,8 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       setPinDragActive(false);
       setPinDragNewPos(null);
     } catch (e: any) {
+      // 保存失敗時はマップのマーカーも元の位置に戻す
+      revertLandmarkPosition(selected.id!, originalLat, originalLng);
       alert(`保存に失敗しました: ${e.message}`);
     } finally {
       setPinDragSaving(false);
