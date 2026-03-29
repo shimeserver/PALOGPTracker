@@ -508,8 +508,8 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
             )}
 
             {detailEditing ? (
-              <div style={{ marginBottom: 16 }}>
-                <input value={detailName} onChange={e => setDetailName(e.target.value)} style={s.editInput} placeholder="スポット名" />
+              <div style={{ marginBottom: 16 }} onClick={e => e.stopPropagation()}>
+                <input value={detailName} onChange={e => setDetailName(e.target.value)} style={s.editInput} placeholder="スポット名" autoFocus />
                 <select value={detailCategory} onChange={e => setDetailCategory(e.target.value)} style={{ ...s.editInput, marginTop: 8 }}>
                   {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
