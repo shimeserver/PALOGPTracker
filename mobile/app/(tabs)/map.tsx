@@ -141,6 +141,7 @@ export default function MapScreen() {
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
   const initialized = useRef(false);
   const landmarksRef = useRef<Landmark[]>([]);
+  const landmarksCachedUidRef = useRef<string | null>(null);
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPointsLen = useRef(0);
   const { helpTarget, setHelpTarget } = useUiStore();
@@ -168,8 +169,11 @@ export default function MapScreen() {
   }, [isTracking]);
 
   useEffect(() => {
-    // 既にロード済みならFirestoreへの再フェッチをスキップ
-    if (!user || landmarksRef.current.length > 0) return;
+    if (!user) return;
+    // UID が変わった（アカウント切替）ときはキャッシュをクリアして再フェッチ
+    if (landmarksCachedUidRef.current === user.uid && landmarksRef.current.length > 0) return;
+    landmarksCachedUidRef.current = user.uid;
+    landmarksRef.current = [];
     getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
