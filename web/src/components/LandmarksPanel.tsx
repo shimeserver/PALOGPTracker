@@ -35,11 +35,12 @@ interface Props {
   stopMapPickMode: () => void;
   startPinDragMode: (id: string, onDragEnd: (lat: number, lng: number) => void) => void;
   stopPinDragMode: () => void;
+  revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
 }
 
 const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
 
-export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode }: Props) {
+export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
   const [selected, setSelected]   = useState<Landmark | null>(null);
   const [visits, setVisits]       = useState<Visit[]>([]);
@@ -324,6 +325,10 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   };
 
   const handleCancelPinDrag = () => {
+    // ドラッグ後にキャンセルした場合はマーカーを元の座標に戻す
+    if (selected && pinDragNewPos) {
+      revertLandmarkPosition(selected.id!, selected.lat, selected.lng);
+    }
     setPinDragActive(false);
     setPinDragNewPos(null);
     stopPinDragMode();
@@ -442,7 +447,10 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* ヘッダー */}
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #e8eaed', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setSelected(null)} style={s.linkBtn}>← 一覧に戻る</button>
+          <button onClick={() => {
+            if (pinDragActive && pinDragNewPos) revertLandmarkPosition(selected.id!, selected.lat, selected.lng);
+            setSelected(null);
+          }} style={s.linkBtn}>← 一覧に戻る</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onFocus(selected)} style={{ ...s.linkBtn, color: '#2563eb' }}>📍 地図</button>
             {!detailEditing && !pinDragActive && <button onClick={startDetailEdit} style={{ ...s.linkBtn, color: '#6b7280' }}>✏️ 編集</button>}

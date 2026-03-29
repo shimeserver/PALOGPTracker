@@ -75,6 +75,9 @@ export default function MainPage({ user }: Props) {
     setPinDragMode({ id, onDragEnd });
   };
   const stopPinDragMode = () => setPinDragMode(null);
+  const revertLandmarkPosition = (id: string, lat: number, lng: number) => {
+    mapViewRef.current?.revertLandmarkPosition(id, lat, lng);
+  };
 
   const getPlacesService = (): google.maps.places.PlacesService | null => {
     const map = mapViewRef.current?.getMap();
@@ -131,6 +134,7 @@ export default function MainPage({ user }: Props) {
               stopMapPickMode={stopMapPickMode}
               startPinDragMode={startPinDragMode}
               stopPinDragMode={stopPinDragMode}
+              revertLandmarkPosition={revertLandmarkPosition}
             />
           </div>
         </div>

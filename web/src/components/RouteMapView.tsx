@@ -11,6 +11,7 @@ export type TileKey = MapTypeId;
 export interface RouteMapViewHandle {
   focusLandmark: (lat: number, lng: number, id: string) => void;
   getMap: () => google.maps.Map | null;
+  revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
 }
 
 const ROUTE_COLORS = ['#2563eb','#ef4444','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16'];
@@ -63,6 +64,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       },
       getMap() {
         return mapRef.current;
+      },
+      revertLandmarkPosition(id, lat, lng) {
+        setLandmarks(prev => prev.map(x => x.id === id ? { ...x, lat, lng } : x));
       },
     }));
 
