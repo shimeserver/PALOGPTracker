@@ -143,6 +143,7 @@ export default function MainPage({ user }: Props) {
               startPinDragMode={startPinDragMode}
               stopPinDragMode={stopPinDragMode}
               revertLandmarkPosition={revertLandmarkPosition}
+              activePinDragId={pinDragMode?.id ?? null}
             />
           </div>
         </div>

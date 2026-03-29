@@ -36,11 +36,12 @@ interface Props {
   startPinDragMode: (id: string, originalLat: number, originalLng: number, onDragEnd: (lat: number, lng: number) => void) => void;
   stopPinDragMode: () => void;
   revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
+  activePinDragId: string | null;
 }
 
 const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
 
-export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition }: Props) {
+export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition, activePinDragId }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
   const [selected, setSelected]   = useState<Landmark | null>(null);
   const [visits, setVisits]       = useState<Visit[]>([]);
@@ -67,6 +68,14 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   const [pinDragActive, setPinDragActive] = useState(false);
   const [pinDragNewPos, setPinDragNewPos] = useState<{ lat: number; lng: number } | null>(null);
   const [pinDragSaving, setPinDragSaving] = useState(false);
+
+  // タブ切替など外部からドラッグモードが解除されたときにパネル状態をリセット
+  useEffect(() => {
+    if (!activePinDragId && pinDragActive) {
+      setPinDragActive(false);
+      setPinDragNewPos(null);
+    }
+  }, [activePinDragId]);
 
   // 地図で確定
   const [pickModeActive, setPickModeActive] = useState(false);
