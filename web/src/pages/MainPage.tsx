@@ -75,6 +75,11 @@ export default function MainPage({ user }: Props) {
     setPinDragMode({ id, onDragEnd });
   };
   const stopPinDragMode = () => setPinDragMode(null);
+  // タブ切替時にドラッグモードをリセット
+  const handleTabChange = (next: Tab) => {
+    if (next !== 'landmarks') setPinDragMode(null);
+    setTab(next);
+  };
   const revertLandmarkPosition = (id: string, lat: number, lng: number) => {
     mapViewRef.current?.revertLandmarkPosition(id, lat, lng);
   };
@@ -94,10 +99,10 @@ export default function MainPage({ user }: Props) {
         </div>
 
         <div style={styles.tabs}>
-          <button style={{ ...styles.tabBtn, ...(tab === 'routes' ? styles.tabBtnActive : {}) }} onClick={() => setTab('routes')}>
+          <button style={{ ...styles.tabBtn, ...(tab === 'routes' ? styles.tabBtnActive : {}) }} onClick={() => handleTabChange('routes')}>
             📋 ルート
           </button>
-          <button style={{ ...styles.tabBtn, ...(tab === 'landmarks' ? styles.tabBtnActive : {}) }} onClick={() => setTab('landmarks')}>
+          <button style={{ ...styles.tabBtn, ...(tab === 'landmarks' ? styles.tabBtnActive : {}) }} onClick={() => handleTabChange('landmarks')}>
             ⭐ スポット
           </button>
         </div>
@@ -150,7 +155,7 @@ export default function MainPage({ user }: Props) {
           onMapSettings={setMapSettings}
           tags={tags}
           onMapRightClick={mapRightClickCb ?? undefined}
-          pinDragMode={pinDragMode}
+          pinDragMode={tab === 'landmarks' ? pinDragMode : null}
         />
       </div>
 

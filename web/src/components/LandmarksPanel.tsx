@@ -450,7 +450,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
           <button onClick={() => {
             if (pinDragActive && pinDragNewPos) revertLandmarkPosition(selected.id!, selected.lat, selected.lng);
             setSelected(null);
-          }} style={s.linkBtn}>← 一覧に戻る</button>
+          }} disabled={pinDragSaving} style={{ ...s.linkBtn, opacity: pinDragSaving ? 0.4 : 1 }}>← 一覧に戻る</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onFocus(selected)} style={{ ...s.linkBtn, color: '#2563eb' }}>📍 地図</button>
             {!detailEditing && !pinDragActive && <button onClick={startDetailEdit} style={{ ...s.linkBtn, color: '#6b7280' }}>✏️ 編集</button>}
@@ -474,7 +474,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
                   >
                     {pinDragSaving ? '保存中...' : '✓ この位置で保存'}
                   </button>
-                  <button onClick={handleCancelPinDrag} style={{ background: '#f8f9fa', color: '#6b7280', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '9px 14px', cursor: 'pointer', fontSize: 13 }}>
+                  <button onClick={handleCancelPinDrag} disabled={pinDragSaving} style={{ background: '#f8f9fa', color: '#6b7280', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '9px 14px', cursor: pinDragSaving ? 'not-allowed' : 'pointer', fontSize: 13, opacity: pinDragSaving ? 0.4 : 1 }}>
                     キャンセル
                   </button>
                 </div>
