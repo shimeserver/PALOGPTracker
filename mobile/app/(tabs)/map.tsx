@@ -153,9 +153,11 @@ export default function MapScreen() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-        // 継続購読で常に最新位置を保持
+        // 記録中: 3秒/5m（高精度）、非記録中: 10秒/20m（省電力）
         sub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Balanced, timeInterval: 3000, distanceInterval: 5 },
+          isTracking
+            ? { accuracy: Location.Accuracy.Balanced, timeInterval: 3000, distanceInterval: 5 }
+            : { accuracy: Location.Accuracy.Balanced, timeInterval: 10000, distanceInterval: 20 },
           (loc) => setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude })
         );
       } catch (error) {
@@ -163,13 +165,14 @@ export default function MapScreen() {
       }
     })();
     return () => { sub?.remove(); };
-  }, []);
+  }, [isTracking]);
 
   useEffect(() => {
-    if (user) getUserLandmarks(user.uid).then(data => {
+    // 既にロード済みならFirestoreへの再フェッチをスキップ
+    if (!user || landmarksRef.current.length > 0) return;
+    getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
-      // WebViewが既に初期化済みの場合はスポットを即時更新
       if (initialized.current) {
         const lms = data.map(lm => ({ lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount }));
         webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lms)});true;`);

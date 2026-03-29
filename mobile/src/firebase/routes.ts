@@ -5,6 +5,8 @@ import {
 import { db } from './config';
 import { Route, TrackPoint } from '../../src/types';
 
+export type RouteMetadata = Omit<Route, 'points'>;
+
 // ルート保存
 export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
   const docRef = await addDoc(collection(db, 'routes'), {
@@ -16,7 +18,25 @@ export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
   return docRef.id;
 }
 
-// ユーザーのルート一覧取得
+// ユーザーのルート一覧取得（メタデータのみ — points[] を除外）
+export async function getUserRoutesMetadata(userId: string): Promise<RouteMetadata[]> {
+  const q = query(collection(db, 'routes'), where('userId', '==', userId));
+  const snapshot = await getDocs(q);
+  const routes = snapshot.docs.map(d => {
+    const data = d.data();
+    const { points: _omit, ...rest } = data;
+    return {
+      id: d.id,
+      ...rest,
+      startTime: data.startTime.toMillis(),
+      endTime: data.endTime.toMillis(),
+      createdAt: data.createdAt.toMillis(),
+    } as RouteMetadata;
+  });
+  return routes.sort((a, b) => b.startTime - a.startTime);
+}
+
+// ユーザーのルート一覧取得（全データ — points[] 含む）
 export async function getUserRoutes(userId: string): Promise<Route[]> {
   const q = query(collection(db, 'routes'), where('userId', '==', userId));
   const snapshot = await getDocs(q);

@@ -15,8 +15,8 @@ import {
   getMaintenanceLogs, addMaintenanceLog, deleteMaintenanceLog, updateMaintenanceLog,
   uploadCarPhoto, getRouteStatsByTag, RouteStats, getUserTags, TagDef,
 } from '../../src/firebase/cars';
-import { getUserRoutes } from '../../src/firebase/routes';
-import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS, Route } from '../../src/types';
+import { getUserRoutesMetadata, RouteMetadata } from '../../src/firebase/routes';
+import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
 
 interface PeriodStats { km: number; calories: number; steps?: number; }
@@ -24,7 +24,7 @@ interface ActivityStats {
   today: PeriodStats; month: PeriodStats; year: PeriodStats; total: PeriodStats;
 }
 
-function calcActivityStats(routes: Route[], mode: 'walk' | 'bicycle', kcalPerKm: number): ActivityStats {
+function calcActivityStats(routes: RouteMetadata[], mode: 'walk' | 'bicycle', kcalPerKm: number): ActivityStats {
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
@@ -94,7 +94,7 @@ export default function CarsScreen() {
   const [statsLoading, setStatsLoading] = useState<Record<string, boolean>>({});
 
   // アクティビティ統計
-  const [allRoutes, setAllRoutes] = useState<Route[]>([]);
+  const [allRoutes, setAllRoutes] = useState<RouteMetadata[]>([]);
   const walkStats    = calcActivityStats(allRoutes, 'walk',    60);
   const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
   const [walkExpanded,    setWalkExpanded]    = useState(false);
@@ -136,14 +136,18 @@ export default function CarsScreen() {
       .then(c => { if (isMounted) { setCars(c); setLoading(false); } })
       .catch(() => { if (isMounted) { setLoading(false); Alert.alert('エラー', 'データの読み込みに失敗しました'); } });
     getUserTags(user.uid).then(t => { if (isMounted) setUserTags(t); }).catch(() => {});
-    getUserRoutes(user.uid).then(r => { if (isMounted) setAllRoutes(r); }).catch(() => {});
+    getUserRoutesMetadata(user.uid).then(r => { if (isMounted) setAllRoutes(r); }).catch(() => {});
     return () => { isMounted = false; };
   }, [user?.uid]);
 
 
-  // タブフォーカス時にサーバーから強制再フェッチ（Web等他端末でのアップロードを反映）
+  // タブフォーカス時にサーバーから強制再フェッチ（30秒クールダウン）
+  const lastFocusFetchRef = useRef(0);
   useFocusEffect(useCallback(() => {
     if (!user) return;
+    const now = Date.now();
+    if (now - lastFocusFetchRef.current < 30000) return;
+    lastFocusFetchRef.current = now;
     getUserCarsFromServer(user.uid).then(c => setCars(c)).catch(() => {});
   }, [user?.uid]));
 
@@ -467,7 +471,7 @@ export default function CarsScreen() {
               <TouchableOpacity style={styles.carHeader} onPress={() => handleExpand(car)}>
                 <TouchableOpacity style={styles.carIcon} onPress={() => handleUpdateCarPhoto(car)}>
                   {car.photoUrl
-                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} cachePolicy="disk" />
+                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} cachePolicy="memory-disk" />
                     : <Text style={{ fontSize: 28 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</Text>}
                   <View style={styles.carIconEditBadge}><Text style={{ color: '#fff', fontSize: 8 }}>📷</Text></View>
                 </TouchableOpacity>
@@ -502,7 +506,7 @@ export default function CarsScreen() {
                   source={{ uri: car.photoUrl }}
                   style={{ width: '100%', height: 180 }}
                   contentFit="cover"
-                  cachePolicy="disk"
+                  cachePolicy="memory-disk"
                 />
               )}
 
