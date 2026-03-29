@@ -323,14 +323,20 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   const handleConfirmPinDrag = async () => {
     if (!selected || !pinDragNewPos) return;
     setPinDragSaving(true);
-    await updateLandmark(selected.id!, { lat: pinDragNewPos.lat, lng: pinDragNewPos.lng });
-    const updated = { ...selected, lat: pinDragNewPos.lat, lng: pinDragNewPos.lng };
-    setSelected(updated);
-    setLandmarks(prev => prev.map(x => x.id === selected.id ? updated : x));
-    setPinDragActive(false);
-    setPinDragNewPos(null);
-    setPinDragSaving(false);
+    // 保存開始直後に drag mode を解除してタブ切替による意図しないリバートを防ぐ
     stopPinDragMode();
+    try {
+      await updateLandmark(selected.id!, { lat: pinDragNewPos.lat, lng: pinDragNewPos.lng });
+      const updated = { ...selected, lat: pinDragNewPos.lat, lng: pinDragNewPos.lng };
+      setSelected(updated);
+      setLandmarks(prev => prev.map(x => x.id === selected.id ? updated : x));
+      setPinDragActive(false);
+      setPinDragNewPos(null);
+    } catch (e: any) {
+      alert(`保存に失敗しました: ${e.message}`);
+    } finally {
+      setPinDragSaving(false);
+    }
   };
 
   const handleCancelPinDrag = () => {
