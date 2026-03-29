@@ -35,7 +35,7 @@ export default function MainPage({ user }: Props) {
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
   const [carWarning, setCarWarning]         = useState(false);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
-  const [pinDragMode, setPinDragMode] = useState<{ id: string; onDragEnd: (lat: number, lng: number) => void } | null>(null);
+  const [pinDragMode, setPinDragMode] = useState<{ id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
   useEffect(() => {
@@ -71,13 +71,16 @@ export default function MainPage({ user }: Props) {
   };
   const stopMapPickMode = () => setMapPickCallback(null);
 
-  const startPinDragMode = (id: string, onDragEnd: (lat: number, lng: number) => void) => {
-    setPinDragMode({ id, onDragEnd });
+  const startPinDragMode = (id: string, originalLat: number, originalLng: number, onDragEnd: (lat: number, lng: number) => void) => {
+    setPinDragMode({ id, originalLat, originalLng, onDragEnd });
   };
   const stopPinDragMode = () => setPinDragMode(null);
-  // タブ切替時にドラッグモードをリセット
+  // タブ切替時にドラッグモードをリセット（マーカーを元の位置に戻す）
   const handleTabChange = (next: Tab) => {
-    if (next !== 'landmarks') setPinDragMode(null);
+    if (next !== 'landmarks' && pinDragMode) {
+      mapViewRef.current?.revertLandmarkPosition(pinDragMode.id, pinDragMode.originalLat, pinDragMode.originalLng);
+      setPinDragMode(null);
+    }
     setTab(next);
   };
   const revertLandmarkPosition = (id: string, lat: number, lng: number) => {

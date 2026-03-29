@@ -33,7 +33,7 @@ interface Props {
   getPlacesService: () => google.maps.places.PlacesService | null;
   startMapPickMode: (cb: (lat: number, lng: number, placeId?: string) => void) => void;
   stopMapPickMode: () => void;
-  startPinDragMode: (id: string, onDragEnd: (lat: number, lng: number) => void) => void;
+  startPinDragMode: (id: string, originalLat: number, originalLng: number, onDragEnd: (lat: number, lng: number) => void) => void;
   stopPinDragMode: () => void;
   revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
 }
@@ -306,7 +306,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     onFocus(selected);
     setPinDragActive(true);
     setPinDragNewPos(null);
-    startPinDragMode(selected.id!, (lat, lng) => {
+    startPinDragMode(selected.id!, selected.lat, selected.lng, (lat, lng) => {
       setPinDragNewPos({ lat, lng });
     });
   };

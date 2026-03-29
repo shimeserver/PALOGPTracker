@@ -39,7 +39,7 @@ interface Props {
   onMapSettings: (s: MapSettings) => void;
   tags: TagDef[];
   onMapRightClick?: (lat: number, lng: number, placeId?: string) => void;
-  pinDragMode?: { id: string; onDragEnd: (lat: number, lng: number) => void } | null;
+  pinDragMode?: { id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null;
 }
 
 const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
