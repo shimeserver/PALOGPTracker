@@ -2,11 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getUserLandmarks, getVisits, deleteLandmark, updateLandmark, mergeLandmarks, deleteVisit, uploadLandmarkPhotoFromUrl } from '../firebase/data';
 import type { Landmark, Visit } from '../firebase/data';
 
-const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
-
-function streetViewUrl(lat: number, lng: number, size = '400x200'): string {
-  return `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${lat},${lng}&fov=80&pitch=5&key=${MAPS_KEY}`;
-}
+const NO_PHOTO_PLACEHOLDER = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='90' viewBox='0 0 120 90'%3E%3Crect width='120' height='90' fill='%23f3f4f6'/%3E%3Ccircle cx='60' cy='34' r='14' fill='%23d1d5db'/%3E%3Cellipse cx='60' cy='68' rx='24' ry='14' fill='%23d1d5db'/%3E%3C/svg%3E`;
 
 function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -68,6 +64,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   // 地図で確定
   const [pickModeActive, setPickModeActive] = useState(false);
   const [pendingPlace, setPendingPlace]     = useState<google.maps.places.PlaceResult | null>(null);
+  const [pendingPhotoUrl, setPendingPhotoUrl] = useState<string | null>(null);
   const [confirming, setConfirming]         = useState(false);
   const [pickHint, setPickHint]             = useState(false); // POI以外クリック時のヒント
   const [mergeCandidate, setMergeCandidate] = useState<Landmark | null>(null);
@@ -82,7 +79,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   useEffect(() => {
     if (!selected) {
       setPickModeActive(false);
-      setPendingPlace(null);
+      { setPendingPlace(null); setPendingPhotoUrl(null); };
       stopMapPickMode();
     }
   }, [selected]);
@@ -92,7 +89,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     const service = getPlacesService();
     if (!service) { alert('地図タブを一度開いてから試してください'); return; }
     setPickModeActive(true);
-    setPendingPlace(null);
+    { setPendingPlace(null); setPendingPhotoUrl(null); };
     startMapPickMode((_lat, _lng, placeId) => {
       if (!placeId) {
         // POI以外の場所をクリック — ヒントを表示してピックモード継続
@@ -105,7 +102,10 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       service.getDetails(
         { placeId, fields: ['name', 'place_id', 'geometry', 'photos', 'types', 'vicinity', 'rating'] },
         (result, status) => {
-          if (status === google.maps.places.PlacesServiceStatus.OK && result) setPendingPlace(result);
+          if (status === google.maps.places.PlacesServiceStatus.OK && result) {
+            setPendingPlace(result);
+            setPendingPhotoUrl(result.photos?.[0]?.getUrl({ maxWidth: 600 }) ?? null);
+          }
         }
       );
     });
@@ -122,7 +122,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     }
 
     setConfirming(true);
-    const googlePhotoUrl = pendingPlace.photos?.[0]?.getUrl({ maxWidth: 600 });
+    const googlePhotoUrl = pendingPhotoUrl;
     const newLat = pendingPlace.geometry?.location?.lat();
     const newLng = pendingPlace.geometry?.location?.lng();
     const patch: Parameters<typeof updateLandmark>[1] = {
@@ -156,7 +156,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     const updated = { ...selected, ...patch };
     setSelected(updated);
     setLandmarks(prev => prev.map(x => x.id === selected.id ? updated : x));
-    setPendingPlace(null);
+    { setPendingPlace(null); setPendingPhotoUrl(null); };
     setConfirming(false);
   };
 
@@ -292,7 +292,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
 
   // ========== 共通操作 ==========
   const handleSelect = async (lm: Landmark) => {
-    setSelected(lm); setDetailEditing(false); setPendingPlace(null); onFocus(lm);
+    setSelected(lm); setDetailEditing(false); { setPendingPlace(null); setPendingPhotoUrl(null); }; onFocus(lm);
     const v = await getVisits(lm.id!); setVisits(v);
   };
 
@@ -397,7 +397,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   if (selected) {
     const coverUrl = selected.photos.length > 0
       ? selected.photos[0].url
-      : streetViewUrl(selected.lat, selected.lng, '600x280');
+      : NO_PHOTO_PLACEHOLDER;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -428,8 +428,8 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
         {pendingPlace && !mergeCandidate && (
           <div style={{ background: '#f0fdf4', borderBottom: '1px solid #86efac', padding: '12px 16px' }}>
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 10 }}>
-              {pendingPlace.photos?.[0] && (
-                <img src={pendingPlace.photos[0].getUrl({ maxWidth: 80 })} style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+              {pendingPhotoUrl && (
+                <img src={pendingPhotoUrl} style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
               )}
               <div>
                 <p style={{ color: '#15803d', fontWeight: 700, fontSize: 14, marginBottom: 2 }}>{pendingPlace.name}</p>
@@ -448,7 +448,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
               >
                 {confirming ? '保存中...' : 'このスポットで確定！'}
               </button>
-              <button onClick={() => setPendingPlace(null)} style={{ background: '#f8f9fa', color: '#6b7280', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '9px 14px', cursor: 'pointer', fontSize: 13 }}>
+              <button onClick={() => { setPendingPlace(null); setPendingPhotoUrl(null); }} style={{ background: '#f8f9fa', color: '#6b7280', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '9px 14px', cursor: 'pointer', fontSize: 13 }}>
                 別の場所
               </button>
             </div>
@@ -479,7 +479,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
                 マージせず確定
               </button>
             </div>
-            <button onClick={() => { setMergeCandidate(null); setPendingPlace(null); }} style={{ width: '100%', marginTop: 6, background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12 }}>
+            <button onClick={() => { setMergeCandidate(null); { setPendingPlace(null); setPendingPhotoUrl(null); }; }} style={{ width: '100%', marginTop: 6, background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12 }}>
               キャンセル
             </button>
           </div>
@@ -650,7 +650,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
         {filtered.map(lm => {
           const thumbUrl = lm.photos.length > 0
             ? lm.photos[0].url
-            : streetViewUrl(lm.lat, lm.lng, '120x90');
+            : NO_PHOTO_PLACEHOLDER;
           return (
             <div key={lm.id} style={s.card} onClick={() => handleSelect(lm)}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>

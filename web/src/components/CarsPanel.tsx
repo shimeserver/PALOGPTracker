@@ -1,14 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import ReactCrop, { type Crop, centerCrop, makeAspectCrop, type PixelCrop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 import {
   getUserCars, createCar, updateCar, deleteCar,
   getFuelLogs, addFuelLog, deleteFuelLog,
   getMaintenanceLogs, addMaintenanceLog, updateMaintenanceLog, deleteMaintenanceLog,
-  uploadCarPhoto, createTag,
+  uploadCarPhotoBlob, createTag,
   MAINTENANCE_LABELS,
 } from '../firebase/data';
 import type { Car, FuelLog, MaintenanceLog, MaintenanceType, Route, TagDef } from '../firebase/data';
+import { deleteField } from 'firebase/firestore';
 
 const TAG_COLORS = ['#ef4444','#f97316','#f59e0b','#22c55e','#2563eb','#8b5cf6','#ec4899','#06b6d4'];
+
+// モジュールレベルで保持（コンポーネントのアンマウント/再マウントに影響されない）
+const _carPhotoBlobUrls: Record<string, string> = {};
+
+async function resizeImage(file: File, maxPx = 800, quality = 0.82): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxPx || height > maxPx) {
+        if (width > height) { height = Math.round(height * maxPx / width); width = maxPx; }
+        else { width = Math.round(width * maxPx / height); height = maxPx; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas toBlob failed')), 'image/jpeg', quality);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
 interface Props {
   open: boolean;
@@ -21,6 +48,7 @@ interface Props {
   onTagsChange: () => void;
   onCarsChange: (cars: Car[]) => void;
   onRefreshRoutes?: () => Promise<void>;
+  onWarningChange?: (hasWarning: boolean) => void;
 }
 
 type DetailTab = 'stats' | 'fuel' | 'maintenance';
@@ -78,9 +106,10 @@ function distanceSince(ts: number, routes: Route[], allTags: TagDef[], carTagId?
     .reduce((s, r) => s + r.totalDistance, 0);
 }
 
-export default function CarsPanel({ open, onClose, userId, routes, tags, activeCar, onSetActiveCar, onTagsChange, onCarsChange, onRefreshRoutes }: Props) {
+export default function CarsPanel({ open, onClose, userId, routes, tags, activeCar, onSetActiveCar, onTagsChange, onCarsChange, onRefreshRoutes, onWarningChange }: Props) {
   const [cars, setCars] = useState<Car[]>([]);
   const [loading, setLoading] = useState(true);
+  const [, setPhotoRefresh] = useState(0); // triggers re-render after blob prefetch
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>('stats');
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
@@ -96,6 +125,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     setToast({ msg, type });
     toastTimer.current = setTimeout(() => setToast(null), 2800);
   };
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   // Saving states
   const [savingFuel, setSavingFuel] = useState(false);
@@ -103,6 +133,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   // Inline odometer edit (maintenance log)
   const [editOdometer, setEditOdometer] = useState<{ carId: string; logId: string; value: string } | null>(null);
+
+  // 整備記録編集モーダル
+  const [editMaintModal, setEditMaintModal] = useState<{ carId: string; log: MaintenanceLog } | null>(null);
+  const [editMaintForm, setEditMaintForm] = useState<{ itemType: string; nextDueMonths: string; nextDueKm: string; notes: string }>({ itemType: '', nextDueMonths: '', nextDueKm: '', notes: '' });
 
   // Car total odometer edit
   const [editCarOdometer, setEditCarOdometer] = useState<{ carId: string; value: string } | null>(null);
@@ -121,22 +155,70 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   // 既存車への写真アップロード
   const [uploadingPhotoCarId, setUploadingPhotoCarId] = useState<string | null>(null);
 
+  // トリミングモーダル
+  const [cropModal, setCropModal] = useState<{ src: string; file: File; carId: string | null } | null>(null);
+  const [crop, setCrop] = useState<Crop>();
+  const [completedCrop, setCompletedCrop] = useState<Crop | null>(null);
+  const cropImgRef = useRef<HTMLImageElement>(null);
+
   // Add fuel log form
   const [showAddFuel, setShowAddFuel] = useState<string | null>(null);
   const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: new Date().toISOString().slice(0, 10) });
 
   // Add maintenance form
   const [showAddMaint, setShowAddMaint] = useState<string | null>(null);
-  const [maintForm, setMaintForm] = useState<{ type: MaintenanceType; customLabel: string; date: string; odometerKm: string; cost: string; notes: string; nextDueMonths: string; nextDueKm: string }>({
-    type: 'oil', customLabel: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '',
+  const [maintForm, setMaintForm] = useState<{ type: MaintenanceType; customLabel: string; itemType: string; date: string; odometerKm: string; cost: string; notes: string; nextDueMonths: string; nextDueKm: string }>({
+    type: 'oil', customLabel: '', itemType: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '',
   });
+
+  useEffect(() => {
+    if (!onWarningChange) return;
+    const anyWarning = cars.some(car => {
+      const mLogs = maintLogs[car.id!] || [];
+      return mLogs.some(log => {
+        const km = distanceSince(log.timestamp, routes, tags, car.tagId);
+        const months = Math.floor((Date.now() - log.timestamp) / 2592000000);
+        return (log.nextDueKm != null && km >= log.nextDueKm - 300) || (log.nextDueMonths != null && months >= log.nextDueMonths - 1);
+      });
+    });
+    onWarningChange(anyWarning);
+  }, [cars, maintLogs, routes, tags, onWarningChange]);
+
+  // 警告バッジ用: パネルの開閉に関わらず起動時にメンテログを取得
+  useEffect(() => {
+    if (!onWarningChange) return;
+    let isMounted = true;
+    getUserCars(userId).then(c => {
+      if (!isMounted) return;
+      setCars(prev => prev.length > 0 ? prev : c);
+      c.forEach(car => {
+        getMaintenanceLogs(car.id!).then(logs => {
+          if (!isMounted) return;
+          setMaintLogs(prev => ({ ...prev, [car.id!]: logs }));
+          setLoadedMaint(prev => new Set([...prev, car.id!]));
+        }).catch(() => {});
+      });
+    }).catch(() => {});
+    return () => { isMounted = false; };
+  }, [userId, onWarningChange]);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     let isMounted = true;
     getUserCars(userId).then(c => {
-      if (isMounted) { setCars(c); onCarsChange(c); setLoading(false); }
+      if (!isMounted) return;
+      setCars(c); onCarsChange(c); setLoading(false);
+      // Firebase URLをblobに変換してキャッシュ（Electronでのimg読み込み安定化）
+      c.forEach(car => {
+        if (car.photoUrl && !_carPhotoBlobUrls[car.id!]) {
+          fetch(car.photoUrl).then(r => r.blob()).then(b => {
+            if (!isMounted) return;
+            _carPhotoBlobUrls[car.id!] = URL.createObjectURL(b);
+            setPhotoRefresh(n => n + 1);
+          }).catch(() => {});
+        }
+      });
     }).catch(() => { if (isMounted) setLoading(false); });
     return () => { isMounted = false; };
   }, [open, userId]);
@@ -172,11 +254,11 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setPhotoFile(f);
-    setPhotoPreview(prev => {
-      if (prev) URL.revokeObjectURL(prev);
-      return URL.createObjectURL(f);
-    });
+    // 新規追加フォームの写真はトリミングモーダルへ
+    const src = URL.createObjectURL(f);
+    setCrop(undefined);
+    setCompletedCrop(null);
+    setCropModal({ src, file: f, carId: null });
   };
 
   const handleSaveCar = async () => {
@@ -199,9 +281,12 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         tagId, createdAt: Date.now(),
       });
       if (photoFile) {
-        const { url, storagePath } = await uploadCarPhoto(userId, newCar.id!, photoFile);
+        const blob = await resizeImage(photoFile);
+        const localUrl = URL.createObjectURL(blob);
+        _carPhotoBlobUrls[newCar.id!] = localUrl;
+        newCar.photoUrl = localUrl;
+        const { url, storagePath } = await uploadCarPhotoBlob(userId, newCar.id!, blob);
         await updateCar(newCar.id!, { photoUrl: url, photoStoragePath: storagePath });
-        newCar.photoUrl = url;
       }
       const updated = [...cars, newCar];
       setCars(updated);
@@ -216,6 +301,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handleDeleteCar = async (car: Car) => {
     if (!confirm(`愛車「${car.nickname}」を削除しますか？\n（タグや記録されたルートは残ります）`)) return;
     await deleteCar(car.id!);
+    if (car.id && _carPhotoBlobUrls[car.id]) {
+      URL.revokeObjectURL(_carPhotoBlobUrls[car.id]);
+      delete _carPhotoBlobUrls[car.id];
+    }
     if (activeCar?.id === car.id) onSetActiveCar(null);
     const updated = cars.filter(c => c.id !== car.id);
     setCars(updated);
@@ -257,11 +346,14 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handleSaveMaint = async (carId: string) => {
     setSavingMaint(true);
     try {
+      // YYYY-MM-DD → ローカル時刻として解釈
+      const [y, m, d] = maintForm.date.split('-').map(Number);
       const maintData: Parameters<typeof addMaintenanceLog>[1] = {
         type: maintForm.type,
-        timestamp: new Date(maintForm.date).getTime(),
+        timestamp: new Date(y, m - 1, d).getTime(),
       };
       if (maintForm.type === 'other' && maintForm.customLabel.trim()) maintData.customLabel = maintForm.customLabel.trim();
+      if ((maintForm.type === 'oil' || maintForm.type === 'tire') && maintForm.itemType.trim()) maintData.itemType = maintForm.itemType.trim();
       if (maintForm.odometerKm) maintData.odometerKm = parseFloat(maintForm.odometerKm);
       if (maintForm.cost) maintData.cost = parseFloat(maintForm.cost);
       if (maintForm.notes.trim()) maintData.notes = maintForm.notes.trim();
@@ -270,7 +362,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       const log = await addMaintenanceLog(carId, maintData);
       setMaintLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
       setShowAddMaint(null);
-      setMaintForm({ type: 'oil', customLabel: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
+      setMaintForm({ type: 'oil', customLabel: '', itemType: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
       showToast('整備記録を保存しました');
     } catch (err) {
       console.error('addMaintenanceLog error:', err);
@@ -287,20 +379,113 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     showToast('削除しました');
   };
 
-  const handleCarPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>, carId: string) => {
+  const openEditMaint = (carId: string, log: MaintenanceLog) => {
+    setEditMaintModal({ carId, log });
+    setEditMaintForm({
+      itemType: log.itemType || '',
+      nextDueMonths: log.nextDueMonths?.toString() || '',
+      nextDueKm: log.nextDueKm?.toString() || '',
+      notes: log.notes || '',
+    });
+  };
+
+  const handleUpdateMaint = async () => {
+    if (!editMaintModal) return;
+    const { carId, log } = editMaintModal;
+    // 空フィールドはdeleteField()でFirestoreから削除、値があれば更新
+    const patch: Record<string, unknown> = {
+      itemType: editMaintForm.itemType.trim() || deleteField(),
+      notes: editMaintForm.notes.trim() || deleteField(),
+      nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : deleteField(),
+      nextDueKm: editMaintForm.nextDueKm ? parseFloat(editMaintForm.nextDueKm) : deleteField(),
+    };
+    await updateMaintenanceLog(carId, log.id!, patch as Parameters<typeof updateMaintenanceLog>[2]);
+    const localUpdate: Partial<MaintenanceLog> = {
+      itemType: editMaintForm.itemType.trim() || undefined,
+      notes: editMaintForm.notes.trim() || undefined,
+      nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : undefined,
+      nextDueKm: editMaintForm.nextDueKm ? parseFloat(editMaintForm.nextDueKm) : undefined,
+    };
+    setMaintLogs(prev => ({
+      ...prev,
+      [carId]: (prev[carId] || []).map(l => l.id === log.id ? { ...l, ...localUpdate } : l),
+    }));
+    setEditMaintModal(null);
+    showToast('整備記録を更新しました');
+  };
+
+  const handleCarPhotoChange = (e: React.ChangeEvent<HTMLInputElement>, carId: string) => {
     const f = e.target.files?.[0];
     if (!f) return;
     e.target.value = '';
-    setUploadingPhotoCarId(carId);
+    const src = URL.createObjectURL(f);
+    setCrop(undefined);
+    setCompletedCrop(null);
+    setCropModal({ src, file: f, carId });
+  };
+
+  const getCroppedBlob = useCallback(async (): Promise<Blob> => {
+    const img = cropImgRef.current;
+    if (!img || !completedCrop) throw new Error('no crop');
+    const canvas = document.createElement('canvas');
+    const scaleX = img.naturalWidth / img.width;
+    const scaleY = img.naturalHeight / img.height;
+    const c = completedCrop as PixelCrop;
+    canvas.width = c.width;
+    canvas.height = c.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, c.x * scaleX, c.y * scaleY, c.width * scaleX, c.height * scaleY, 0, 0, c.width, c.height);
+    return new Promise((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', 0.9));
+  }, [completedCrop]);
+
+  const handleCropConfirm = async () => {
+    if (!cropModal) return;
+    const { carId, src: cropSrc } = cropModal;
     try {
-      const { url, storagePath } = await uploadCarPhoto(userId, carId, f);
-      await updateCar(carId, { photoUrl: url, photoStoragePath: storagePath });
-      setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: url } : c));
-      showToast('写真を更新しました');
-    } catch {
-      showToast('アップロードに失敗しました', 'error');
-    } finally {
-      setUploadingPhotoCarId(null);
+      const rawBlob = completedCrop ? await getCroppedBlob() : await resizeImage(cropModal.file);
+      const blob = completedCrop ? rawBlob : rawBlob;
+      const resized = await resizeImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+      const localUrl = URL.createObjectURL(resized);
+
+      if (carId) {
+        // 既存車の写真更新（楽観的更新 + 失敗時ロールバック）
+        const prevBlobUrl = _carPhotoBlobUrls[carId] || null;
+        const prevCar = cars.find(c => c.id === carId);
+        if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+        _carPhotoBlobUrls[carId] = localUrl;
+        setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: localUrl } : c));
+        URL.revokeObjectURL(cropSrc);
+        setCropModal(null);
+        setUploadingPhotoCarId(carId);
+        try {
+          const { url, storagePath } = await uploadCarPhotoBlob(userId, carId, resized);
+          await updateCar(carId, { photoUrl: url, photoStoragePath: storagePath });
+          showToast('写真を更新しました');
+        } catch (err) {
+          // ロールバック: アップロード失敗時は元の写真に戻す
+          URL.revokeObjectURL(localUrl);
+          const rollbackUrl = prevCar?.photoUrl ?? null;
+          _carPhotoBlobUrls[carId] = rollbackUrl ?? '';
+          if (!rollbackUrl) delete _carPhotoBlobUrls[carId];
+          setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: rollbackUrl ?? undefined } : c));
+          const msg = err instanceof Error ? err.message : String(err);
+          showToast(`アップロード失敗: ${msg.slice(0, 60)}`, 'error');
+        } finally {
+          setUploadingPhotoCarId(null);
+        }
+      } else {
+        // 新規追加フォームの写真
+        setPhotoFile(new File([resized], 'photo.jpg', { type: 'image/jpeg' }));
+        if (photoPreview) URL.revokeObjectURL(photoPreview);
+        setPhotoPreview(localUrl);
+        URL.revokeObjectURL(cropSrc);
+        setCropModal(null);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`処理失敗: ${msg.slice(0, 60)}`, 'error');
+      URL.revokeObjectURL(cropSrc);
+      setCropModal(null);
     }
   };
 
@@ -332,11 +517,40 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     showToast('走行距離を更新しました');
   };
 
+  // トリミングモーダル（open状態に関係なく表示）
+  if (cropModal) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 5000, background: 'rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <div style={{ color: '#fff', fontSize: 15, fontWeight: 600 }}>トリミング範囲を選択</div>
+        <ReactCrop
+          crop={crop}
+          onChange={c => setCrop(c)}
+          onComplete={c => setCompletedCrop(c)}
+        >
+          <img
+            ref={cropImgRef}
+            src={cropModal.src}
+            style={{ maxWidth: '80vw', maxHeight: '60vh', borderRadius: 8 }}
+            onLoad={e => {
+              const { width, height } = e.currentTarget;
+              const c = centerCrop(makeAspectCrop({ unit: '%', width: 80 }, 1, width, height), width, height);
+              setCrop(c);
+            }}
+          />
+        </ReactCrop>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button onClick={handleCropConfirm} style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>確定</button>
+          <button onClick={() => { URL.revokeObjectURL(cropModal.src); setCropModal(null); }} style={{ background: '#fff', color: '#374151', border: '1px solid #e8eaed', borderRadius: 8, padding: '10px 24px', fontSize: 14, cursor: 'pointer' }}>キャンセル</button>
+        </div>
+      </div>
+    );
+  }
+
   if (!open) return null;
 
   return (
     <>
-      <div style={s.overlay} onClick={onClose} />
+      <div style={s.overlay} onClick={e => { if (e.clientX < 360) onClose(); }} />
       {/* トースト */}
       {toast && (
         <div style={{
@@ -393,7 +607,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
             const hasWarning = mLogs.some(log => {
               const km = distanceSince(log.timestamp, routes, tags, car.tagId);
               const months = Math.floor((Date.now() - log.timestamp) / 2592000000);
-              return (log.nextDueKm != null && km >= log.nextDueKm) || (log.nextDueMonths != null && months >= log.nextDueMonths);
+              return (log.nextDueKm != null && km >= log.nextDueKm - 300) || (log.nextDueMonths != null && months >= log.nextDueMonths - 1);
             });
 
             return (
@@ -410,8 +624,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                     >
                       {uploadingPhotoCarId === car.id
                         ? <span style={{ fontSize: 12, color: '#9ca3af' }}>...</span>
-                        : car.photoUrl
-                          ? <img src={car.photoUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : (_carPhotoBlobUrls[car.id!] || car.photoUrl)
+                          ? <img src={_carPhotoBlobUrls[car.id!] || car.photoUrl} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                           : <span style={{ fontSize: 26 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</span>}
                       <div style={{ position: 'absolute', bottom: 0, right: 0, width: 18, height: 18, background: '#2563eb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #fff', fontSize: 9 }}>📷</div>
                       <input
@@ -458,6 +672,32 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                 {/* 展開パネル */}
                 {isExpanded && (
                   <div style={{ background: '#f8faff', borderTop: '1px solid #e8eaed' }}>
+                    {/* フルワイド写真 */}
+                    {(_carPhotoBlobUrls[car.id!] || car.photoUrl) && (
+                      <div style={{ position: 'relative' }}>
+                        <img
+                          src={_carPhotoBlobUrls[car.id!] || car.photoUrl}
+                          style={{ width: '100%', height: 180, objectFit: 'cover', display: 'block' }}
+                        />
+                        <button
+                          onClick={async e => {
+                            e.stopPropagation();
+                            const src = _carPhotoBlobUrls[car.id!] || car.photoUrl!;
+                            // URLからBlobを取得してFileに変換
+                            const res = await fetch(src);
+                            const blob = await res.blob();
+                            const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+                            setCrop(undefined);
+                            setCompletedCrop(null);
+                            setCropModal({ src: URL.createObjectURL(blob), file, carId: car.id! });
+                          }}
+                          style={{ position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.45)', color: '#fff', border: 'none', borderRadius: '50%', width: 28, height: 28, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          title="トリミング"
+                        >
+                          ✂️
+                        </button>
+                      </div>
+                    )}
                     {/* タブ */}
                     <div style={{ display: 'flex', borderBottom: '1px solid #e8eaed' }}>
                       {(['stats', ...(car.vehicleType !== 'bicycle' ? ['fuel'] : []), 'maintenance'] as DetailTab[]).map(tab => (
@@ -615,8 +855,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                           const elapsed = elapsedSince(log.timestamp);
                           const kmDriven = distanceSince(log.timestamp, routes, tags, car.tagId);
                           const label = log.type === 'other' ? (log.customLabel || 'その他') : MAINTENANCE_LABELS[log.type];
-                          const nextMonthsOk = log.nextDueMonths ? Math.floor((Date.now() - log.timestamp) / 2592000000) < log.nextDueMonths : true;
-                          const nextKmOk = log.nextDueKm ? kmDriven < log.nextDueKm : true;
+                          const nextMonthsOk = log.nextDueMonths ? Math.floor((Date.now() - log.timestamp) / 2592000000) < log.nextDueMonths - 1 : true;
+                          const nextKmOk = log.nextDueKm ? kmDriven < log.nextDueKm - 300 : true;
                           const isWarning = !nextMonthsOk || !nextKmOk;
                           return (
                             <div key={log.id} style={{ borderRadius: 8, padding: '10px 12px', marginBottom: 8, border: `1px solid ${isWarning ? '#fca5a5' : '#e8eaed'}`, background: isWarning ? '#fff5f5' : '#fff' }}>
@@ -658,9 +898,13 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                                       </span>
                                     )}
                                   </div>
+                                  {log.itemType && <div style={{ fontSize: 11, color: '#6b7280' }}>種類: {log.itemType}</div>}
                                   {log.cost && <div style={{ fontSize: 11, color: '#9ca3af' }}>¥{log.cost.toLocaleString()}</div>}
                                 </div>
-                                <button onClick={() => handleDeleteMaint(car.id!, log.id!)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 14 }}>🗑</button>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <button onClick={() => openEditMaint(car.id!, log)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: 13 }}>✏️</button>
+                                  <button onClick={() => handleDeleteMaint(car.id!, log.id!)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 14 }}>🗑</button>
+                                </div>
                               </div>
                             </div>
                           );
@@ -749,6 +993,29 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       </div>
 
       {/* 給油記録モーダル */}
+      {/* 整備記録編集モーダル */}
+      {editMaintModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditMaintModal(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ color: '#1f2937', fontSize: 16, fontWeight: 700, marginBottom: 4 }}>✏️ 整備記録を編集</h3>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16 }}>{MAINTENANCE_LABELS[editMaintModal.log.type]} — {new Date(editMaintModal.log.timestamp).toLocaleDateString('ja-JP')}</div>
+            {(editMaintModal.log.type === 'oil' || editMaintModal.log.type === 'tire') && (
+              <input style={s.input} placeholder={editMaintModal.log.type === 'oil' ? 'オイル銘柄（任意）' : 'タイヤ銘柄（任意）'} value={editMaintForm.itemType} onChange={e => setEditMaintForm(f => ({ ...f, itemType: e.target.value }))} />
+            )}
+            <p style={{ fontSize: 11, color: '#9ca3af', marginBottom: 6 }}>次回目安</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <input style={s.input} placeholder="〇ヶ月後" type="number" value={editMaintForm.nextDueMonths} onChange={e => setEditMaintForm(f => ({ ...f, nextDueMonths: e.target.value }))} />
+              <input style={s.input} placeholder="〇km後" type="number" value={editMaintForm.nextDueKm} onChange={e => setEditMaintForm(f => ({ ...f, nextDueKm: e.target.value }))} />
+            </div>
+            <input style={s.input} placeholder="メモ（任意）" value={editMaintForm.notes} onChange={e => setEditMaintForm(f => ({ ...f, notes: e.target.value }))} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleUpdateMaint} style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>保存</button>
+              <button onClick={() => setEditMaintModal(null)} style={{ flex: 1, background: '#f8f9fa', color: '#374151', border: '1px solid #e8eaed', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14 }}>キャンセル</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAddFuel && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowAddFuel(null)}>
           <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
@@ -784,6 +1051,9 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
             {maintForm.type === 'other' && (
               <input style={s.input} placeholder="内容を入力" value={maintForm.customLabel} onChange={e => setMaintForm(f => ({ ...f, customLabel: e.target.value }))} />
             )}
+            {(maintForm.type === 'oil' || maintForm.type === 'tire') && (
+              <input style={s.input} placeholder={maintForm.type === 'oil' ? 'オイル銘柄（例: Mobil 5W-30）任意' : 'タイヤ銘柄（例: MICHELIN Pilot Sport）任意'} value={maintForm.itemType} onChange={e => setMaintForm(f => ({ ...f, itemType: e.target.value }))} />
+            )}
             <input style={s.input} type="date" value={maintForm.date} onChange={e => setMaintForm(f => ({ ...f, date: e.target.value }))} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <input style={s.input} placeholder="施工時走行距離 (km)" type="number" value={maintForm.odometerKm} onChange={e => setMaintForm(f => ({ ...f, odometerKm: e.target.value }))} />
@@ -806,8 +1076,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 }
 
 const s: Record<string, React.CSSProperties> = {
-  overlay:      { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 2000 },
-  panel:        { position: 'fixed', top: 0, right: 0, width: 420, height: '100vh', background: '#fff', zIndex: 2001, display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 24px rgba(0,0,0,0.12)', overflowY: 'hidden', borderLeft: '1px solid #e8eaed' },
+  overlay:      { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000 },
+  panel:        { position: 'fixed', top: 0, left: 360, right: 0, height: '100vh', background: '#fff', zIndex: 2001, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', overflowY: 'hidden', borderLeft: '1px solid #e8eaed' },
   header:       { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 20px', borderBottom: '1px solid #e8eaed', flexShrink: 0 },
   title:        { color: '#1f2937', fontSize: 17, fontWeight: 700 },
   closeBtn:     { background: 'none', border: 'none', color: '#9ca3af', fontSize: 18, cursor: 'pointer' },

@@ -1,6 +1,9 @@
+import { View, TouchableOpacity, Text } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCarStore } from '../../src/store/carStore';
+import { useUiStore } from '../../src/store/uiStore';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -13,8 +16,12 @@ const TABS: { name: string; title: string; icon: IoniconName; activeIcon: Ionico
   { name: 'settings',  title: '設定',   icon: 'settings-outline',    activeIcon: 'settings' },
 ];
 
+const HELP_TABS = new Set(['map', 'track', 'routes', 'landmarks', 'cars']);
+
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  const maintenanceWarning = useCarStore(s => s.maintenanceWarning);
+  const setHelpTarget = useUiStore(s => s.setHelpTarget);
   return (
     <Tabs
       screenOptions={({ route }) => ({
@@ -35,7 +42,14 @@ export default function TabLayout() {
         tabBarIcon: ({ color, focused }) => {
           const tab = TABS.find(t => t.name === route.name);
           if (!tab) return null;
-          return <Ionicons name={focused ? tab.activeIcon : tab.icon} size={22} color={color} />;
+          return (
+            <View>
+              <Ionicons name={focused ? tab.activeIcon : tab.icon} size={22} color={color} />
+              {tab.name === 'cars' && maintenanceWarning && (
+                <View style={{ position: 'absolute', top: -2, right: -4, width: 8, height: 8, borderRadius: 4, backgroundColor: '#ef4444', borderWidth: 1, borderColor: '#fff' }} />
+              )}
+            </View>
+          );
         },
       })}
     >
@@ -43,7 +57,20 @@ export default function TabLayout() {
         <Tabs.Screen
           key={tab.name}
           name={tab.name}
-          options={{ title: tab.title, headerTitle: tab.title === '地図' ? 'PALOGPTracker' : tab.title }}
+          options={{
+            title: tab.title,
+            headerTitle: tab.title === '地図' ? 'PALOGPTracker' : tab.title,
+            ...(HELP_TABS.has(tab.name) ? {
+              headerRight: () => (
+                <TouchableOpacity
+                  onPress={() => setHelpTarget(tab.name)}
+                  style={{ marginRight: 16, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' }}
+                >
+                  <Text style={{ fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 }}>?</Text>
+                </TouchableOpacity>
+              ),
+            } : {}),
+          }}
         />
       ))}
     </Tabs>

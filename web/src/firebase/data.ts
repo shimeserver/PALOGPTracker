@@ -48,6 +48,7 @@ export interface MaintenanceLog {
   carId: string;
   type: MaintenanceType;
   customLabel?: string;
+  itemType?: string; // オイル銘柄・タイヤ銘柄など任意
   timestamp: number;
   odometerKm?: number;
   cost?: number;
@@ -307,4 +308,12 @@ export async function uploadCarPhoto(userId: string, carId: string, file: File):
   await uploadBytes(storageRef, file);
   const url = await getDownloadURL(storageRef);
   return { url, storagePath: path };
+}
+
+export async function uploadCarPhotoBlob(userId: string, carId: string, blob: Blob): Promise<{ url: string; storagePath: string }> {
+  const storagePath = `cars/${userId}/${carId}/${Date.now()}.jpg`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, blob, { contentType: 'image/jpeg' });
+  const url = await getDownloadURL(storageRef);
+  return { url, storagePath };
 }

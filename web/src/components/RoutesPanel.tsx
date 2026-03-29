@@ -18,6 +18,7 @@ interface Props {
   onOpenSettings: () => void;
   onOpenCars: () => void;
   onOpenActivity: () => void;
+  carWarning?: boolean;
   tags: TagDef[];
   onUpdateRoute: (route: Route) => void;
   onTagsChange: () => void;
@@ -35,7 +36,7 @@ function formatDuration(start: number, end: number) {
 export default function RoutesPanel({
   userId, routes, loading, selectedRoute, showAllRoutes,
   onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity,
-  tags, onUpdateRoute, onTagsChange, activeCar,
+  tags, onUpdateRoute, onTagsChange, activeCar, carWarning,
 }: Props) {
   const [search, setSearch]               = useState('');
   const [editingId, setEditingId]         = useState<string | null>(null);
@@ -148,7 +149,7 @@ export default function RoutesPanel({
         )}
         {!activeCar && <div style={{ flex: 1 }} />}
         <button style={styles.iconBtn} onClick={onOpenActivity} title="活動統計">🏃</button>
-        <button style={styles.iconBtn} onClick={onOpenCars} title="愛車管理">🚗</button>
+        <button style={styles.iconBtn} onClick={onOpenCars} title="愛車管理">{carWarning ? '⚠️' : '🚗'}</button>
         <button style={styles.iconBtn} onClick={() => setShowTagManager(true)} title="タグ管理">🏷️</button>
         <button style={styles.iconBtn} onClick={onOpenSettings} title="設定">⚙️</button>
       </div>

@@ -15,6 +15,7 @@ import { Landmark } from '../../src/types';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../src/firebase/config';
 import HelpModal from '../../src/components/HelpModal';
+import { useUiStore } from '../../src/store/uiStore';
 
 const LANDMARKS_HELP = [
   { q: 'スポットの追加方法は？', a: '「＋ 現在地にスポットを追加」ボタンで現在地にスポットを登録できます。' },
@@ -39,7 +40,8 @@ export default function LandmarksScreen() {
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
+  const { helpTarget, setHelpTarget } = useUiStore();
+  const showHelp = helpTarget === 'landmarks';
 
   const load = async () => {
     if (!user) return;
@@ -148,10 +150,7 @@ export default function LandmarksScreen() {
 
   return (
     <View style={styles.container}>
-      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="スポット画面の使い方" items={LANDMARKS_HELP} />
-      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
-        <Text style={styles.helpBtnText}>?</Text>
-      </TouchableOpacity>
+      <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="スポット画面の使い方" items={LANDMARKS_HELP} />
       <TouchableOpacity style={styles.addButton} onPress={() => setShowAdd(true)}>
         <Text style={styles.addButtonText}>＋ 現在地にスポットを追加</Text>
       </TouchableOpacity>
