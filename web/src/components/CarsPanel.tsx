@@ -9,6 +9,7 @@ import {
   MAINTENANCE_LABELS,
 } from '../firebase/data';
 import type { Car, FuelLog, MaintenanceLog, MaintenanceType, Route, TagDef } from '../firebase/data';
+import { deleteField } from 'firebase/firestore';
 
 const TAG_COLORS = ['#ef4444','#f97316','#f59e0b','#22c55e','#2563eb','#8b5cf6','#ec4899','#06b6d4'];
 
@@ -200,6 +201,16 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
           }).catch(() => {});
         }
       });
+      // 警告バッジのために全車のメンテログを先読み
+      if (onWarningChange) {
+        c.forEach(car => {
+          getMaintenanceLogs(car.id!).then(logs => {
+            if (!isMounted) return;
+            setMaintLogs(prev => ({ ...prev, [car.id!]: logs }));
+            setLoadedMaint(prev => new Set([...prev, car.id!]));
+          }).catch(() => {});
+        });
+      }
     }).catch(() => { if (isMounted) setLoading(false); });
     return () => { isMounted = false; };
   }, [open, userId]);
@@ -373,16 +384,23 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handleUpdateMaint = async () => {
     if (!editMaintModal) return;
     const { carId, log } = editMaintModal;
-    // Firestoreはundefinedを拒否するので、値があるフィールドのみセット
-    const patch: Record<string, unknown> = {};
-    if (editMaintForm.itemType.trim()) patch.itemType = editMaintForm.itemType.trim();
-    if (editMaintForm.nextDueMonths) patch.nextDueMonths = parseInt(editMaintForm.nextDueMonths);
-    if (editMaintForm.nextDueKm) patch.nextDueKm = parseFloat(editMaintForm.nextDueKm);
-    if (editMaintForm.notes.trim()) patch.notes = editMaintForm.notes.trim();
+    // 空フィールドはdeleteField()でFirestoreから削除、値があれば更新
+    const patch: Record<string, unknown> = {
+      itemType: editMaintForm.itemType.trim() || deleteField(),
+      notes: editMaintForm.notes.trim() || deleteField(),
+      nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : deleteField(),
+      nextDueKm: editMaintForm.nextDueKm ? parseFloat(editMaintForm.nextDueKm) : deleteField(),
+    };
     await updateMaintenanceLog(carId, log.id!, patch as Parameters<typeof updateMaintenanceLog>[2]);
+    const localUpdate: Partial<MaintenanceLog> = {
+      itemType: editMaintForm.itemType.trim() || undefined,
+      notes: editMaintForm.notes.trim() || undefined,
+      nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : undefined,
+      nextDueKm: editMaintForm.nextDueKm ? parseFloat(editMaintForm.nextDueKm) : undefined,
+    };
     setMaintLogs(prev => ({
       ...prev,
-      [carId]: (prev[carId] || []).map(l => l.id === log.id ? { ...l, ...patch } : l),
+      [carId]: (prev[carId] || []).map(l => l.id === log.id ? { ...l, ...localUpdate } : l),
     }));
     setEditMaintModal(null);
     showToast('整備記録を更新しました');
@@ -414,7 +432,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   const handleCropConfirm = async () => {
     if (!cropModal) return;
-    const { carId } = cropModal;
+    const { carId, src: cropSrc } = cropModal;
     try {
       const rawBlob = completedCrop ? await getCroppedBlob() : await resizeImage(cropModal.file);
       const blob = completedCrop ? rawBlob : rawBlob;
@@ -426,6 +444,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         if (_carPhotoBlobUrls[carId]) URL.revokeObjectURL(_carPhotoBlobUrls[carId]);
         _carPhotoBlobUrls[carId] = localUrl;
         setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: localUrl } : c));
+        URL.revokeObjectURL(cropSrc);
         setCropModal(null);
         setUploadingPhotoCarId(carId);
         try {
@@ -443,11 +462,13 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         setPhotoFile(new File([resized], 'photo.jpg', { type: 'image/jpeg' }));
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhotoPreview(localUrl);
+        URL.revokeObjectURL(cropSrc);
         setCropModal(null);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`処理失敗: ${msg.slice(0, 60)}`, 'error');
+      URL.revokeObjectURL(cropSrc);
       setCropModal(null);
     }
   };

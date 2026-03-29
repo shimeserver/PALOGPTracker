@@ -16,8 +16,13 @@ function startLocalServer(distDir) {
       '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2',
     };
     localServer = http.createServer((req, res) => {
-      let filePath = path.join(distDir, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
-      if (!fs.existsSync(filePath)) filePath = path.join(distDir, 'index.html');
+      const urlPath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
+      const resolvedDistDir = path.resolve(distDir);
+      const resolvedFilePath = path.resolve(path.join(distDir, urlPath));
+      if (!resolvedFilePath.startsWith(resolvedDistDir + path.sep) && resolvedFilePath !== resolvedDistDir) {
+        res.writeHead(403); res.end(); return;
+      }
+      const filePath = fs.existsSync(resolvedFilePath) ? resolvedFilePath : path.join(distDir, 'index.html');
       const ext = path.extname(filePath);
       res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       fs.createReadStream(filePath).pipe(res);
@@ -57,7 +62,7 @@ function createWindow(url) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,
+      webSecurity: !isDev,
     },
     title: 'PALOGPTracker',
     show: false,
