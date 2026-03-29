@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Route, TagDef } from '../firebase/data';
-import { createTag, deleteTag, updateRouteTags, updateRouteName } from '../firebase/data';
+import { createTag, deleteTag, updateRouteTags, updateRouteName, getUserLandmarks, saveLandmark } from '../firebase/data';
+import { detectStops, matchStopsToLandmarks, type StopCluster } from '../utils/visitDetection';
 
 const TAG_COLORS = ['#ef4444','#f97316','#f59e0b','#22c55e','#2563eb','#8b5cf6','#ec4899','#06b6d4'];
 
@@ -46,6 +47,52 @@ export default function RoutesPanel({
   const [newTagName, setNewTagName]   = useState('');
   const [newTagColor, setNewTagColor] = useState(TAG_COLORS[4]);
   const [creatingTag, setCreatingTag] = useState(false);
+
+  // スポット候補検出
+  const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
+  const [detectingRouteId, setDetectingRouteId] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [addModal, setAddModal] = useState<StopCluster | null>(null);
+  const [newSpotName, setNewSpotName] = useState('');
+  const [newSpotCategory, setNewSpotCategory] = useState('その他');
+  const [savingSpot, setSavingSpot] = useState(false);
+
+  const SPOT_CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
+
+  const handleDetect = async (route: Route) => {
+    setDetecting(true);
+    setDetectingRouteId(route.id!);
+    setStopCandidates([]);
+    try {
+      const stops = detectStops(route.points);
+      if (stops.length === 0) { setStopCandidates([]); return; }
+      const landmarks = await getUserLandmarks(userId);
+      const { unmatchedStops } = matchStopsToLandmarks(stops, landmarks);
+      setStopCandidates(unmatchedStops);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const handleSaveSpot = async () => {
+    if (!addModal || !newSpotName.trim()) return;
+    setSavingSpot(true);
+    try {
+      const now = Date.now();
+      await saveLandmark({
+        userId, name: newSpotName.trim(), category: newSpotCategory,
+        lat: addModal.lat, lng: addModal.lng,
+        description: '', photos: [],
+        visitCount: 0, firstVisit: now, lastVisit: now, createdAt: now,
+      });
+      setStopCandidates(prev => prev.filter(s => s !== addModal));
+      setAddModal(null);
+      setNewSpotName('');
+      setNewSpotCategory('その他');
+    } finally {
+      setSavingSpot(false);
+    }
+  };
 
   const startEditName = (route: Route, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -206,6 +253,78 @@ export default function RoutesPanel({
           {selectedIds.size === 0 && <span style={{ color: '#9ca3af', fontSize: 11, marginLeft: 8 }}>Ctrl+クリックで複数選択</span>}
         </p>
       </div>
+
+      {/* スポット候補検出 */}
+      {selectedRoute && (
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid #e8eaed', background: '#f8fbff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: '#374151', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              🔵 {selectedRoute.name || '（無名）'}
+            </span>
+            <button
+              style={{ ...styles.iconBtn, fontSize: 12, padding: '6px 10px', color: '#2563eb' }}
+              onClick={() => handleDetect(selectedRoute)}
+              disabled={detecting}
+            >
+              {detecting ? '検出中...' : '🔍 スポット検出'}
+            </button>
+          </div>
+          {detectingRouteId === selectedRoute.id && !detecting && stopCandidates.length === 0 && (
+            <p style={{ color: '#9ca3af', fontSize: 12, margin: '6px 0 0' }}>未登録スポット候補なし</p>
+          )}
+          {stopCandidates.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <p style={{ color: '#2563eb', fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>{stopCandidates.length}か所の未登録スポット候補</p>
+              {stopCandidates.map((s, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', borderBottom: '1px solid #e8eaed' }}>
+                  <span style={{ fontSize: 11, color: '#6b7280', flex: 1 }}>
+                    📍 {Math.round(s.durationMs / 60000)}分滞在 ({s.lat.toFixed(4)}, {s.lng.toFixed(4)})
+                  </span>
+                  <button
+                    style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                    onClick={() => { setAddModal(s); setNewSpotName(''); setNewSpotCategory('その他'); }}
+                  >
+                    追加
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* スポット追加モーダル */}
+      {addModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.3)' }} onClick={() => setAddModal(null)}>
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: '#fff', borderRadius: 14, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1f2937', marginBottom: 4 }}>スポットを追加</h3>
+            <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>{Math.round(addModal.durationMs / 60000)}分滞在したエリア</p>
+            <input
+              value={newSpotName}
+              onChange={e => setNewSpotName(e.target.value)}
+              placeholder="スポット名"
+              autoFocus
+              style={{ width: '100%', background: '#f8f9fa', color: '#1f2937', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '10px 12px', fontSize: 14, outline: 'none', marginBottom: 12, boxSizing: 'border-box' }}
+            />
+            <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>カテゴリ</p>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+              {SPOT_CATEGORIES.map(c => (
+                <button key={c} onClick={() => setNewSpotCategory(c)}
+                  style={{ padding: '4px 10px', borderRadius: 16, fontSize: 12, cursor: 'pointer', border: newSpotCategory === c ? 'none' : '1px solid #e8eaed', background: newSpotCategory === c ? '#2563eb' : '#f3f4f6', color: newSpotCategory === c ? '#fff' : '#374151', fontWeight: newSpotCategory === c ? 700 : 400 }}>
+                  {c}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setAddModal(null)} style={{ flex: 1, padding: '10px', background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', color: '#6b7280', fontWeight: 600 }}>キャンセル</button>
+              <button onClick={handleSaveSpot} disabled={!newSpotName.trim() || savingSpot}
+                style={{ flex: 1, padding: '10px', background: !newSpotName.trim() || savingSpot ? '#93c5fd' : '#2563eb', border: 'none', borderRadius: 8, cursor: 'pointer', color: '#fff', fontWeight: 700 }}>
+                {savingSpot ? '保存中...' : '追加'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* リスト */}
       <div style={{ flex: 1, overflowY: 'auto' }}>

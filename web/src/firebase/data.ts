@@ -126,6 +126,16 @@ export async function deleteRoute(routeId: string): Promise<void> {
   await deleteDoc(doc(db, 'routes', routeId));
 }
 
+export async function saveLandmark(lm: Omit<Landmark, 'id'>): Promise<string> {
+  const docRef = await addDoc(collection(db, 'landmarks'), {
+    ...lm,
+    createdAt: Timestamp.fromMillis(lm.createdAt),
+    firstVisit: lm.firstVisit != null ? Timestamp.fromMillis(lm.firstVisit) : null,
+    lastVisit: lm.lastVisit != null ? Timestamp.fromMillis(lm.lastVisit) : null,
+  });
+  return docRef.id;
+}
+
 export async function deleteAllUserLandmarks(userId: string): Promise<number> {
   const q = query(collection(db, 'landmarks'), where('userId', '==', userId));
   const snap = await getDocs(q);

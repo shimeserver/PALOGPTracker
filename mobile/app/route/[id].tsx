@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import WebView from 'react-native-webview';
 import { getRoute } from '../../src/firebase/routes';
@@ -125,6 +126,7 @@ window.resetPlayback = function(points) {
 export default function RouteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuthStore();
+  const insets = useSafeAreaInsets();
   const webviewRef = useRef<WebView>(null);
   const initialized = useRef(false);
   const [route, setRoute] = useState<Route | null>(null);
@@ -284,7 +286,7 @@ export default function RouteDetailScreen() {
         </View>
       )}
 
-      <View style={styles.panel}>
+      <View style={[styles.panel, { paddingBottom: 20 + insets.bottom }]}>
         <Text style={styles.routeName}>{route.name}</Text>
         <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
 
