@@ -109,10 +109,21 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
     if (!confirm('期限切れの写真URLを持つスポットをPlaces APIで自動復元します。\nスポット1件あたり約¥37の費用が発生します。続けますか？')) return;
     setRestoring(true);
     const landmarks = await getUserLandmarks(userId);
+    // Firebase Storage永続URL以外 = 期限切れ or 未保存 = 復元対象
+    // placeIdがないスポットはAPIで復元不可なのでスキップ
     const targets = landmarks.filter(lm =>
-      lm.placeId && (lm.photos.length === 0 || lm.photos.some(p => p.url.includes('googleapis.com/maps/api/place')))
+      lm.placeId && (
+        lm.photos.length === 0 ||
+        lm.photos.some(p => !p.url.includes('firebasestorage.googleapis.com'))
+      )
     );
-    if (targets.length === 0) { alert('復元対象のスポットはありません。'); setRestoring(false); return; }
+    const noPlaceId = landmarks.filter(lm => !lm.placeId && (lm.photos.length === 0 || lm.photos.some(p => !p.url.includes('firebasestorage.googleapis.com'))));
+    if (targets.length === 0) {
+      const msg = noPlaceId.length > 0
+        ? `復元対象のスポットはありません。\n（${noPlaceId.length}件はplaceIDがないため復元不可）`
+        : '復元対象のスポットはありません。';
+      alert(msg); setRestoring(false); return;
+    }
     let fixed = 0, failed = 0;
     for (let i = 0; i < targets.length; i++) {
       const lm = targets[i];
@@ -139,7 +150,8 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
     }
     setRestoring(false);
     setRestoreProgress('');
-    alert(`完了！\n復元成功: ${fixed}件　失敗: ${failed}件`);
+    const noPlaceIdCount = landmarks.filter(lm => !lm.placeId && (lm.photos.length === 0 || lm.photos.some(p => !p.url.includes('firebasestorage.googleapis.com')))).length;
+    alert(`完了！\n復元成功: ${fixed}件　失敗: ${failed}件${noPlaceIdCount > 0 ? `\n\n※ ${noPlaceIdCount}件はplaceIDがなく復元不可（手動登録スポット）` : ''}`);
   };
 
   const handleDeduplicateAllVisits = async () => {
