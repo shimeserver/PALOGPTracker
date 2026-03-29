@@ -33,6 +33,7 @@ export default function MainPage({ user }: Props) {
   const [tags, setTags]                     = useState<TagDef[]>([]);
   const [, setCars]                         = useState<Car[]>([]);
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
+  const [carWarning, setCarWarning]         = useState(false);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
@@ -110,6 +111,7 @@ export default function MainPage({ user }: Props) {
               onUpdateRoute={handleUpdateRoute}
               onTagsChange={reloadTags}
               activeCar={activeCar}
+              carWarning={carWarning}
             />
           </div>
           <div style={{ display: tab === 'landmarks' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
@@ -169,6 +171,7 @@ export default function MainPage({ user }: Props) {
         onTagsChange={reloadTags}
         onCarsChange={setCars}
         onRefreshRoutes={async () => { reloadRoutes(); }}
+        onWarningChange={setCarWarning}
       />
     </div>
   );

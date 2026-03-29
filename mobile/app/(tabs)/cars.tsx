@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useUiStore } from '../../src/store/uiStore';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert,
   TextInput, Modal, Switch, Image,
@@ -7,7 +9,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import {
-  getUserCars, createCar, updateCar, deleteCar, createCarTag,
+  getUserCars, getUserCarsFromServer, createCar, updateCar, deleteCar, createCarTag,
   getFuelLogs, addFuelLog, deleteFuelLog,
   getMaintenanceLogs, addMaintenanceLog, deleteMaintenanceLog, updateMaintenanceLog,
   uploadCarPhoto, getRouteStatsByTag, RouteStats, getUserTags, TagDef,
@@ -79,7 +81,7 @@ function useToast() {
 
 export default function CarsScreen() {
   const { user } = useAuthStore();
-  const { activeCar, setActiveCar } = useCarStore();
+  const { activeCar, setActiveCar, setMaintenanceWarning } = useCarStore();
   const { toast, show: showToast } = useToast();
   const [cars, setCars] = useState<Car[]>([]);
   const [loading, setLoading] = useState(true);
@@ -111,9 +113,9 @@ export default function CarsScreen() {
   // Add maintenance modal
   const [showAddMaint, setShowAddMaint] = useState<string | null>(null);
   const [maintForm, setMaintForm] = useState<{
-    type: MaintenanceType; customLabel: string; odometerKm: string;
+    type: MaintenanceType; customLabel: string; itemType: string; odometerKm: string;
     cost: string; notes: string; nextDueMonths: string; nextDueKm: string;
-  }>({ type: 'oil', customLabel: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
+  }>({ type: 'oil', customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
   const [savingMaint, setSavingMaint] = useState(false);
 
   // Odometer inline edit
@@ -123,7 +125,8 @@ export default function CarsScreen() {
   // Tag picker
   const [userTags, setUserTags] = useState<TagDef[]>([]);
   const [tagPickerCarId, setTagPickerCarId] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
+  const { helpTarget, setHelpTarget } = useUiStore();
+  const showHelp = helpTarget === 'cars';
 
   useEffect(() => {
     if (!user) return;
@@ -135,6 +138,30 @@ export default function CarsScreen() {
     getUserRoutes(user.uid).then(r => { if (isMounted) setAllRoutes(r); }).catch(() => {});
     return () => { isMounted = false; };
   }, [user?.uid]);
+
+
+  // タブフォーカス時にサーバーから強制再フェッチ（Web等他端末でのアップロードを反映）
+  useFocusEffect(useCallback(() => {
+    if (!user) return;
+    getUserCarsFromServer(user.uid).then(c => setCars(c)).catch(() => {});
+  }, [user?.uid]));
+
+  // 整備警告をグローバルストアに同期（タブアイコンバッジ用）
+  useEffect(() => {
+    const anyWarning = cars.some(car => {
+      const mLogs = maintLogs[car.id!] || [];
+      const kmDriven = car.odometerKm ?? 0;
+      return mLogs.some(log => {
+        const monthsElapsed = Math.floor((Date.now() - log.timestamp) / 2592000000);
+        if (log.nextDueMonths && monthsElapsed >= log.nextDueMonths - 1) return true;
+        if (log.nextDueKm && log.odometerKm && kmDriven > 0) {
+          return (kmDriven - log.odometerKm) >= log.nextDueKm - 300;
+        }
+        return false;
+      });
+    });
+    setMaintenanceWarning(anyWarning);
+  }, [cars, maintLogs, setMaintenanceWarning]);
 
   const loadFuel = async (carId: string, force = false) => {
     if (fuelLogs[carId] && !force) return;
@@ -284,6 +311,7 @@ export default function CarsScreen() {
         timestamp: Date.now(),
       };
       if (maintForm.type === 'other' && maintForm.customLabel.trim()) logData.customLabel = maintForm.customLabel.trim();
+      if ((maintForm.type === 'oil' || maintForm.type === 'tire') && maintForm.itemType.trim()) logData.itemType = maintForm.itemType.trim();
       if (maintForm.odometerKm) logData.odometerKm = parseFloat(maintForm.odometerKm);
       if (maintForm.cost) logData.cost = parseFloat(maintForm.cost);
       if (maintForm.notes.trim()) logData.notes = maintForm.notes.trim();
@@ -292,7 +320,7 @@ export default function CarsScreen() {
       const log = await addMaintenanceLog(carId, logData);
       setMaintLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
       setShowAddMaint(null);
-      setMaintForm({ type: 'oil', customLabel: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
+      setMaintForm({ type: 'oil', customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
       showToast('整備記録を保存しました');
     } catch {
       showToast('保存に失敗しました');
@@ -330,10 +358,7 @@ export default function CarsScreen() {
 
   return (
     <View style={styles.container}>
-      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="愛車画面の使い方" items={CARS_HELP} />
-      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
-        <Text style={styles.helpBtnText}>?</Text>
-      </TouchableOpacity>
+      <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="愛車画面の使い方" items={CARS_HELP} />
       <ScrollView style={styles.list}>
         {/* 歩行統計カード */}
         <TouchableOpacity
@@ -424,13 +449,13 @@ export default function CarsScreen() {
           const stats = routeStats[car.id!];
           const kmDriven = car.odometerKm ?? stats?.totalDistance ?? 0;
 
-          // 警告チェック: 整備ログのいずれかが期限超過
+          // 警告チェック: 期限1ヶ月前 or 300km前から警告
           const hasWarning = mLogs.some(log => {
             const monthsElapsed = Math.floor((Date.now() - log.timestamp) / 2592000000);
-            if (log.nextDueMonths && monthsElapsed >= log.nextDueMonths) return true;
+            if (log.nextDueMonths && monthsElapsed >= log.nextDueMonths - 1) return true;
             if (log.nextDueKm && log.odometerKm && kmDriven > 0) {
               const kmSince = kmDriven - log.odometerKm;
-              if (kmSince >= log.nextDueKm) return true;
+              if (kmSince >= log.nextDueKm - 300) return true;
             }
             return false;
           });
@@ -670,8 +695,8 @@ export default function CarsScreen() {
                         const label = log.type === 'other' ? (log.customLabel || 'その他') : MAINTENANCE_LABELS[log.type];
                         const elapsed = elapsedSince(log.timestamp);
                         const monthsElapsed = Math.floor((Date.now() - log.timestamp) / 2592000000);
-                        const warnMonths = !!(log.nextDueMonths && monthsElapsed >= log.nextDueMonths);
-                        const warnKm = !!(log.nextDueKm && log.odometerKm && kmDriven > 0 && (kmDriven - log.odometerKm) >= log.nextDueKm);
+                        const warnMonths = !!(log.nextDueMonths && monthsElapsed >= log.nextDueMonths - 1);
+                        const warnKm = !!(log.nextDueKm && log.odometerKm && kmDriven > 0 && (kmDriven - log.odometerKm) >= log.nextDueKm - 300);
                         const isWarning = warnMonths || warnKm;
                         return (
                           <TouchableOpacity key={log.id} style={[styles.logItem, isWarning ? styles.logItemWarning : undefined]} onLongPress={() => handleDeleteMaint(car.id!, log)}>
@@ -817,6 +842,9 @@ export default function CarsScreen() {
               </View>
               {maintForm.type === 'other' && (
                 <TextInput style={styles.input} placeholder="内容を入力" placeholderTextColor="#9ca3af" value={maintForm.customLabel} onChangeText={v => setMaintForm(f => ({ ...f, customLabel: v }))} />
+              )}
+              {(maintForm.type === 'oil' || maintForm.type === 'tire') && (
+                <TextInput style={styles.input} placeholder={maintForm.type === 'oil' ? 'オイル銘柄（例: Mobil 5W-30）任意' : 'タイヤ銘柄（例: MICHELIN Pilot Sport）任意'} placeholderTextColor="#9ca3af" value={maintForm.itemType} onChangeText={v => setMaintForm(f => ({ ...f, itemType: v }))} />
               )}
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TextInput style={[styles.input, { flex: 1 }]} placeholder="走行距離 (km)" placeholderTextColor="#9ca3af" keyboardType="decimal-pad" value={maintForm.odometerKm} onChangeText={v => setMaintForm(f => ({ ...f, odometerKm: v }))} />

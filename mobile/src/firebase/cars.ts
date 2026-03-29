@@ -1,5 +1,5 @@
 import {
-  collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where
+  collection, addDoc, getDocs, getDocsFromServer, doc, deleteDoc, updateDoc, query, where
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from './config';
@@ -15,6 +15,15 @@ export async function createCarTag(userId: string, name: string, color: string):
 export async function getUserCars(userId: string): Promise<Car[]> {
   const q = query(collection(db, 'cars'), where('userId', '==', userId));
   const snap = await getDocs(q);
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() } as Car))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// キャッシュを無視してサーバーから強制取得（タブフォーカス時の同期用）
+export async function getUserCarsFromServer(userId: string): Promise<Car[]> {
+  const q = query(collection(db, 'cars'), where('userId', '==', userId));
+  const snap = await getDocsFromServer(q);
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() } as Car))
     .sort((a, b) => a.createdAt - b.createdAt);

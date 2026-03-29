@@ -97,6 +97,7 @@ export interface MaintenanceLog {
   carId: string;
   type: MaintenanceType;
   customLabel?: string;
+  itemType?: string; // オイル銘柄・タイヤ銘柄など任意
   timestamp: number;
   odometerKm?: number;
   cost?: number;

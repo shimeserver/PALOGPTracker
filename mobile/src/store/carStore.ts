@@ -8,10 +8,14 @@ interface CarStore {
   activeCar: Car | null;
   setActiveCar: (car: Car | null) => void;
   loadActiveCar: () => Promise<void>;
+  maintenanceWarning: boolean;
+  setMaintenanceWarning: (v: boolean) => void;
 }
 
 export const useCarStore = create<CarStore>((set) => ({
   activeCar: null,
+  maintenanceWarning: false,
+  setMaintenanceWarning: (v) => set({ maintenanceWarning: v }),
 
   setActiveCar: (car) => {
     set({ activeCar: car });

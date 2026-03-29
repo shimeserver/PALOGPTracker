@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useUiStore } from '../../src/store/uiStore';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
 import WebView from 'react-native-webview';
 import { router } from 'expo-router';
@@ -95,7 +96,8 @@ export default function TrackScreen() {
   const miniMapRef = useRef<WebView>(null);
   const miniMapReady = useRef(false);
   const prevMiniMapLen = useRef(0);
-  const [showHelp, setShowHelp] = useState(false);
+  const { helpTarget, setHelpTarget } = useUiStore();
+  const showHelp = helpTarget === 'track';
 
   useEffect(() => {
     if (!isTracking || !startTime) return;
@@ -190,9 +192,6 @@ export default function TrackScreen() {
       <View style={styles.statusBar}>
         {isTracking && <View style={styles.statusDotActive} />}
         {isTracking && <Text style={styles.statusText}>記録中</Text>}
-        <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
-          <Text style={styles.helpBtnText}>?</Text>
-        </TouchableOpacity>
         <View style={styles.statusRight}>
           {activeCar && trackingMode === 'car' && (
             <View style={styles.activeCarBadge}>
@@ -271,7 +270,7 @@ export default function TrackScreen() {
         <Text style={styles.bgNote}>画面をロックしても記録は継続されます</Text>
       )}
 
-      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="記録画面の使い方" items={TRACK_HELP} />
+      <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="記録画面の使い方" items={TRACK_HELP} />
 
       <Modal visible={showNameModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>

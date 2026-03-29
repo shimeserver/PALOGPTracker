@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useUiStore } from '../../src/store/uiStore';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
@@ -142,7 +143,8 @@ export default function MapScreen() {
   const landmarksRef = useRef<Landmark[]>([]);
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPointsLen = useRef(0);
-  const [showHelp, setShowHelp] = useState(false);
+  const { helpTarget, setHelpTarget } = useUiStore();
+  const showHelp = helpTarget === 'map';
   const [following, setFollowing] = useState(false);
 
   useEffect(() => {
@@ -227,10 +229,7 @@ export default function MapScreen() {
 
   return (
     <View style={styles.container}>
-      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="マップ画面の使い方" items={MAP_HELP} />
-      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
-        <Text style={styles.helpBtnText}>?</Text>
-      </TouchableOpacity>
+      <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="マップ画面の使い方" items={MAP_HELP} />
       <WebView
         ref={webviewRef}
         source={{ html: MAP_HTML, baseUrl: 'https://localhost' }}

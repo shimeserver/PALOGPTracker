@@ -5,6 +5,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { getUserRoutes, deleteRoute } from '../../src/firebase/routes';
 import { Route } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
+import { useUiStore } from '../../src/store/uiStore';
 
 const ROUTES_HELP = [
   { q: 'ルートの見方は？', a: 'タップすると詳細マップが開きます。長押しで削除できます。' },
@@ -25,7 +26,8 @@ export default function RoutesScreen() {
   const { user } = useAuthStore();
   const [routes, setRoutes] = useState<Route[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showHelp, setShowHelp] = useState(false);
+  const { helpTarget, setHelpTarget } = useUiStore();
+  const showHelp = helpTarget === 'routes';
 
   const loadRoutes = async () => {
     if (!user) return;
@@ -84,10 +86,7 @@ export default function RoutesScreen() {
 
   return (
     <View style={styles.container}>
-      <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} title="ルート画面の使い方" items={ROUTES_HELP} />
-      <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
-        <Text style={styles.helpBtnText}>?</Text>
-      </TouchableOpacity>
+      <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="ルート画面の使い方" items={ROUTES_HELP} />
       {loading ? (
         <ActivityIndicator color="#2563eb" style={{ marginTop: 64 }} />
       ) : (
