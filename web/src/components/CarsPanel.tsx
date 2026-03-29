@@ -184,6 +184,24 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     onWarningChange(anyWarning);
   }, [cars, maintLogs, routes, tags, onWarningChange]);
 
+  // 警告バッジ用: パネルの開閉に関わらず起動時にメンテログを取得
+  useEffect(() => {
+    if (!onWarningChange) return;
+    let isMounted = true;
+    getUserCars(userId).then(c => {
+      if (!isMounted) return;
+      setCars(prev => prev.length > 0 ? prev : c);
+      c.forEach(car => {
+        getMaintenanceLogs(car.id!).then(logs => {
+          if (!isMounted) return;
+          setMaintLogs(prev => ({ ...prev, [car.id!]: logs }));
+          setLoadedMaint(prev => new Set([...prev, car.id!]));
+        }).catch(() => {});
+      });
+    }).catch(() => {});
+    return () => { isMounted = false; };
+  }, [userId, onWarningChange]);
+
   useEffect(() => {
     if (!open) return;
     setLoading(true);
@@ -201,16 +219,6 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
           }).catch(() => {});
         }
       });
-      // 警告バッジのために全車のメンテログを先読み
-      if (onWarningChange) {
-        c.forEach(car => {
-          getMaintenanceLogs(car.id!).then(logs => {
-            if (!isMounted) return;
-            setMaintLogs(prev => ({ ...prev, [car.id!]: logs }));
-            setLoadedMaint(prev => new Set([...prev, car.id!]));
-          }).catch(() => {});
-        });
-      }
     }).catch(() => { if (isMounted) setLoading(false); });
     return () => { isMounted = false; };
   }, [open, userId]);
@@ -440,8 +448,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       const localUrl = URL.createObjectURL(resized);
 
       if (carId) {
-        // 既存車の写真更新
-        if (_carPhotoBlobUrls[carId]) URL.revokeObjectURL(_carPhotoBlobUrls[carId]);
+        // 既存車の写真更新（楽観的更新 + 失敗時ロールバック）
+        const prevBlobUrl = _carPhotoBlobUrls[carId] || null;
+        const prevCar = cars.find(c => c.id === carId);
+        if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
         _carPhotoBlobUrls[carId] = localUrl;
         setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: localUrl } : c));
         URL.revokeObjectURL(cropSrc);
@@ -452,6 +462,12 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
           await updateCar(carId, { photoUrl: url, photoStoragePath: storagePath });
           showToast('写真を更新しました');
         } catch (err) {
+          // ロールバック: アップロード失敗時は元の写真に戻す
+          URL.revokeObjectURL(localUrl);
+          const rollbackUrl = prevCar?.photoUrl ?? null;
+          _carPhotoBlobUrls[carId] = rollbackUrl ?? '';
+          if (!rollbackUrl) delete _carPhotoBlobUrls[carId];
+          setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: rollbackUrl ?? undefined } : c));
           const msg = err instanceof Error ? err.message : String(err);
           showToast(`アップロード失敗: ${msg.slice(0, 60)}`, 'error');
         } finally {

@@ -6,7 +6,6 @@ const fs = require('fs');
 const isDev = process.env.NODE_ENV === 'development';
 
 let localServer = null;
-const LOCAL_PORT = 51932;
 
 function startLocalServer(distDir) {
   return new Promise((resolve) => {
@@ -27,7 +26,7 @@ function startLocalServer(distDir) {
       res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       fs.createReadStream(filePath).pipe(res);
     });
-    localServer.listen(LOCAL_PORT, '127.0.0.1', resolve);
+    localServer.listen(0, '127.0.0.1', () => resolve(localServer.address().port));
   });
 }
 
@@ -102,8 +101,8 @@ app.whenReady().then(async () => {
     url = 'http://localhost:5173';
   } else {
     const distDir = path.join(__dirname, '../dist');
-    await startLocalServer(distDir);
-    url = `http://127.0.0.1:${LOCAL_PORT}`;
+    const port = await startLocalServer(distDir);
+    url = `http://127.0.0.1:${port}`;
   }
   createWindow(url);
 });
@@ -115,7 +114,8 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    const url = isDev ? 'http://localhost:5173' : `http://127.0.0.1:${LOCAL_PORT}`;
+    const port = localServer ? localServer.address().port : null;
+    const url = isDev ? 'http://localhost:5173' : `http://127.0.0.1:${port}`;
     createWindow(url);
   }
 });
