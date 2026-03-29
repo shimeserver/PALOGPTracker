@@ -352,7 +352,7 @@ export default function CarsScreen() {
               <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.year.km.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
               <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.km.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
               <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.steps!.toLocaleString()}</Text><Text style={styles.actLbl}>累計 歩</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{(walkStats.total.steps ?? 0).toLocaleString()}</Text><Text style={styles.actLbl}>累計 歩</Text></View>
             </View>
           ) : (
             <View>
@@ -366,7 +366,7 @@ export default function CarsScreen() {
                   <Text style={styles.actDetailPeriod}>{label}</Text>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(2)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.calories.toLocaleString()}</Text><Text style={styles.actDetailLbl}>kcal</Text></View>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.steps!.toLocaleString()}</Text><Text style={styles.actDetailLbl}>歩</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{(p.steps ?? 0).toLocaleString()}</Text><Text style={styles.actDetailLbl}>歩</Text></View>
                 </View>
               ))}
             </View>
@@ -902,7 +902,7 @@ const styles = StyleSheet.create({
   warnBadgeText: { color: '#fff', fontSize: 9, fontWeight: '700' },
   // Activity stats cards
   actCard: { backgroundColor: '#fff', marginHorizontal: 12, marginTop: 12, borderRadius: 14, padding: 14, borderLeftWidth: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
-  actCardTitle: { fontSize: 14, fontWeight: '700', color: '#1f2937', marginBottom: 10 },
+  actCardTitle: { fontSize: 14, fontWeight: '700', color: '#1f2937' },
   actGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   actCell: { width: '30%', backgroundColor: '#f8f9fa', borderRadius: 8, padding: 8, alignItems: 'center' },
   actVal: { fontSize: 16, fontWeight: '800', color: '#1f2937' },
