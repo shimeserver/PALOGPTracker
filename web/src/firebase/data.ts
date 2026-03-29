@@ -167,6 +167,9 @@ export async function mergeLandmarks(keepId: string, deleteId: string, merged: {
 }
 
 export async function deleteLandmark(landmarkId: string): Promise<void> {
+  // visitsサブコレクションを先に削除（Firestoreは親削除時にサブコレクションを自動削除しない）
+  const visitsSnap = await getDocs(collection(db, 'landmarks', landmarkId, 'visits'));
+  await Promise.all(visitsSnap.docs.map(d => deleteDoc(d.ref)));
   await deleteDoc(doc(db, 'landmarks', landmarkId));
 }
 

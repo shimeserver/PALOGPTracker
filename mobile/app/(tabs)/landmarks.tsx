@@ -88,7 +88,7 @@ export default function LandmarksScreen() {
         uploadedPhotos.push({ ...r, takenAt: now });
       }
       if (uploadedPhotos.length > 0) await updateLandmark(id, { photos: uploadedPhotos });
-      await recordVisit(id, { landmarkId: id, userId: user.uid, timestamp: now });
+      // visitCountはsaveLandmark時に1で初期化済みなのでrecordVisitは不要（二重カウント防止）
       Alert.alert('登録完了', `${name}を登録しました`);
       setName(''); setCategory('その他'); setDescription(''); setPhotos([]);
       setShowAdd(false);
