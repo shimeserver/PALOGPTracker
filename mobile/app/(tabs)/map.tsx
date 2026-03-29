@@ -149,11 +149,12 @@ export default function MapScreen() {
   const [following, setFollowing] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     let sub: Location.LocationSubscription | null = null;
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
+        if (cancelled || status !== 'granted') return;
         // 記録中: 3秒/5m（高精度）、非記録中: 10秒/20m（省電力）
         sub = await Location.watchPositionAsync(
           isTracking
@@ -161,11 +162,13 @@ export default function MapScreen() {
             : { accuracy: Location.Accuracy.Balanced, timeInterval: 10000, distanceInterval: 20 },
           (loc) => setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude })
         );
+        // await 解決前に cleanup が走った場合は即座に破棄
+        if (cancelled) sub.remove();
       } catch (error) {
         console.error('Location error:', error);
       }
     })();
-    return () => { sub?.remove(); };
+    return () => { cancelled = true; sub?.remove(); };
   }, [isTracking]);
 
   useEffect(() => {
