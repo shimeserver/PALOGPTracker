@@ -8,7 +8,7 @@ import { useCarStore } from '../../src/store/carStore';
 import { deleteAllUserRoutes } from '../../src/firebase/routes';
 import { collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 
-const VERSION = '1.0.7';
+const VERSION = '1.1.0';
 
 const PRIVACY_POLICY = `プライバシーポリシー
 
