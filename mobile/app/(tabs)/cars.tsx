@@ -16,9 +16,9 @@ import { getUserRoutes } from '../../src/firebase/routes';
 import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS, Route } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
 
+interface PeriodStats { km: number; calories: number; steps?: number; }
 interface ActivityStats {
-  todayKm: number; monthKm: number; yearKm: number; totalKm: number;
-  calories: number; steps?: number;
+  today: PeriodStats; month: PeriodStats; year: PeriodStats; total: PeriodStats;
 }
 
 function calcActivityStats(routes: Route[], mode: 'walk' | 'bicycle', kcalPerKm: number): ActivityStats {
@@ -27,15 +27,19 @@ function calcActivityStats(routes: Route[], mode: 'walk' | 'bicycle', kcalPerKm:
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const yearStart  = new Date(now.getFullYear(), 0, 1).getTime();
   const filtered = routes.filter(r => r.mode === mode);
-  const sum = (arr: Route[]) => arr.reduce((s, r) => s + r.totalDistance, 0);
-  const total = sum(filtered);
+  const make = (arr: Route[]): PeriodStats => {
+    const km = arr.reduce((s, r) => s + r.totalDistance, 0);
+    return {
+      km,
+      calories: Math.round(km * kcalPerKm),
+      steps: mode === 'walk' ? Math.round(km * 1300) : undefined,
+    };
+  };
   return {
-    todayKm:  sum(filtered.filter(r => r.startTime >= todayStart)),
-    monthKm:  sum(filtered.filter(r => r.startTime >= monthStart)),
-    yearKm:   sum(filtered.filter(r => r.startTime >= yearStart)),
-    totalKm:  total,
-    calories: Math.round(total * kcalPerKm),
-    steps:    mode === 'walk' ? Math.round(total * 1300) : undefined,
+    today: make(filtered.filter(r => r.startTime >= todayStart)),
+    month: make(filtered.filter(r => r.startTime >= monthStart)),
+    year:  make(filtered.filter(r => r.startTime >= yearStart)),
+    total: make(filtered),
   };
 }
 
@@ -88,8 +92,10 @@ export default function CarsScreen() {
 
   // アクティビティ統計
   const [allRoutes, setAllRoutes] = useState<Route[]>([]);
-  const walkStats = calcActivityStats(allRoutes, 'walk', 60);
+  const walkStats    = calcActivityStats(allRoutes, 'walk',    60);
   const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
+  const [walkExpanded,    setWalkExpanded]    = useState(false);
+  const [bicycleExpanded, setBicycleExpanded] = useState(false);
 
   // Add car modal
   const [showAddCar, setShowAddCar] = useState(false);
@@ -340,30 +346,79 @@ export default function CarsScreen() {
 
       <ScrollView style={styles.list}>
         {/* 歩行統計カード */}
-        <View style={[styles.actCard, { borderLeftColor: '#22c55e' }]}>
-          <Text style={styles.actCardTitle}>🚶 歩行</Text>
-          <View style={styles.actGrid}>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.todayKm.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.monthKm.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.yearKm.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.totalKm.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
-            <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.steps!.toLocaleString()}</Text><Text style={styles.actLbl}>累計 歩</Text></View>
+        <TouchableOpacity
+          style={[styles.actCard, { borderLeftColor: '#22c55e' }]}
+          onPress={() => setWalkExpanded(e => !e)}
+          activeOpacity={0.85}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: walkExpanded ? 12 : 0 }}>
+            <Text style={styles.actCardTitle}>🚶 歩行</Text>
+            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{walkExpanded ? '▲' : '▼ 詳細'}</Text>
           </View>
-        </View>
-
-        {/* 自転車統計カード（自転車が1台以上ある or 走行記録がある場合） */}
-        {(cars.some(c => c.vehicleType === 'bicycle') || bicycleStats.totalKm > 0) && (
-          <View style={[styles.actCard, { borderLeftColor: '#f59e0b' }]}>
-            <Text style={styles.actCardTitle}>🚲 自転車</Text>
+          {!walkExpanded ? (
             <View style={styles.actGrid}>
-              <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.todayKm.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.monthKm.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.yearKm.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.totalKm.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.today.km.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.year.km.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.km.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{walkStats.total.steps!.toLocaleString()}</Text><Text style={styles.actLbl}>累計 歩</Text></View>
             </View>
-          </View>
+          ) : (
+            <View>
+              {([
+                { label: '今日', p: walkStats.today },
+                { label: '今月', p: walkStats.month },
+                { label: '今年', p: walkStats.year },
+                { label: '累計', p: walkStats.total },
+              ] as const).map(({ label, p }) => (
+                <View key={label} style={styles.actDetailRow}>
+                  <Text style={styles.actDetailPeriod}>{label}</Text>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(2)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.calories.toLocaleString()}</Text><Text style={styles.actDetailLbl}>kcal</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.steps!.toLocaleString()}</Text><Text style={styles.actDetailLbl}>歩</Text></View>
+                </View>
+              ))}
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* 自転車統計カード */}
+        {(cars.some(c => c.vehicleType === 'bicycle') || bicycleStats.total.km > 0) && (
+          <TouchableOpacity
+            style={[styles.actCard, { borderLeftColor: '#f59e0b' }]}
+            onPress={() => setBicycleExpanded(e => !e)}
+            activeOpacity={0.85}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: bicycleExpanded ? 12 : 0 }}>
+              <Text style={styles.actCardTitle}>🚲 自転車</Text>
+              <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{bicycleExpanded ? '▲' : '▼ 詳細'}</Text>
+            </View>
+            {!bicycleExpanded ? (
+              <View style={styles.actGrid}>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.today.km.toFixed(2)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.year.km.toFixed(1)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.total.km.toFixed(1)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
+                <View style={styles.actCell}><Text style={styles.actVal}>{bicycleStats.total.calories.toLocaleString()}</Text><Text style={styles.actLbl}>累計 kcal</Text></View>
+              </View>
+            ) : (
+              <View>
+                {([
+                  { label: '今日', p: bicycleStats.today },
+                  { label: '今月', p: bicycleStats.month },
+                  { label: '今年', p: bicycleStats.year },
+                  { label: '累計', p: bicycleStats.total },
+                ] as const).map(({ label, p }) => (
+                  <View key={label} style={styles.actDetailRow}>
+                    <Text style={styles.actDetailPeriod}>{label}</Text>
+                    <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(2)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                    <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.calories.toLocaleString()}</Text><Text style={styles.actDetailLbl}>kcal</Text></View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </TouchableOpacity>
         )}
 
         {loading && <Text style={styles.empty}>読み込み中...</Text>}
@@ -424,6 +479,15 @@ export default function CarsScreen() {
                   </TouchableOpacity>
                 </View>
               </TouchableOpacity>
+
+              {/* フルワイド写真（展開時） */}
+              {isExpanded && car.photoUrl && (
+                <Image
+                  source={{ uri: car.photoUrl }}
+                  style={{ width: '100%', height: 180 }}
+                  resizeMode="cover"
+                />
+              )}
 
               {/* 展開パネル */}
               {isExpanded && (
@@ -856,6 +920,11 @@ const styles = StyleSheet.create({
   actCell: { width: '30%', backgroundColor: '#f8f9fa', borderRadius: 8, padding: 8, alignItems: 'center' },
   actVal: { fontSize: 16, fontWeight: '800', color: '#1f2937' },
   actLbl: { fontSize: 9, color: '#9ca3af', marginTop: 2, textAlign: 'center' },
+  actDetailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+  actDetailPeriod: { width: 36, fontSize: 12, fontWeight: '700', color: '#6b7280' },
+  actDetailCell: { flex: 1, alignItems: 'center' },
+  actDetailVal: { fontSize: 15, fontWeight: '800', color: '#1f2937' },
+  actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
   // Vehicle type selector
   vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
   vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
