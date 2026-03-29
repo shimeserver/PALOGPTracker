@@ -6,7 +6,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { deleteAllUserRoutes } from '../../src/firebase/routes';
 import { collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 
-const VERSION = '1.0.5';
+const VERSION = '1.0.6';
 
 const PRIVACY_POLICY = `プライバシーポリシー
 

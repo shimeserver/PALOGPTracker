@@ -9,7 +9,7 @@ const TABS: { name: string; title: string; icon: IoniconName; activeIcon: Ionico
   { name: 'track',     title: '記録',   icon: 'radio-button-off',   activeIcon: 'radio-button-on' },
   { name: 'routes',    title: 'ルート', icon: 'list-outline',        activeIcon: 'list' },
   { name: 'landmarks', title: 'スポット',icon: 'location-outline',   activeIcon: 'location' },
-  { name: 'cars',      title: '愛車',   icon: 'car-outline',         activeIcon: 'car' },
+  { name: 'cars',      title: 'アクティビティ', icon: 'fitness-outline', activeIcon: 'fitness' },
   { name: 'settings',  title: '設定',   icon: 'settings-outline',    activeIcon: 'settings' },
 ];
 

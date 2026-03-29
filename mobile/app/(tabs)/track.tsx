@@ -80,8 +80,9 @@ function haversine(p1: { lat: number; lng: number }, p2: { lat: number; lng: num
 }
 
 const MODE_CONFIG = {
-  car:  { label: '車',   icon: '🚗' },
-  walk: { label: '徒歩', icon: '🚶' },
+  car:     { label: '車',     icon: '🚗' },
+  walk:    { label: '徒歩',   icon: '🚶' },
+  bicycle: { label: '自転車', icon: '🚲' },
 } as const;
 
 export default function TrackScreen() {
