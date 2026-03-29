@@ -272,7 +272,7 @@ export default function RoutesPanel({
           {detectingRouteId === selectedRoute.id && !detecting && stopCandidates.length === 0 && (
             <p style={{ color: '#9ca3af', fontSize: 12, margin: '6px 0 0' }}>未登録スポット候補なし</p>
           )}
-          {stopCandidates.length > 0 && (
+          {detectingRouteId === selectedRoute.id && stopCandidates.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <p style={{ color: '#2563eb', fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>{stopCandidates.length}か所の未登録スポット候補</p>
               {stopCandidates.map((s, i) => (
