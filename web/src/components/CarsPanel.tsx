@@ -112,11 +112,14 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   // Add car form
   const [showAddCar, setShowAddCar] = useState(false);
-  const [form, setForm] = useState({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4] });
+  const [form, setForm] = useState({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4], vehicleType: 'car' as 'car' | 'bicycle' });
   const [saving, setSaving] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+
+  // 既存車への写真アップロード
+  const [uploadingPhotoCarId, setUploadingPhotoCarId] = useState<string | null>(null);
 
   // Add fuel log form
   const [showAddFuel, setShowAddFuel] = useState<string | null>(null);
@@ -188,6 +191,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       }
       const newCar = await createCar({
         userId, nickname: form.nickname.trim(),
+        vehicleType: form.vehicleType,
         make: form.make.trim() || undefined,
         model: form.model.trim() || undefined,
         year: form.year ? parseInt(form.year) : undefined,
@@ -203,7 +207,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       setCars(updated);
       onCarsChange(updated);
       setShowAddCar(false);
-      setForm({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4] });
+      setForm({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4], vehicleType: 'car' });
       setPhotoFile(null); setPhotoPreview(null);
       showToast('愛車を追加しました');
     } finally { setSaving(false); }
@@ -281,6 +285,23 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     await deleteMaintenanceLog(carId, logId);
     setMaintLogs(prev => ({ ...prev, [carId]: (prev[carId] || []).filter(l => l.id !== logId) }));
     showToast('削除しました');
+  };
+
+  const handleCarPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>, carId: string) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    e.target.value = '';
+    setUploadingPhotoCarId(carId);
+    try {
+      const { url, storagePath } = await uploadCarPhoto(userId, carId, f);
+      await updateCar(carId, { photoUrl: url, photoStoragePath: storagePath });
+      setCars(prev => prev.map(c => c.id === carId ? { ...c, photoUrl: url } : c));
+      showToast('写真を更新しました');
+    } catch {
+      showToast('アップロードに失敗しました', 'error');
+    } finally {
+      setUploadingPhotoCarId(null);
+    }
   };
 
   const handleSaveCarOdometer = async (carId: string, value: string) => {
@@ -381,11 +402,26 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                 <div style={{ padding: '14px 18px', cursor: 'pointer', background: isActive ? '#eff6ff' : isExpanded ? '#f8faff' : '#fff', borderLeft: isActive ? '4px solid #2563eb' : '4px solid transparent', transition: 'background 0.15s, border-color 0.15s' }} onClick={() => handleExpand(car)}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                     {/* 写真 */}
-                    <div style={{ width: 52, height: 52, borderRadius: 10, background: '#f3f4f6', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {car.photoUrl
-                        ? <img src={car.photoUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        : <span style={{ fontSize: 28 }}>🚗</span>}
-                    </div>
+                    <label
+                      htmlFor={`car-photo-${car.id}`}
+                      style={{ width: 52, height: 52, borderRadius: '50%', background: '#f3f4f6', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative', border: '2px solid #e8eaed' }}
+                      onClick={e => e.stopPropagation()}
+                      title="写真を変更"
+                    >
+                      {uploadingPhotoCarId === car.id
+                        ? <span style={{ fontSize: 12, color: '#9ca3af' }}>...</span>
+                        : car.photoUrl
+                          ? <img src={car.photoUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <span style={{ fontSize: 26 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</span>}
+                      <div style={{ position: 'absolute', bottom: 0, right: 0, width: 18, height: 18, background: '#2563eb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #fff', fontSize: 9 }}>📷</div>
+                      <input
+                        id={`car-photo-${car.id}`}
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        onChange={e => handleCarPhotoChange(e, car.id!)}
+                      />
+                    </label>
                     {/* 情報 */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -424,7 +460,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                   <div style={{ background: '#f8faff', borderTop: '1px solid #e8eaed' }}>
                     {/* タブ */}
                     <div style={{ display: 'flex', borderBottom: '1px solid #e8eaed' }}>
-                      {(['stats', 'fuel', 'maintenance'] as DetailTab[]).map(tab => (
+                      {(['stats', ...(car.vehicleType !== 'bicycle' ? ['fuel'] : []), 'maintenance'] as DetailTab[]).map(tab => (
                         <button
                           key={tab}
                           onClick={() => handleSwitchTab(tab, car)}
@@ -654,6 +690,19 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                 <span style={{ fontSize: 12, color: '#9ca3af' }}>写真をタップして選択</span>
               </div>
 
+              {/* 種別トグル */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                {(['car', 'bicycle'] as const).map(vt => (
+                  <button
+                    key={vt}
+                    onClick={() => setForm(f => ({ ...f, vehicleType: vt }))}
+                    style={{ flex: 1, padding: '8px', borderRadius: 8, border: `1.5px solid ${form.vehicleType === vt ? '#2563eb' : '#e8eaed'}`, background: form.vehicleType === vt ? '#eff6ff' : '#f8f9fa', color: form.vehicleType === vt ? '#2563eb' : '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: form.vehicleType === vt ? 700 : 400 }}
+                  >
+                    {vt === 'car' ? '🚗 車' : '🚲 自転車'}
+                  </button>
+                ))}
+              </div>
+
               <input style={s.input} placeholder="ニックネーム（必須）例: 俺のプリウス" value={form.nickname} onChange={e => setForm(f => ({ ...f, nickname: e.target.value }))} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                 <input style={s.input} placeholder="メーカー（例: Toyota）" value={form.make} onChange={e => setForm(f => ({ ...f, make: e.target.value }))} />
@@ -681,7 +730,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                 <button onClick={handleSaveCar} disabled={saving || !form.nickname.trim()} style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: saving || !form.nickname.trim() ? 0.6 : 1 }}>
                   {saving ? '保存中...' : '追加'}
                 </button>
-                <button onClick={() => { setShowAddCar(false); setForm({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4] }); setPhotoFile(null); setPhotoPreview(null); }} style={{ flex: 1, background: '#f8f9fa', color: '#374151', border: '1px solid #e8eaed', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14 }}>
+                <button onClick={() => { setShowAddCar(false); setForm({ nickname: '', make: '', model: '', year: '', color: '', createTag: true, tagColor: TAG_COLORS[4], vehicleType: 'car' }); setPhotoFile(null); setPhotoPreview(null); }} style={{ flex: 1, background: '#f8f9fa', color: '#374151', border: '1px solid #e8eaed', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14 }}>
                   キャンセル
                 </button>
               </div>

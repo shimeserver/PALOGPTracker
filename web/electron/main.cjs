@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Menu } = require('electron');
+const { app, BrowserWindow, shell, Menu, session } = require('electron');
 const path = require('path');
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -55,7 +55,23 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // Firebase Storage など外部APIへのアクセスを許可
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: " +
+          "https://*.googleapis.com https://*.firebaseapp.com https://*.firebase.com " +
+          "https://firebasestorage.googleapis.com https://maps.googleapis.com " +
+          "https://*.openstreetmap.org https://*.tile.openstreetmap.org"
+        ],
+      },
+    });
+  });
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   app.quit();

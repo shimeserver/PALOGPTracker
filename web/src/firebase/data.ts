@@ -9,6 +9,7 @@ export interface Car {
   id: string;
   userId: string;
   nickname: string;
+  vehicleType?: 'car' | 'bicycle';
   make?: string;
   model?: string;
   year?: number;
@@ -56,7 +57,7 @@ export interface MaintenanceLog {
 }
 
 export interface TrackPoint { lat: number; lng: number; timestamp: number; speed: number; }
-export type TrackingMode = 'car' | 'walk';
+export type TrackingMode = 'car' | 'walk' | 'bicycle';
 export interface Route {
   id?: string; userId: string; name: string; tags: string[];
   startTime: number; endTime: number; totalDistance: number;

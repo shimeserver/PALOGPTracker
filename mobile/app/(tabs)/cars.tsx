@@ -334,16 +334,6 @@ export default function CarsScreen() {
       <TouchableOpacity onPress={() => setShowHelp(true)} style={styles.helpBtn}>
         <Text style={styles.helpBtnText}>?</Text>
       </TouchableOpacity>
-      {/* アクティブ車バナー */}
-      {activeCar && (
-        <View style={styles.activeBanner}>
-          <Text style={styles.activeBannerText}>{activeCar.vehicleType === 'bicycle' ? '🚲' : '🚗'} 記録中: {activeCar.nickname}</Text>
-          <TouchableOpacity onPress={() => setActiveCar(null)}>
-            <Text style={styles.activeBannerClear}>解除</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       <ScrollView style={styles.list}>
         {/* 歩行統計カード */}
         <TouchableOpacity
@@ -451,7 +441,7 @@ export default function CarsScreen() {
               <TouchableOpacity style={styles.carHeader} onPress={() => handleExpand(car)}>
                 <TouchableOpacity style={styles.carIcon} onPress={() => handleUpdateCarPhoto(car)}>
                   {car.photoUrl
-                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 10 }} />
+                    ? <Image source={{ uri: car.photoUrl }} style={{ width: 52, height: 52, borderRadius: 26 }} />
                     : <Text style={{ fontSize: 28 }}>{car.vehicleType === 'bicycle' ? '🚲' : '🚗'}</Text>}
                   <View style={styles.carIconEditBadge}><Text style={{ color: '#fff', fontSize: 8 }}>📷</Text></View>
                 </TouchableOpacity>
@@ -860,16 +850,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
   helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
-  activeBanner: { backgroundColor: '#eff6ff', paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#bfdbfe' },
-  activeBannerText: { flex: 1, color: '#2563eb', fontSize: 13, fontWeight: '600' },
-  activeBannerClear: { color: '#9ca3af', fontSize: 12 },
   list: { flex: 1 },
   empty: { color: '#9ca3af', textAlign: 'center', marginTop: 40, fontSize: 14, lineHeight: 22 },
   carCard: { backgroundColor: '#fff', marginHorizontal: 12, marginTop: 12, borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
   carCardActive: { borderLeftWidth: 4, borderLeftColor: '#2563eb' },
   carHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  carIcon: { width: 52, height: 52, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  carIconEditBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#2563eb', borderRadius: 6, width: 14, height: 14, alignItems: 'center', justifyContent: 'center' },
+  carIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', position: 'relative', borderWidth: 2, borderColor: '#e8eaed', overflow: 'hidden' },
+  carIconEditBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#2563eb', borderRadius: 8, width: 16, height: 16, alignItems: 'center', justifyContent: 'center' },
   carInfo: { flex: 1, gap: 3 },
   carName: { fontSize: 16, fontWeight: '700', color: '#1f2937' },
   carDetail: { fontSize: 12, color: '#9ca3af' },
