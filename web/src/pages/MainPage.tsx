@@ -152,6 +152,7 @@ export default function MainPage({ user }: Props) {
         onDeleteAllRoutes={() => { setRoutes([]); setSelectedRoute(null); setShowAllRoutes(false); }}
         onDeleteAllLandmarks={() => setLandmarkCount(0)}
         onImportDone={reloadRoutes}
+        getPlacesService={getPlacesService}
       />
 
       <ActivityPanel

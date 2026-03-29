@@ -90,6 +90,27 @@ function createWindow(url) {
   ]);
   Menu.setApplicationMenu(menu);
 
+  // Google APIs (Maps, Places, Firebase Storage) へのCORSを許可
+  // webSecurityは有効のままでrenderer側のXSSリスクは維持しつつ、
+  // 信頼済みGoogle/Firebaseドメインへのリクエストのみ通す
+  win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const origin = details.responseHeaders?.['access-control-allow-origin'];
+    if (!origin) {
+      const url = details.url || '';
+      const isGoogleApi = url.includes('googleapis.com') || url.includes('firebasestorage.googleapis.com') || url.includes('maps.gstatic.com');
+      if (isGoogleApi) {
+        callback({
+          responseHeaders: {
+            ...details.responseHeaders,
+            'Access-Control-Allow-Origin': ['*'],
+          },
+        });
+        return;
+      }
+    }
+    callback({ responseHeaders: details.responseHeaders });
+  });
+
   win.loadURL(url);
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(({ url: u }) => { shell.openExternal(u); return { action: 'deny' }; });

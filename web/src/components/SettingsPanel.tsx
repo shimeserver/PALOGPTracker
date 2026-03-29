@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { TileKey, ColorMode } from './RouteMapView';
-import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark } from '../firebase/data';
+import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl } from '../firebase/data';
 import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
 
 export interface MapSettings {
@@ -20,6 +20,7 @@ interface Props {
   onDeleteAllRoutes: () => void;
   onDeleteAllLandmarks: () => void;
   onImportDone: () => void;
+  getPlacesService: () => google.maps.places.PlacesService | null;
 }
 
 const TILE_OPTIONS: { key: TileKey; label: string; desc: string; preview: string }[] = [
@@ -28,11 +29,13 @@ const TILE_OPTIONS: { key: TileKey; label: string; desc: string; preview: string
   { key: 'terrain', label: '地形図',     desc: '標高・地形がわかる地図',       preview: '⛰️' },
 ];
 
-export default function SettingsPanel({ open, onClose, settings, onSettings, userId, routeCount, landmarkCount, onDeleteAllRoutes, onDeleteAllLandmarks, onImportDone }: Props) {
+export default function SettingsPanel({ open, onClose, settings, onSettings, userId, routeCount, landmarkCount, onDeleteAllRoutes, onDeleteAllLandmarks, onImportDone, getPlacesService }: Props) {
   const [dedupProgress, setDedupProgress] = useState('');
   const [deduping, setDeduping]           = useState(false);
   const [importing, setImporting]         = useState(false);
   const [importProgress, setImportProgress] = useState('');
+  const [restoring, setRestoring]         = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState('');
   const csvInputRef  = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,6 +101,45 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
       }
     } catch (err: any) { alert('エラー: ' + err.message); }
     finally { setImporting(false); setImportProgress(''); e.target.value = ''; }
+  };
+
+  const handleRestorePhotos = async () => {
+    const service = getPlacesService();
+    if (!service) { alert('地図が読み込まれていません。地図画面を開いてから再試行してください。'); return; }
+    if (!confirm('期限切れの写真URLを持つスポットをPlaces APIで自動復元します。\nスポット1件あたり約¥37の費用が発生します。続けますか？')) return;
+    setRestoring(true);
+    const landmarks = await getUserLandmarks(userId);
+    const targets = landmarks.filter(lm =>
+      lm.placeId && (lm.photos.length === 0 || lm.photos.some(p => p.url.includes('googleapis.com/maps/api/place')))
+    );
+    if (targets.length === 0) { alert('復元対象のスポットはありません。'); setRestoring(false); return; }
+    let fixed = 0, failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const lm = targets[i];
+      setRestoreProgress(`${i + 1} / ${targets.length} — ${lm.name}`);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          service.getDetails(
+            { placeId: lm.placeId!, fields: ['photos'] },
+            async (result, status) => {
+              if (status !== google.maps.places.PlacesServiceStatus.OK || !result?.photos?.[0]) {
+                reject(new Error('no photo')); return;
+              }
+              const url = result.photos[0].getUrl({ maxWidth: 600 });
+              const stored = await uploadLandmarkPhotoFromUrl(userId, lm.id!, url);
+              if (stored) {
+                await updateLandmark(lm.id!, { photos: [stored] });
+                fixed++;
+              }
+              resolve();
+            }
+          );
+        });
+      } catch { failed++; }
+    }
+    setRestoring(false);
+    setRestoreProgress('');
+    alert(`完了！\n復元成功: ${fixed}件　失敗: ${failed}件`);
   };
 
   const handleDeduplicateAllVisits = async () => {
@@ -235,6 +277,14 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
             {deduping ? `🧹 処理中... ${dedupProgress}` : '🧹 全スポットの重複訪問ログを一括削除'}
           </button>
           <p style={s.deleteNote}>同日・同メモの重複ログを全スポット一括で削除し、来訪回数を補正します</p>
+          <button
+            style={{ ...s.deleteBtn, background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe', marginTop: 8, opacity: restoring ? 0.6 : 1 }}
+            onClick={handleRestorePhotos}
+            disabled={restoring}
+          >
+            {restoring ? `🖼 復元中... ${restoreProgress}` : '🖼 期限切れ写真を自動復元（Places API）'}
+          </button>
+          <p style={s.deleteNote}>placeIdが保存されているスポットの写真をPlaces APIで取得し直してFirebase Storageに永続保存します</p>
         </section>
       </div>
     </>
