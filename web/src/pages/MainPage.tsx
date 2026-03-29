@@ -35,6 +35,7 @@ export default function MainPage({ user }: Props) {
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
   const [carWarning, setCarWarning]         = useState(false);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
+  const [pinDragMode, setPinDragMode] = useState<{ id: string; onDragEnd: (lat: number, lng: number) => void } | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
   useEffect(() => {
@@ -69,6 +70,11 @@ export default function MainPage({ user }: Props) {
     setMapPickCallback(() => cb);
   };
   const stopMapPickMode = () => setMapPickCallback(null);
+
+  const startPinDragMode = (id: string, onDragEnd: (lat: number, lng: number) => void) => {
+    setPinDragMode({ id, onDragEnd });
+  };
+  const stopPinDragMode = () => setPinDragMode(null);
 
   const getPlacesService = (): google.maps.places.PlacesService | null => {
     const map = mapViewRef.current?.getMap();
@@ -123,6 +129,8 @@ export default function MainPage({ user }: Props) {
               getPlacesService={getPlacesService}
               startMapPickMode={startMapPickMode}
               stopMapPickMode={stopMapPickMode}
+              startPinDragMode={startPinDragMode}
+              stopPinDragMode={stopPinDragMode}
             />
           </div>
         </div>
@@ -138,6 +146,7 @@ export default function MainPage({ user }: Props) {
           onMapSettings={setMapSettings}
           tags={tags}
           onMapRightClick={mapRightClickCb ?? undefined}
+          pinDragMode={pinDragMode}
         />
       </div>
 
