@@ -141,6 +141,7 @@ export default function MapScreen() {
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
   const initialized = useRef(false);
   const landmarksRef = useRef<Landmark[]>([]);
+  const landmarksCachedUidRef = useRef<string | null>(null);
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPointsLen = useRef(0);
   const { helpTarget, setHelpTarget } = useUiStore();
@@ -148,11 +149,12 @@ export default function MapScreen() {
   const [following, setFollowing] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     let sub: Location.LocationSubscription | null = null;
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
+        if (cancelled || status !== 'granted') return;
         // 記録中: 3秒/5m（高精度）、非記録中: 10秒/20m（省電力）
         sub = await Location.watchPositionAsync(
           isTracking
@@ -160,16 +162,21 @@ export default function MapScreen() {
             : { accuracy: Location.Accuracy.Balanced, timeInterval: 10000, distanceInterval: 20 },
           (loc) => setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude })
         );
+        // await 解決前に cleanup が走った場合は即座に破棄
+        if (cancelled) sub.remove();
       } catch (error) {
         console.error('Location error:', error);
       }
     })();
-    return () => { sub?.remove(); };
+    return () => { cancelled = true; sub?.remove(); };
   }, [isTracking]);
 
   useEffect(() => {
-    // 既にロード済みならFirestoreへの再フェッチをスキップ
-    if (!user || landmarksRef.current.length > 0) return;
+    if (!user) return;
+    // UID が変わった（アカウント切替）ときはキャッシュをクリアして再フェッチ
+    if (landmarksCachedUidRef.current === user.uid && landmarksRef.current.length > 0) return;
+    landmarksCachedUidRef.current = user.uid;
+    landmarksRef.current = [];
     getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
