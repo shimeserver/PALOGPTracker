@@ -35,6 +35,7 @@ export default function MainPage({ user }: Props) {
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
   const [carWarning, setCarWarning]         = useState(false);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
+  const [pinDragMode, setPinDragMode] = useState<{ id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
   useEffect(() => {
@@ -70,6 +71,22 @@ export default function MainPage({ user }: Props) {
   };
   const stopMapPickMode = () => setMapPickCallback(null);
 
+  const startPinDragMode = (id: string, originalLat: number, originalLng: number, onDragEnd: (lat: number, lng: number) => void) => {
+    setPinDragMode({ id, originalLat, originalLng, onDragEnd });
+  };
+  const stopPinDragMode = () => setPinDragMode(null);
+  // タブ切替時にドラッグモードをリセット（マーカーを元の位置に戻す）
+  const handleTabChange = (next: Tab) => {
+    if (next !== 'landmarks' && pinDragMode) {
+      mapViewRef.current?.revertLandmarkPosition(pinDragMode.id, pinDragMode.originalLat, pinDragMode.originalLng);
+      setPinDragMode(null);
+    }
+    setTab(next);
+  };
+  const revertLandmarkPosition = (id: string, lat: number, lng: number) => {
+    mapViewRef.current?.revertLandmarkPosition(id, lat, lng);
+  };
+
   const getPlacesService = (): google.maps.places.PlacesService | null => {
     const map = mapViewRef.current?.getMap();
     if (!map || !window.google?.maps?.places) return null;
@@ -85,10 +102,10 @@ export default function MainPage({ user }: Props) {
         </div>
 
         <div style={styles.tabs}>
-          <button style={{ ...styles.tabBtn, ...(tab === 'routes' ? styles.tabBtnActive : {}) }} onClick={() => setTab('routes')}>
+          <button style={{ ...styles.tabBtn, ...(tab === 'routes' ? styles.tabBtnActive : {}) }} onClick={() => handleTabChange('routes')}>
             📋 ルート
           </button>
-          <button style={{ ...styles.tabBtn, ...(tab === 'landmarks' ? styles.tabBtnActive : {}) }} onClick={() => setTab('landmarks')}>
+          <button style={{ ...styles.tabBtn, ...(tab === 'landmarks' ? styles.tabBtnActive : {}) }} onClick={() => handleTabChange('landmarks')}>
             ⭐ スポット
           </button>
         </div>
@@ -123,6 +140,10 @@ export default function MainPage({ user }: Props) {
               getPlacesService={getPlacesService}
               startMapPickMode={startMapPickMode}
               stopMapPickMode={stopMapPickMode}
+              startPinDragMode={startPinDragMode}
+              stopPinDragMode={stopPinDragMode}
+              revertLandmarkPosition={revertLandmarkPosition}
+              activePinDragId={pinDragMode?.id ?? null}
             />
           </div>
         </div>
@@ -138,6 +159,7 @@ export default function MainPage({ user }: Props) {
           onMapSettings={setMapSettings}
           tags={tags}
           onMapRightClick={mapRightClickCb ?? undefined}
+          pinDragMode={tab === 'landmarks' ? pinDragMode : null}
         />
       </div>
 

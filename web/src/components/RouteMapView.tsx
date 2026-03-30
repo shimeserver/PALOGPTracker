@@ -11,6 +11,7 @@ export type TileKey = MapTypeId;
 export interface RouteMapViewHandle {
   focusLandmark: (lat: number, lng: number, id: string) => void;
   getMap: () => google.maps.Map | null;
+  revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
 }
 
 const ROUTE_COLORS = ['#2563eb','#ef4444','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16'];
@@ -38,10 +39,11 @@ interface Props {
   onMapSettings: (s: MapSettings) => void;
   tags: TagDef[];
   onMapRightClick?: (lat: number, lng: number, placeId?: string) => void;
+  pinDragMode?: { id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null;
 }
 
 const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
-  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick }, ref) {
+  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode }, ref) {
     const [landmarks, setLandmarks]   = useState<Landmark[]>([]);
     const [playback, setPlayback]     = useState(false);
     const [playIndex, setPlayIndex]   = useState(0);
@@ -62,6 +64,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       },
       getMap() {
         return mapRef.current;
+      },
+      revertLandmarkPosition(id, lat, lng) {
+        setLandmarks(prev => prev.map(x => x.id === id ? { ...x, lat, lng } : x));
       },
     }));
 
@@ -122,6 +127,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         {onMapRightClick && (
           <div style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'rgba(37,99,235,0.95)', color: '#fff', padding: '8px 20px', borderRadius: 24, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
             👆 地図上のスポット（店舗・施設）をクリックして確定
+          </div>
+        )}
+        {pinDragMode && (
+          <div style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'rgba(239,68,68,0.95)', color: '#fff', padding: '8px 20px', borderRadius: 24, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+            ✥ 赤いピンをドラッグして新しい位置に移動
           </div>
         )}
         <GoogleMap
@@ -193,25 +203,37 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           )}
 
           {/* ランドマーク */}
-          {landmarks.map(lm => (
-            <Marker
-              key={lm.id}
-              position={{ lat: lm.lat, lng: lm.lng }}
-              label={{ text: '★', color: '#f59e0b', fontSize: '16px' }}
-              clickable={!onMapRightClick}
-              onClick={() => !onMapRightClick && setOpenLandmark(lm.id!)}
-            >
-              {openLandmark === lm.id && (
-                <InfoWindow onCloseClick={() => setOpenLandmark(null)}>
-                  <div style={{ color: '#1f2937', fontSize: 13 }}>
-                    <strong>{lm.name}</strong><br />
-                    {lm.category} | 来訪{lm.visitCount}回
-                    {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }} /></>}
-                  </div>
-                </InfoWindow>
-              )}
-            </Marker>
-          ))}
+          {landmarks.map(lm => {
+            const isDragTarget = pinDragMode?.id === lm.id;
+            return (
+              <Marker
+                key={lm.id}
+                position={{ lat: lm.lat, lng: lm.lng }}
+                label={{ text: isDragTarget ? '✥' : '★', color: isDragTarget ? '#ef4444' : '#f59e0b', fontSize: isDragTarget ? '20px' : '16px' }}
+                clickable={!onMapRightClick && !isDragTarget}
+                draggable={isDragTarget}
+                onClick={() => !onMapRightClick && !isDragTarget && setOpenLandmark(lm.id!)}
+                onDragEnd={isDragTarget ? (e: google.maps.MapMouseEvent) => {
+                  const lat = e.latLng?.lat();
+                  const lng = e.latLng?.lng();
+                  if (lat !== undefined && lng !== undefined) {
+                    setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, lat, lng } : x));
+                    pinDragMode.onDragEnd(lat, lng);
+                  }
+                } : undefined}
+              >
+                {openLandmark === lm.id && !isDragTarget && (
+                  <InfoWindow onCloseClick={() => setOpenLandmark(null)}>
+                    <div style={{ color: '#1f2937', fontSize: 13 }}>
+                      <strong>{lm.name}</strong><br />
+                      {lm.category} | 来訪{lm.visitCount}回
+                      {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }} /></>}
+                    </div>
+                  </InfoWindow>
+                )}
+              </Marker>
+            );
+          })}
         </GoogleMap>
 
         {/* 左下：地図タイプ切替 */}

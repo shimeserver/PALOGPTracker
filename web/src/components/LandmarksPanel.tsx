@@ -33,11 +33,15 @@ interface Props {
   getPlacesService: () => google.maps.places.PlacesService | null;
   startMapPickMode: (cb: (lat: number, lng: number, placeId?: string) => void) => void;
   stopMapPickMode: () => void;
+  startPinDragMode: (id: string, originalLat: number, originalLng: number, onDragEnd: (lat: number, lng: number) => void) => void;
+  stopPinDragMode: () => void;
+  revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
+  activePinDragId: string | null;
 }
 
 const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
 
-export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode }: Props) {
+export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition, activePinDragId }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
   const [selected, setSelected]   = useState<Landmark | null>(null);
   const [visits, setVisits]       = useState<Visit[]>([]);
@@ -60,6 +64,18 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   const [editingCount, setEditingCount]     = useState(false);
   const [editCountVal, setEditCountVal]     = useState(0);
 
+  // ピン位置ドラッグ編集
+  const [pinDragActive, setPinDragActive] = useState(false);
+  const [pinDragNewPos, setPinDragNewPos] = useState<{ lat: number; lng: number } | null>(null);
+  const [pinDragSaving, setPinDragSaving] = useState(false);
+
+  // タブ切替など外部からドラッグモードが解除されたときにパネル状態をリセット
+  useEffect(() => {
+    if (!activePinDragId && pinDragActive) {
+      setPinDragActive(false);
+      setPinDragNewPos(null);
+    }
+  }, [activePinDragId]);
 
   // 地図で確定
   const [pickModeActive, setPickModeActive] = useState(false);
@@ -75,12 +91,15 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     getUserLandmarks(userId).then(l => { setLandmarks(l); setLoading(false); onCountChange(l.length); });
   }, [userId, active]);
 
-  // 詳細から離れたらピックモード解除
+  // 詳細から離れたらピックモード・ドラッグモード解除
   useEffect(() => {
     if (!selected) {
       setPickModeActive(false);
       { setPendingPlace(null); setPendingPhotoUrl(null); };
       stopMapPickMode();
+      setPinDragActive(false);
+      setPinDragNewPos(null);
+      stopPinDragMode();
     }
   }, [selected]);
 
@@ -290,6 +309,55 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     alert(`完了！${mergedCount}件の重複スポットをマージしました`);
   };
 
+  // ========== ピン位置ドラッグ ==========
+  const handleStartPinDrag = () => {
+    if (!selected) return;
+    onFocus(selected);
+    setPinDragActive(true);
+    setPinDragNewPos(null);
+    startPinDragMode(selected.id!, selected.lat, selected.lng, (lat, lng) => {
+      setPinDragNewPos({ lat, lng });
+    });
+  };
+
+  const handleConfirmPinDrag = async () => {
+    if (!selected || !pinDragNewPos) return;
+    const landmarkId = selected.id!;
+    const originalLat = selected.lat;
+    const originalLng = selected.lng;
+    const newLat = pinDragNewPos.lat;
+    const newLng = pinDragNewPos.lng;
+
+    setPinDragSaving(true);
+    // await前にdrag modeを解除 → タブ切替による意図しないリバートを防止
+    // pinDragSavingがtrueの間は「✥ 位置修正」ボタンも非表示になるため二重起動も不可
+    stopPinDragMode();
+    try {
+      await updateLandmark(landmarkId, { lat: newLat, lng: newLng });
+      const updated = { ...selected, lat: newLat, lng: newLng };
+      setSelected(updated);
+      setLandmarks(prev => prev.map(x => x.id === landmarkId ? updated : x));
+    } catch (e: any) {
+      // 保存失敗時はマップのマーカーを元の位置に戻す
+      revertLandmarkPosition(landmarkId, originalLat, originalLng);
+      alert(`保存に失敗しました: ${e.message}`);
+    } finally {
+      setPinDragActive(false);
+      setPinDragNewPos(null);
+      setPinDragSaving(false);
+    }
+  };
+
+  const handleCancelPinDrag = () => {
+    // ドラッグ後にキャンセルした場合はマーカーを元の座標に戻す
+    if (selected && pinDragNewPos) {
+      revertLandmarkPosition(selected.id!, selected.lat, selected.lng);
+    }
+    setPinDragActive(false);
+    setPinDragNewPos(null);
+    stopPinDragMode();
+  };
+
   // ========== 共通操作 ==========
   const handleSelect = async (lm: Landmark) => {
     setSelected(lm); setDetailEditing(false); { setPendingPlace(null); setPendingPhotoUrl(null); }; onFocus(lm);
@@ -403,13 +471,46 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* ヘッダー */}
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #e8eaed', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setSelected(null)} style={s.linkBtn}>← 一覧に戻る</button>
+          <button onClick={() => {
+            if (pinDragActive && pinDragNewPos) revertLandmarkPosition(selected.id!, selected.lat, selected.lng);
+            setSelected(null);
+          }} disabled={pinDragSaving} style={{ ...s.linkBtn, opacity: pinDragSaving ? 0.4 : 1 }}>← 一覧に戻る</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onFocus(selected)} style={{ ...s.linkBtn, color: '#2563eb' }}>📍 地図</button>
-            {!detailEditing && <button onClick={startDetailEdit} style={{ ...s.linkBtn, color: '#6b7280' }}>✏️ 編集</button>}
+            {!detailEditing && !pinDragActive && <button onClick={startDetailEdit} style={{ ...s.linkBtn, color: '#6b7280' }}>✏️ 編集</button>}
+            {!pinDragActive && !pinDragSaving && <button onClick={handleStartPinDrag} style={{ ...s.linkBtn, color: '#f97316' }}>✥ 位置修正</button>}
             <button onClick={e => handleDelete(selected, e)} style={{ ...s.linkBtn, color: '#ef4444' }}>🗑</button>
           </div>
         </div>
+
+        {/* ピン位置ドラッグモード */}
+        {pinDragActive && (
+          <div style={{ background: '#fff7ed', borderBottom: '1px solid #fed7aa', padding: '10px 16px' }}>
+            {pinDragNewPos ? (
+              <>
+                <p style={{ color: '#c2410c', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                  新しい位置: {pinDragNewPos.lat.toFixed(6)}, {pinDragNewPos.lng.toFixed(6)}
+                </p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={handleConfirmPinDrag} disabled={pinDragSaving}
+                    style={{ flex: 1, background: '#f97316', color: '#fff', border: 'none', borderRadius: 8, padding: '9px', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: pinDragSaving ? 0.6 : 1 }}
+                  >
+                    {pinDragSaving ? '保存中...' : '✓ この位置で保存'}
+                  </button>
+                  <button onClick={handleCancelPinDrag} disabled={pinDragSaving} style={{ background: '#f8f9fa', color: '#6b7280', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '9px 14px', cursor: pinDragSaving ? 'not-allowed' : 'pointer', fontSize: 13, opacity: pinDragSaving ? 0.4 : 1 }}>
+                    キャンセル
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: '#c2410c', fontSize: 13, fontWeight: 600 }}>✥ 地図上の赤いピンをドラッグして移動</span>
+                <button onClick={handleCancelPinDrag} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12 }}>キャンセル</button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ピックモード：待機中 */}
         {pickModeActive && (
