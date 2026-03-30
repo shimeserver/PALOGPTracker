@@ -218,7 +218,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   const lng = e.latLng?.lng();
                   if (lat !== undefined && lng !== undefined) {
                     setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, lat, lng } : x));
-                    pinDragMode.onDragEnd(lat, lng);
+                    pinDragMode!.onDragEnd(lat, lng);
                   }
                 } : undefined}
               >
