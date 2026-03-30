@@ -322,23 +322,28 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
 
   const handleConfirmPinDrag = async () => {
     if (!selected || !pinDragNewPos) return;
-    setPinDragSaving(true);
-    // 保存開始直後に drag mode を解除してタブ切替による意図しないリバートを防ぐ
-    stopPinDragMode();
+    const landmarkId = selected.id!;
     const originalLat = selected.lat;
     const originalLng = selected.lng;
+    const newLat = pinDragNewPos.lat;
+    const newLng = pinDragNewPos.lng;
+
+    setPinDragSaving(true);
+    // await前にdrag modeを解除 → タブ切替による意図しないリバートを防止
+    // pinDragSavingがtrueの間は「✥ 位置修正」ボタンも非表示になるため二重起動も不可
+    stopPinDragMode();
     try {
-      await updateLandmark(selected.id!, { lat: pinDragNewPos.lat, lng: pinDragNewPos.lng });
-      const updated = { ...selected, lat: pinDragNewPos.lat, lng: pinDragNewPos.lng };
+      await updateLandmark(landmarkId, { lat: newLat, lng: newLng });
+      const updated = { ...selected, lat: newLat, lng: newLng };
       setSelected(updated);
-      setLandmarks(prev => prev.map(x => x.id === selected.id ? updated : x));
-      setPinDragActive(false);
-      setPinDragNewPos(null);
+      setLandmarks(prev => prev.map(x => x.id === landmarkId ? updated : x));
     } catch (e: any) {
-      // 保存失敗時はマップのマーカーも元の位置に戻す
-      revertLandmarkPosition(selected.id!, originalLat, originalLng);
+      // 保存失敗時はマップのマーカーを元の位置に戻す
+      revertLandmarkPosition(landmarkId, originalLat, originalLng);
       alert(`保存に失敗しました: ${e.message}`);
     } finally {
+      setPinDragActive(false);
+      setPinDragNewPos(null);
       setPinDragSaving(false);
     }
   };
@@ -473,7 +478,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onFocus(selected)} style={{ ...s.linkBtn, color: '#2563eb' }}>📍 地図</button>
             {!detailEditing && !pinDragActive && <button onClick={startDetailEdit} style={{ ...s.linkBtn, color: '#6b7280' }}>✏️ 編集</button>}
-            {!pinDragActive && <button onClick={handleStartPinDrag} style={{ ...s.linkBtn, color: '#f97316' }}>✥ 位置修正</button>}
+            {!pinDragActive && !pinDragSaving && <button onClick={handleStartPinDrag} style={{ ...s.linkBtn, color: '#f97316' }}>✥ 位置修正</button>}
             <button onClick={e => handleDelete(selected, e)} style={{ ...s.linkBtn, color: '#ef4444' }}>🗑</button>
           </div>
         </div>
