@@ -471,7 +471,7 @@ const styles = StyleSheet.create({
   stopBadge: { backgroundColor: '#1e3a5f', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#0f3460' },
   stopBadgeText: { color: '#93c5fd', fontSize: 12 },
   panel: { backgroundColor: '#16213e', padding: 20, borderTopWidth: 1, borderTopColor: '#0f3460' },
-  routeName: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  routeName: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4, flex: 1 },
   routeDate: { color: '#888', fontSize: 13, marginBottom: 16 },
   metrics: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 16 },
   metric: { alignItems: 'center' },
