@@ -30,7 +30,7 @@ function calcActivityStats(routes: RouteMetadata[], mode: 'walk' | 'bicycle', kc
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const yearStart  = new Date(now.getFullYear(), 0, 1).getTime();
   const filtered = routes.filter(r => r.mode === mode);
-  const make = (arr: Route[]): PeriodStats => {
+  const make = (arr: RouteMetadata[]): PeriodStats => {
     const km = arr.reduce((s, r) => s + r.totalDistance, 0);
     return {
       km,
@@ -155,7 +155,9 @@ export default function CarsScreen() {
   useEffect(() => {
     const anyWarning = cars.some(car => {
       const mLogs = maintLogs[car.id!] || [];
-      const kmDriven = car.odometerKm ?? 0;
+      const stats = routeStats[car.id!] as (RouteStats & { distanceAfter?: number }) | undefined;
+      const distAfter = stats?.distanceAfter ?? 0;
+      const kmDriven = car.odometerKm != null ? car.odometerKm + distAfter : 0;
       return mLogs.some(log => {
         const monthsElapsed = Math.floor((Date.now() - log.timestamp) / 2592000000);
         if (log.nextDueMonths && monthsElapsed >= log.nextDueMonths - 1) return true;
@@ -186,7 +188,11 @@ export default function CarsScreen() {
     setStatsLoading(prev => ({ ...prev, [car.id!]: true }));
     try {
       const stats = await getRouteStatsByTag(user.uid, car.tagId);
-      setRouteStats(prev => ({ ...prev, [car.id!]: stats }));
+      // odometerSetAt 以降のルートのみ加算距離として別取得
+      const afterStats = car.odometerSetAt != null
+        ? await getRouteStatsByTag(user.uid, car.tagId, car.odometerSetAt)
+        : null;
+      setRouteStats(prev => ({ ...prev, [car.id!]: { ...stats, distanceAfter: afterStats?.totalDistance } as RouteStats & { distanceAfter?: number } }));
     } finally {
       setStatsLoading(prev => ({ ...prev, [car.id!]: false }));
     }
@@ -347,8 +353,9 @@ export default function CarsScreen() {
     const val = parseFloat(editOdometerValue);
     setEditOdometerCarId(null);
     if (isNaN(val) || val < 0) return;
-    await updateCar(car.id!, { odometerKm: val });
-    setCars(prev => prev.map(c => c.id === car.id ? { ...c, odometerKm: val } : c));
+    const setAt = Date.now();
+    await updateCar(car.id!, { odometerKm: val, odometerSetAt: setAt });
+    setCars(prev => prev.map(c => c.id === car.id ? { ...c, odometerKm: val, odometerSetAt: setAt } : c));
     showToast('走行距離を保存しました');
   };
 
@@ -451,8 +458,11 @@ export default function CarsScreen() {
           const isActive = activeCar?.id === car.id;
           const fLogs = fuelLogs[car.id!] || [];
           const mLogs = maintLogs[car.id!] || [];
-          const stats = routeStats[car.id!];
-          const kmDriven = car.odometerKm ?? stats?.totalDistance ?? 0;
+          const stats = routeStats[car.id!] as (RouteStats & { distanceAfter?: number }) | undefined;
+          const distanceAfter = stats?.distanceAfter ?? 0;
+          const kmDriven = car.odometerKm != null
+            ? car.odometerKm + distanceAfter
+            : (stats?.totalDistance ?? 0);
 
           // 警告チェック: 期限1ヶ月前 or 300km前から警告
           const hasWarning = mLogs.some(log => {
@@ -582,8 +592,8 @@ export default function CarsScreen() {
                       <View style={styles.statsDistCard}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                           <Text style={styles.statsDistLabel}>総走行距離</Text>
-                          {car.odometerKm != null && (
-                            <View style={styles.manualBadge}><Text style={styles.manualBadgeText}>手動</Text></View>
+                          {car.odometerKm != null && distanceAfter > 0 && (
+                            <View style={styles.manualBadge}><Text style={styles.manualBadgeText}>+{distanceAfter.toFixed(0)}km</Text></View>
                           )}
                         </View>
                         {editOdometerCarId === car.id ? (
@@ -602,7 +612,7 @@ export default function CarsScreen() {
                           <TouchableOpacity
                             onPress={() => {
                               setEditOdometerCarId(car.id!);
-                              setEditOdometerValue(String(car.odometerKm ?? stats?.totalDistance?.toFixed(1) ?? ''));
+                              setEditOdometerValue(kmDriven > 0 ? kmDriven.toFixed(1) : '');
                             }}
                           >
                             <Text style={styles.statsDistValue}>

@@ -67,6 +67,7 @@ export interface Car {
   photoUrl?: string;
   tagId?: string;
   odometerKm?: number;
+  odometerSetAt?: number;
   createdAt: number;
 }
 

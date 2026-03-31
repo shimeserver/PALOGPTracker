@@ -100,7 +100,7 @@ export async function getUserTags(userId: string): Promise<TagDef[]> {
 
 export interface RouteStats { totalDistance: number; maxSpeed: number; avgSpeed: number; count: number; }
 
-export async function getRouteStatsByTag(userId: string, tagId: string): Promise<RouteStats> {
+export async function getRouteStatsByTag(userId: string, tagId: string, since?: number): Promise<RouteStats> {
   // 同名タグを全部取得して array-contains-any で検索
   const allTags = await getUserTags(userId);
   const thisTag = allTags.find(t => t.id === tagId);
@@ -115,7 +115,8 @@ export async function getRouteStatsByTag(userId: string, tagId: string): Promise
     : query(collection(db, 'routes'), where('userId', '==', userId), where('tags', 'array-contains-any', ids));
   try {
     const snap = await getDocs(q);
-    const docs = snap.docs.map(d => d.data());
+    let docs = snap.docs.map(d => d.data());
+    if (since != null) docs = docs.filter(r => (r.startTime?.toMillis?.() ?? r.startTime) >= since);
     if (docs.length === 0) return { totalDistance: 0, maxSpeed: 0, avgSpeed: 0, count: 0 };
     return {
       totalDistance: docs.reduce((s, r) => s + (r.totalDistance || 0), 0),
