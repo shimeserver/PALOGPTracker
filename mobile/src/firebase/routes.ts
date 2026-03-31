@@ -110,6 +110,12 @@ export async function getRoute(routeId: string): Promise<Route | null> {
   } as Route;
 }
 
+// ルートのメタデータ更新（mode / tags / name）
+export async function updateRoute(routeId: string, patch: { mode?: string; tags?: string[]; name?: string }): Promise<void> {
+  const { updateDoc } = await import('firebase/firestore');
+  await updateDoc(doc(db, 'routes', routeId), patch);
+}
+
 // ルート削除
 export async function deleteRoute(routeId: string): Promise<void> {
   await deleteDoc(doc(db, 'routes', routeId));

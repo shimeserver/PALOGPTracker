@@ -26,7 +26,16 @@ function startLocalServer(distDir) {
       res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
       fs.createReadStream(filePath).pipe(res);
     });
-    localServer.listen(0, '127.0.0.1', () => resolve(localServer.address().port));
+    // 固定ポートを使い Firebase Auth の IndexedDB セッションを同一 origin に維持する
+    // ポートが競合した場合は次のポートを試す
+    const tryListen = (port) => {
+      localServer.listen(port, '127.0.0.1', () => resolve(localServer.address().port));
+      localServer.once('error', (err) => {
+        if (err.code === 'EADDRINUSE') { localServer.removeAllListeners('error'); tryListen(port + 1); }
+        else resolve(0);
+      });
+    };
+    tryListen(51932);
   });
 }
 
