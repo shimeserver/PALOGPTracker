@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import type { Route, TagDef } from '../firebase/data';
-import { createTag, deleteTag, updateRouteTags, updateRouteName } from '../firebase/data';
+import type { Route, TagDef, TrackingMode } from '../firebase/data';
+import { createTag, deleteTag, updateRouteTags, updateRouteName, updateRouteMode } from '../firebase/data';
 
 const TAG_COLORS = ['#ef4444','#f97316','#f59e0b','#22c55e','#2563eb','#8b5cf6','#ec4899','#06b6d4'];
 
@@ -48,6 +48,10 @@ export default function RoutesPanel({
   const [newTagName, setNewTagName]   = useState('');
   const [newTagColor, setNewTagColor] = useState(TAG_COLORS[4]);
   const [creatingTag, setCreatingTag] = useState(false);
+  const [editModeRoute, setEditModeRoute] = useState<Route | null>(null);
+  const [editMode, setEditMode] = useState<TrackingMode>('car');
+  const [editTagId, setEditTagId] = useState<string | null>(null);
+  const [savingMode, setSavingMode] = useState(false);
 
   const startEditName = (route: Route, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -120,6 +124,26 @@ export default function RoutesPanel({
       onTagsChange();
     } finally {
       setCreatingTag(false);
+    }
+  };
+
+  const openEditMode = (route: Route, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditModeRoute(route);
+    setEditMode((route.mode ?? 'car') as TrackingMode);
+    setEditTagId(route.tags[0] ?? null);
+  };
+
+  const handleSaveMode = async () => {
+    if (!editModeRoute?.id) return;
+    setSavingMode(true);
+    try {
+      const newTags = editTagId ? [editTagId] : [];
+      await updateRouteMode(editModeRoute.id, editMode, newTags);
+      onUpdateRoute({ ...editModeRoute, mode: editMode, tags: newTags });
+      setEditModeRoute(null);
+    } finally {
+      setSavingMode(false);
     }
   };
 
@@ -253,6 +277,9 @@ export default function RoutesPanel({
                     {route.source === 'imported' ? 'インポート' : '記録'}
                   </span>
                   <button style={styles.deleteBtn} onClick={e => startEditName(route, e)} title="名前を変更">✏️</button>
+                  <button style={styles.deleteBtn} onClick={e => openEditMode(route, e)} title="モード変更">
+                    {route.mode === 'walk' ? '🚶' : route.mode === 'bicycle' ? '🚲' : '🚗'}
+                  </button>
                   <button
                     style={styles.deleteBtn}
                     onClick={e => { e.stopPropagation(); onDelete(route); }}
@@ -351,6 +378,47 @@ export default function RoutesPanel({
                 disabled={creatingTag || !newTagName.trim()}
               >
                 {creatingTag ? '作成中...' : '作成'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* モード変更モーダル */}
+      {editModeRoute && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditModeRoute(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>移動モードを変更</div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {([['car', '🚗 車'], ['walk', '🚶 徒歩'], ['bicycle', '🚲 自転車']] as [TrackingMode, string][]).map(([m, label]) => (
+                <button key={m} onClick={() => setEditMode(m)}
+                  style={{ flex: 1, padding: '8px 4px', borderRadius: 8, border: '1.5px solid', cursor: 'pointer', fontSize: 13, fontWeight: 600, borderColor: editMode === m ? '#2563eb' : '#e8eaed', background: editMode === m ? '#eff6ff' : '#fff', color: editMode === m ? '#2563eb' : '#374151' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {tags.length > 0 && (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>タグ</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 20 }}>
+                  <button onClick={() => setEditTagId(null)}
+                    style={{ padding: '4px 12px', borderRadius: 20, border: '1.5px solid', cursor: 'pointer', fontSize: 12, borderColor: !editTagId ? '#2563eb' : '#e8eaed', background: !editTagId ? '#eff6ff' : '#fff', color: !editTagId ? '#2563eb' : '#374151' }}>
+                    なし
+                  </button>
+                  {tags.map(tag => (
+                    <button key={tag.id} onClick={() => setEditTagId(tag.id!)}
+                      style={{ padding: '4px 12px', borderRadius: 20, border: '2px solid', cursor: 'pointer', fontSize: 12, borderColor: tag.color, background: editTagId === tag.id ? tag.color : '#fff', color: editTagId === tag.id ? '#fff' : '#374151' }}>
+                      {tag.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setEditModeRoute(null)} style={{ flex: 1, padding: '9px', background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#374151' }}>キャンセル</button>
+              <button onClick={handleSaveMode} disabled={savingMode}
+                style={{ flex: 1, padding: '9px', background: '#2563eb', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#fff', fontWeight: 600 }}>
+                {savingMode ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

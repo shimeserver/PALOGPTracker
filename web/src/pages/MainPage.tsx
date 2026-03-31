@@ -202,7 +202,7 @@ export default function MainPage({ user }: Props) {
 
 const styles: Record<string, React.CSSProperties> = {
   container:     { display: 'flex', height: '100vh', overflow: 'hidden' },
-  sidebar:       { width: 360, background: '#ffffff', display: 'flex', flexDirection: 'column', borderRight: '1px solid #e8eaed', flexShrink: 0 },
+  sidebar:       { width: 400, background: '#ffffff', display: 'flex', flexDirection: 'column', borderRight: '1px solid #e8eaed', flexShrink: 0 },
   sidebarHeader: { padding: '16px 20px', borderBottom: '1px solid #e8eaed', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   logo:          { color: '#2563eb', fontWeight: 700, fontSize: 15 },
   logoutBtn:     { background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 12 },

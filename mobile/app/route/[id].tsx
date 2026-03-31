@@ -322,15 +322,15 @@ export default function RouteDetailScreen() {
       )}
 
       <View style={styles.panel}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2 }}>
-          <Text style={styles.routeName} numberOfLines={1}>{route.name}</Text>
-          <TouchableOpacity onPress={handleOpenEditMode} style={{ marginLeft: 8, marginTop: 2 }}>
+        <Text style={styles.routeName}>{route.name}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, gap: 10 }}>
+          <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
+          <TouchableOpacity onPress={handleOpenEditMode} style={{ backgroundColor: '#1e3a5f', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3 }}>
             <Text style={{ color: '#4fc3f7', fontSize: 12 }}>
               {route.mode === 'walk' ? '🚶' : route.mode === 'bicycle' ? '🚲' : '🚗'} 変更
             </Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
 
         <View style={styles.metrics}>
           <View style={styles.metric}>
@@ -471,8 +471,8 @@ const styles = StyleSheet.create({
   stopBadge: { backgroundColor: '#1e3a5f', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#0f3460' },
   stopBadgeText: { color: '#93c5fd', fontSize: 12 },
   panel: { backgroundColor: '#16213e', padding: 20, borderTopWidth: 1, borderTopColor: '#0f3460' },
-  routeName: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4, flex: 1 },
-  routeDate: { color: '#888', fontSize: 13, marginBottom: 16 },
+  routeName: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  routeDate: { color: '#888', fontSize: 13 },
   metrics: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 16 },
   metric: { alignItems: 'center' },
   metricVal: { color: '#4fc3f7', fontSize: 22, fontWeight: 'bold' },

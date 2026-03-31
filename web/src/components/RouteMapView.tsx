@@ -1,8 +1,10 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { GoogleMap, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
-import { getUserLandmarks } from '../firebase/data';
+import { getUserLandmarks, saveLandmark } from '../firebase/data';
 import type { Route, Landmark, TagDef } from '../firebase/data';
 import type { MapSettings } from './SettingsPanel';
+import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
+import type { StopCluster } from '../utils/visitDetection';
 
 export type MapTypeId = 'roadmap' | 'hybrid' | 'terrain';
 export type ColorMode = 'solid' | 'speed';
@@ -49,6 +51,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [playIndex, setPlayIndex]   = useState(0);
     const [playSpeed, setPlaySpeed]   = useState(5);
     const [openLandmark, setOpenLandmark] = useState<string | null>(null);
+    const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
+    const [addStopModal, setAddStopModal] = useState<StopCluster | null>(null);
+    const [newSpotName, setNewSpotName] = useState('');
+    const [newSpotCategory, setNewSpotCategory] = useState('その他');
+    const [savingSpot, setSavingSpot] = useState(false);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
@@ -71,7 +78,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     }));
 
     useEffect(() => { getUserLandmarks(userId).then(setLandmarks); }, [userId]);
-    useEffect(() => { setPlayback(false); setPlayIndex(0); }, [route?.id]);
+    useEffect(() => { setPlayback(false); setPlayIndex(0); setStopCandidates([]); }, [route?.id]);
+
+    // 停車候補を計算（route変化またはlandmarks変化時）
+    useEffect(() => {
+      if (!route || route.points.length < 2) { setStopCandidates([]); return; }
+      const stops = detectStops(route.points);
+      setStopCandidates(matchStopsToLandmarks(stops, landmarks));
+    }, [route?.id, landmarks]);
 
     useEffect(() => {
       if (!playback || !route) return;
@@ -83,6 +97,38 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }, 100);
       return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
     }, [playback, playSpeed, route?.id]);
+
+    const handleSaveStop = async () => {
+      if (!addStopModal || !newSpotName.trim()) return;
+      setSavingSpot(true);
+      try {
+        const now = Date.now();
+        const id = await saveLandmark({
+          userId,
+          name: newSpotName.trim(),
+          category: newSpotCategory,
+          lat: addStopModal.lat,
+          lng: addStopModal.lng,
+          description: '',
+          photos: [],
+          visitCount: 1,
+          firstVisit: addStopModal.startTime,
+          lastVisit: addStopModal.startTime,
+          createdAt: now,
+        });
+        const newLm: Landmark = {
+          id, userId, name: newSpotName.trim(), category: newSpotCategory,
+          lat: addStopModal.lat, lng: addStopModal.lng, description: '', photos: [],
+          visitCount: 1, firstVisit: addStopModal.startTime, lastVisit: addStopModal.startTime, createdAt: now,
+        };
+        setLandmarks(prev => [...prev, newLm]);
+        setAddStopModal(null);
+      } catch {
+        alert('保存に失敗しました');
+      } finally {
+        setSavingSpot(false);
+      }
+    };
 
     const onLoad = useCallback((map: google.maps.Map) => {
       mapRef.current = map;
@@ -234,7 +280,52 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               </Marker>
             );
           })}
+          {/* 青ピン：未登録の停車候補 */}
+          {!isAllMode && stopCandidates.map((sc, i) => (
+            <Marker
+              key={`stop-${i}`}
+              position={{ lat: sc.lat, lng: sc.lng }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#3b82f6', fillOpacity: 0.9, strokeColor: '#fff', strokeWeight: 2 }}
+              title={`停車 ${Math.round(sc.durationMs / 60000)}分`}
+              onClick={() => { setAddStopModal(sc); setNewSpotName(''); setNewSpotCategory('その他'); }}
+            />
+          ))}
         </GoogleMap>
+
+        {/* 青ピン：スポット登録モーダル */}
+        {addStopModal && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>スポットとして登録</div>
+              <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>
+                停車 {Math.round(addStopModal.durationMs / 60000)}分
+              </div>
+              <input
+                autoFocus
+                value={newSpotName}
+                onChange={e => setNewSpotName(e.target.value)}
+                placeholder="スポット名"
+                style={{ width: '100%', boxSizing: 'border-box', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '8px 12px', fontSize: 14, marginBottom: 12, outline: 'none' }}
+                onKeyDown={e => { if (e.key === 'Enter' && newSpotName.trim()) handleSaveStop(); }}
+              />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+                {['その他', 'グルメ', 'コンビニ', 'ガソリンスタンド', '観光', 'ショッピング'].map(cat => (
+                  <button key={cat} onClick={() => setNewSpotCategory(cat)}
+                    style={{ padding: '4px 10px', borderRadius: 20, border: '1.5px solid', fontSize: 12, cursor: 'pointer', borderColor: newSpotCategory === cat ? '#3b82f6' : '#e8eaed', background: newSpotCategory === cat ? '#3b82f6' : '#fff', color: newSpotCategory === cat ? '#fff' : '#374151' }}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setAddStopModal(null)} style={{ flex: 1, padding: '9px', background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#374151' }}>キャンセル</button>
+                <button onClick={handleSaveStop} disabled={!newSpotName.trim() || savingSpot}
+                  style={{ flex: 1, padding: '9px', background: newSpotName.trim() ? '#3b82f6' : '#93c5fd', border: 'none', borderRadius: 8, cursor: newSpotName.trim() ? 'pointer' : 'default', fontSize: 13, color: '#fff', fontWeight: 600 }}>
+                  {savingSpot ? '保存中...' : '登録'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 左下：地図タイプ切替 */}
         <div style={{ position:'absolute', bottom:20, left:10, zIndex:1000, display:'flex', flexDirection:'column', gap:4 }}>

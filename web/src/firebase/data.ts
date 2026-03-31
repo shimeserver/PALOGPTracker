@@ -166,6 +166,16 @@ export async function mergeLandmarks(keepId: string, deleteId: string, merged: {
   });
 }
 
+export async function saveLandmark(lm: Omit<Landmark, 'id'>): Promise<string> {
+  const docRef = await addDoc(collection(db, 'landmarks'), {
+    ...lm,
+    createdAt: Timestamp.fromMillis(lm.createdAt),
+    ...(lm.firstVisit !== undefined ? { firstVisit: Timestamp.fromMillis(lm.firstVisit) } : {}),
+    ...(lm.lastVisit  !== undefined ? { lastVisit:  Timestamp.fromMillis(lm.lastVisit)  } : {}),
+  });
+  return docRef.id;
+}
+
 export async function deleteLandmark(landmarkId: string): Promise<void> {
   // visitsサブコレクションを先に削除（Firestoreは親削除時にサブコレクションを自動削除しない）
   const visitsSnap = await getDocs(collection(db, 'landmarks', landmarkId, 'visits'));
@@ -215,6 +225,10 @@ export async function updateRouteTags(routeId: string, tagIds: string[]): Promis
 
 export async function updateRouteName(routeId: string, name: string): Promise<void> {
   await updateDoc(doc(db, 'routes', routeId), { name });
+}
+
+export async function updateRouteMode(routeId: string, mode: TrackingMode, tags: string[]): Promise<void> {
+  await updateDoc(doc(db, 'routes', routeId), { mode, tags });
 }
 
 // --- 写真アップロード（Web） ---
