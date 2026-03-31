@@ -17,7 +17,8 @@ export interface Car {
   photoUrl?: string;
   photoStoragePath?: string;
   tagId?: string;
-  odometerKm?: number;
+  odometerKm?: number;       // 手動入力した時点のオドメーター値（ベース）
+  odometerSetAt?: number;    // odometerKm を入力した時刻（ms）— これ以降のルートを加算
   createdAt: number;
 }
 

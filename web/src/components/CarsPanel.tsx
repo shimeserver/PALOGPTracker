@@ -492,8 +492,9 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handleSaveCarOdometer = async (carId: string, value: string) => {
     const km = parseFloat(value);
     if (isNaN(km) || km < 0) { setEditCarOdometer(null); return; }
-    await updateCar(carId, { odometerKm: km });
-    setCars(prev => prev.map(c => c.id === carId ? { ...c, odometerKm: km } : c));
+    const setAt = Date.now();
+    await updateCar(carId, { odometerKm: km, odometerSetAt: setAt });
+    setCars(prev => prev.map(c => c.id === carId ? { ...c, odometerKm: km, odometerSetAt: setAt } : c));
     setEditCarOdometer(null);
     showToast('走行距離を更新しました');
   };
@@ -598,6 +599,14 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
             const isExpanded = expandedId === car.id;
             const isActive = activeCar?.id === car.id;
             const stats = calcCarStats(routes, tags, car.tagId);
+            // オドメーター表示値: 手動ベース + 入力後のルート合計（入力なければルート合計のみ）
+            const routesAfterOdometer = car.odometerSetAt != null
+              ? routes.filter(r => routeMatchesCarTag(r.tags, tags, car.tagId!) && r.startTime >= car.odometerSetAt!)
+              : [];
+            const distanceAfter = routesAfterOdometer.reduce((s, r) => s + r.totalDistance, 0);
+            const displayOdometer = car.odometerKm != null
+              ? car.odometerKm + distanceAfter
+              : stats.totalDistance;
             const tag = tags.find(t => t.id === car.tagId);
             const fLogs = fuelLogs[car.id!] || [];
             const enriched = enrichFuelLogs(fLogs, routes, tags, car.tagId);
@@ -766,7 +775,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                           <div
                             style={{ background: '#fff', borderRadius: 10, padding: '12px 14px', border: '1px solid #e8eaed', cursor: 'pointer' }}
                             title="クリックして編集"
-                            onClick={() => setEditCarOdometer({ carId: car.id!, value: (car.odometerKm ?? stats.totalDistance).toFixed(0) })}
+                            onClick={() => setEditCarOdometer({ carId: car.id!, value: displayOdometer.toFixed(0) })}
                           >
                             <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
                               総走行距離
@@ -785,8 +794,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                               />
                             ) : (
                               <div style={{ fontSize: 18, fontWeight: 700, color: '#1f2937' }}>
-                                {(car.odometerKm ?? stats.totalDistance).toFixed(1)} km
-                                {car.odometerKm != null && <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 400, marginLeft: 4 }}>手動</span>}
+                                {displayOdometer.toFixed(1)} km
+                                {car.odometerKm != null && <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 400, marginLeft: 4 }}>+{distanceAfter.toFixed(0)}km</span>}
                               </div>
                             )}
                           </div>
