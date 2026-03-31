@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Tex
 import { useLocalSearchParams } from 'expo-router';
 import WebView from 'react-native-webview';
 import { getRoute, updateRoute } from '../../src/firebase/routes';
-import { getUserCars, getUserTags } from '../../src/firebase/cars';
+import { getUserTags } from '../../src/firebase/cars';
 import { saveLandmark, getUserLandmarks, recordVisit } from '../../src/firebase/landmarks';
 import { Route, TrackingMode } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
