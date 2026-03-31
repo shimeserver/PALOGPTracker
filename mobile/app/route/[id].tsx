@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, ScrollView } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import WebView from 'react-native-webview';
-import { getRoute } from '../../src/firebase/routes';
+import { getRoute, updateRoute } from '../../src/firebase/routes';
+import { getUserCars, getUserTags } from '../../src/firebase/cars';
 import { saveLandmark, getUserLandmarks, recordVisit } from '../../src/firebase/landmarks';
-import { Route } from '../../src/types';
+import { Route, TrackingMode } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
 import { detectStops, matchStopsToLandmarks, StopCluster } from '../../src/utils/visitDetection';
 
@@ -140,10 +141,22 @@ export default function RouteDetailScreen() {
   const [newSpotCategory, setNewSpotCategory] = useState('その他');
   const [saving, setSaving] = useState(false);
 
+  // モード／タグ編集
+  const [editModeModal, setEditModeModal] = useState(false);
+  const [editMode, setEditMode] = useState<TrackingMode>('car');
+  const [editTagId, setEditTagId] = useState<string | null>(null);
+  const [userTags, setUserTags] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [savingMode, setSavingMode] = useState(false);
+
   useEffect(() => {
     if (!id) return;
     getRoute(id).then(r => { setRoute(r); setLoading(false); });
   }, [id]);
+
+  useEffect(() => {
+    if (!user) return;
+    getUserTags(user.uid).then(setUserTags).catch(() => {});
+  }, [user]);
 
   // ルート読み込み後に停車クラスタを解析
   useEffect(() => {
@@ -160,10 +173,10 @@ export default function RouteDetailScreen() {
   }, [route, user]);
 
   const handleLoad = () => {
-    if (!route) return;
+    initialized.current = true;
+    if (!route) return; // route未着なら useEffect([route]) が後で送る
     const pts = JSON.stringify(route.points);
     webviewRef.current?.injectJavaScript(`window.initRoute(${pts});true;`);
-    initialized.current = true;
     if (stopCandidates.length > 0) {
       webviewRef.current?.injectJavaScript(`window.setStopCandidates(${JSON.stringify(stopCandidates)});true;`);
     }
@@ -172,6 +185,8 @@ export default function RouteDetailScreen() {
   useEffect(() => {
     if (route && initialized.current) {
       webviewRef.current?.injectJavaScript(`window.initRoute(${JSON.stringify(route.points)});true;`);
+      // WebViewロード後にrouteが到着したケース: stopCandidatesはまだ空なので
+      // useEffect([route, user]) 内の matchStopsToLandmarks 完了後に送られる
     }
   }, [route]);
 
@@ -184,6 +199,28 @@ export default function RouteDetailScreen() {
         setNewSpotCategory('その他');
       }
     } catch {}
+  };
+
+  const handleOpenEditMode = () => {
+    if (!route) return;
+    setEditMode((route.mode ?? 'car') as TrackingMode);
+    setEditTagId(route.tags?.[0] ?? null);
+    setEditModeModal(true);
+  };
+
+  const handleSaveMode = async () => {
+    if (!route?.id) return;
+    setSavingMode(true);
+    try {
+      const tags = editTagId ? [editTagId] : [];
+      await updateRoute(route.id, { mode: editMode, tags });
+      setRoute(r => r ? { ...r, mode: editMode, tags } : r);
+      setEditModeModal(false);
+    } catch {
+      Alert.alert('エラー', '更新に失敗しました');
+    } finally {
+      setSavingMode(false);
+    }
   };
 
   const handleSaveSpot = async () => {
@@ -285,7 +322,14 @@ export default function RouteDetailScreen() {
       )}
 
       <View style={styles.panel}>
-        <Text style={styles.routeName}>{route.name}</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2 }}>
+          <Text style={styles.routeName} numberOfLines={1}>{route.name}</Text>
+          <TouchableOpacity onPress={handleOpenEditMode} style={{ marginLeft: 8, marginTop: 2 }}>
+            <Text style={{ color: '#4fc3f7', fontSize: 12 }}>
+              {route.mode === 'walk' ? '🚶' : route.mode === 'bicycle' ? '🚲' : '🚗'} 変更
+            </Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
 
         <View style={styles.metrics}>
@@ -360,6 +404,56 @@ export default function RouteDetailScreen() {
                 disabled={!newSpotName.trim() || saving}
               >
                 <Text style={styles.saveBtnText}>{saving ? '保存中...' : '追加'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* モード／タグ編集モーダル */}
+      <Modal visible={editModeModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>移動モードを変更</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+              {([['car', '🚗 車'], ['walk', '🚶 徒歩'], ['bicycle', '🚲 自転車']] as [TrackingMode, string][]).map(([m, label]) => (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.catBtn, { flex: 1, alignItems: 'center' }, editMode === m && styles.catBtnActive]}
+                  onPress={() => setEditMode(m)}
+                >
+                  <Text style={[styles.catBtnText, editMode === m && styles.catBtnTextActive]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {userTags.length > 0 && (
+              <>
+                <Text style={styles.catLabel}>タグ（車）</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+                  <TouchableOpacity
+                    style={[styles.catBtn, !editTagId && styles.catBtnActive]}
+                    onPress={() => setEditTagId(null)}
+                  >
+                    <Text style={[styles.catBtnText, !editTagId && styles.catBtnTextActive]}>なし</Text>
+                  </TouchableOpacity>
+                  {userTags.map(tag => (
+                    <TouchableOpacity
+                      key={tag.id}
+                      style={[styles.catBtn, { marginLeft: 8, borderColor: tag.color, borderWidth: 2 }, editTagId === tag.id && { backgroundColor: tag.color }]}
+                      onPress={() => setEditTagId(tag.id)}
+                    >
+                      <Text style={[styles.catBtnText, editTagId === tag.id && { color: '#fff' }]}>{tag.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </>
+            )}
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditModeModal(false)}>
+                <Text style={styles.cancelBtnText}>キャンセル</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.saveBtn, savingMode && styles.saveBtnDisabled]} onPress={handleSaveMode} disabled={savingMode}>
+                <Text style={styles.saveBtnText}>{savingMode ? '保存中...' : '保存'}</Text>
               </TouchableOpacity>
             </View>
           </View>
