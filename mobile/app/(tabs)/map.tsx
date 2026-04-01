@@ -57,7 +57,10 @@ var initialized = false;
 var headingUpMode = false;
 
 function makeLocIcon(arrow){
-  if(arrow) return L.divIcon({html:'<div class="loc-arrow"></div>',iconSize:[20,30],iconAnchor:[10,20],className:''});
+  if(arrow) return L.divIcon({
+    html:'<div style="width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:30px solid #2563eb;filter:drop-shadow(0 2px 6px rgba(37,99,235,0.6))"></div>',
+    iconSize:[20,30],iconAnchor:[10,25],className:''
+  });
   return L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 }
 
@@ -69,7 +72,7 @@ function makeLandmarkIcon(name){
 
 window.initMap = function(lat,lng,routeCoords,landmarks){
   if(locMarker) map.removeLayer(locMarker);
-  locMarker = L.marker([lat,lng],{icon:makeLocIcon(false),zIndexOffset:1000}).addTo(map);
+  locMarker = L.marker([lat,lng],{icon:makeLocIcon(headingUpMode),zIndexOffset:1000}).addTo(map);
   if(!initialized){ map.setView([lat,lng],15); initialized=true; }
   window.updateRoute(routeCoords);
   window.setLandmarks(landmarks);
@@ -78,7 +81,7 @@ window.initMap = function(lat,lng,routeCoords,landmarks){
 var followMode = false;
 
 window.updateLocation = function(lat,lng){
-  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(false),zIndexOffset:1000}).addTo(map); }
+  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(headingUpMode),zIndexOffset:1000}).addTo(map); }
   else { locMarker.setLatLng([lat,lng]); }
   if(followMode){ map.panTo([lat,lng],{animate:true,duration:0.5}); }
 };
