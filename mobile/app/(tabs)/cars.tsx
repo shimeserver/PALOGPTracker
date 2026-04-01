@@ -15,8 +15,10 @@ import {
   getMaintenanceLogs, addMaintenanceLog, deleteMaintenanceLog, updateMaintenanceLog,
   uploadCarPhoto, getRouteStatsByTag, RouteStats, getUserTags, TagDef,
 } from '../../src/firebase/cars';
-import { getUserRoutesMetadata, RouteMetadata } from '../../src/firebase/routes';
+import { getUserRoutesMetadata, getUserRoutesMetadataSince, RouteMetadata } from '../../src/firebase/routes';
+import { loadCachedRoutes, saveRoutesCache, mergeRoutes } from '../../src/utils/routeCache';
 import { Car, FuelLog, MaintenanceLog, MaintenanceType, MAINTENANCE_LABELS } from '../../src/types';
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import HelpModal from '../../src/components/HelpModal';
 
 interface PeriodStats { km: number; calories: number; steps?: number; }
@@ -111,12 +113,13 @@ export default function CarsScreen() {
   const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '' });
   const [savingFuel, setSavingFuel] = useState(false);
 
-  // Add maintenance modal
+  // Add/edit maintenance modal
   const [showAddMaint, setShowAddMaint] = useState<string | null>(null);
+  const [editMaintLog, setEditMaintLog] = useState<{ carId: string; log: MaintenanceLog } | null>(null);
   const [maintForm, setMaintForm] = useState<{
     type: MaintenanceType; customLabel: string; itemType: string; odometerKm: string;
-    cost: string; notes: string; nextDueMonths: string; nextDueKm: string;
-  }>({ type: 'oil', customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
+    cost: string; notes: string; nextDueMonths: string; nextDueKm: string; timestamp: number;
+  }>({ type: 'oil', customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '', timestamp: Date.now() });
   const [savingMaint, setSavingMaint] = useState(false);
 
   // Odometer inline edit
@@ -136,7 +139,31 @@ export default function CarsScreen() {
       .then(c => { if (isMounted) { setCars(c); setLoading(false); } })
       .catch(() => { if (isMounted) { setLoading(false); Alert.alert('エラー', 'データの読み込みに失敗しました'); } });
     getUserTags(user.uid).then(t => { if (isMounted) setUserTags(t); }).catch(() => {});
-    getUserRoutesMetadata(user.uid).then(r => { if (isMounted) setAllRoutes(r); }).catch(() => {});
+    // allRoutes: キャッシュ即表示 → 差分フェッチ
+    (async () => {
+      const cached = await loadCachedRoutes(user.uid);
+      if (!isMounted) return;
+      if (cached) {
+        setAllRoutes(cached.routes);
+        // 差分フェッチ
+        try {
+          const newRoutes = await getUserRoutesMetadataSince(user.uid, cached.lastFetchTime);
+          if (!isMounted) return;
+          if (newRoutes.length > 0) {
+            const merged = mergeRoutes(cached.routes, newRoutes);
+            setAllRoutes(merged);
+            await saveRoutesCache(user.uid, merged, Date.now());
+          }
+        } catch { /* ignore */ }
+      } else {
+        try {
+          const r = await getUserRoutesMetadata(user.uid);
+          if (!isMounted) return;
+          setAllRoutes(r);
+          await saveRoutesCache(user.uid, r, Date.now());
+        } catch { /* ignore */ }
+      }
+    })();
     return () => { isMounted = false; };
   }, [user?.uid]);
 
@@ -313,26 +340,68 @@ export default function CarsScreen() {
     ]);
   };
 
+  const MAINT_FORM_EMPTY = { type: 'oil' as MaintenanceType, customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '', timestamp: Date.now() };
+  const closeMaintModal = () => { setShowAddMaint(null); setEditMaintLog(null); setMaintForm(MAINT_FORM_EMPTY); };
+
+  const handleOpenEditMaint = (carId: string, log: MaintenanceLog) => {
+    setEditMaintLog({ carId, log });
+    setMaintForm({
+      type: log.type,
+      customLabel: log.customLabel || '',
+      itemType: log.itemType || '',
+      odometerKm: log.odometerKm?.toString() || '',
+      cost: log.cost?.toString() || '',
+      notes: log.notes || '',
+      nextDueMonths: log.nextDueMonths?.toString() || '',
+      nextDueKm: log.nextDueKm?.toString() || '',
+      timestamp: log.timestamp,
+    });
+    setShowAddMaint(carId);
+  };
+
+  const openDatePicker = () => {
+    DateTimePickerAndroid.open({
+      value: new Date(maintForm.timestamp),
+      mode: 'date',
+      onChange: (_, date) => {
+        if (!date) return;
+        // 時刻部分は元の値を維持しつつ日付だけ変更
+        const orig = new Date(maintForm.timestamp);
+        date.setHours(orig.getHours(), orig.getMinutes(), orig.getSeconds());
+        setMaintForm(f => ({ ...f, timestamp: date.getTime() }));
+      },
+    });
+  };
+
   const handleSaveMaint = async (carId: string) => {
     if (savingMaint) return;
     setSavingMaint(true);
     try {
-      const logData: Parameters<typeof addMaintenanceLog>[1] = {
+      const patch: Omit<MaintenanceLog, 'id' | 'carId'> = {
         type: maintForm.type,
-        timestamp: Date.now(),
+        timestamp: maintForm.timestamp,
       };
-      if (maintForm.type === 'other' && maintForm.customLabel.trim()) logData.customLabel = maintForm.customLabel.trim();
-      if ((maintForm.type === 'oil' || maintForm.type === 'tire') && maintForm.itemType.trim()) logData.itemType = maintForm.itemType.trim();
-      if (maintForm.odometerKm) logData.odometerKm = parseFloat(maintForm.odometerKm);
-      if (maintForm.cost) logData.cost = parseFloat(maintForm.cost);
-      if (maintForm.notes.trim()) logData.notes = maintForm.notes.trim();
-      if (maintForm.nextDueMonths) logData.nextDueMonths = parseInt(maintForm.nextDueMonths);
-      if (maintForm.nextDueKm) logData.nextDueKm = parseFloat(maintForm.nextDueKm);
-      const log = await addMaintenanceLog(carId, logData);
-      setMaintLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
-      setShowAddMaint(null);
-      setMaintForm({ type: 'oil', customLabel: '', itemType: '', odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
-      showToast('整備記録を保存しました');
+      if (maintForm.type === 'other' && maintForm.customLabel.trim()) patch.customLabel = maintForm.customLabel.trim();
+      if ((maintForm.type === 'oil' || maintForm.type === 'tire') && maintForm.itemType.trim()) patch.itemType = maintForm.itemType.trim();
+      if (maintForm.odometerKm) patch.odometerKm = parseFloat(maintForm.odometerKm);
+      if (maintForm.cost) patch.cost = parseFloat(maintForm.cost);
+      if (maintForm.notes.trim()) patch.notes = maintForm.notes.trim();
+      if (maintForm.nextDueMonths) patch.nextDueMonths = parseInt(maintForm.nextDueMonths);
+      if (maintForm.nextDueKm) patch.nextDueKm = parseFloat(maintForm.nextDueKm);
+
+      if (editMaintLog) {
+        await updateMaintenanceLog(carId, editMaintLog.log.id!, patch);
+        setMaintLogs(prev => ({
+          ...prev,
+          [carId]: (prev[carId] || []).map(l => l.id === editMaintLog.log.id ? { ...l, ...patch } : l),
+        }));
+        showToast('更新しました');
+      } else {
+        const log = await addMaintenanceLog(carId, patch);
+        setMaintLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
+        showToast('整備記録を保存しました');
+      }
+      closeMaintModal();
     } catch {
       showToast('保存に失敗しました');
     } finally { setSavingMaint(false); }
@@ -715,7 +784,7 @@ export default function CarsScreen() {
                         const warnKm = !!(log.nextDueKm && log.odometerKm && kmDriven > 0 && (kmDriven - log.odometerKm) >= log.nextDueKm - 300);
                         const isWarning = warnMonths || warnKm;
                         return (
-                          <TouchableOpacity key={log.id} style={[styles.logItem, isWarning ? styles.logItemWarning : undefined]} onLongPress={() => handleDeleteMaint(car.id!, log)}>
+                          <TouchableOpacity key={log.id} style={[styles.logItem, isWarning ? styles.logItemWarning : undefined]} onPress={() => handleOpenEditMaint(car.id!, log)} onLongPress={() => handleDeleteMaint(car.id!, log)}>
                             <View style={{ flex: 1 }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                 <Text style={styles.logMain}>{label}</Text>
@@ -724,6 +793,14 @@ export default function CarsScreen() {
                               <Text style={styles.logDate}>{new Date(log.timestamp).toLocaleDateString('ja-JP')}</Text>
                               <Text style={styles.logSub}>経過: {elapsed}</Text>
                               {log.odometerKm && <Text style={styles.logSub}>施工時: {log.odometerKm.toLocaleString()} km</Text>}
+                              {log.odometerKm && kmDriven > 0 && (() => {
+                                const kmSince = kmDriven - log.odometerKm;
+                                return kmSince > 0 ? (
+                                  <Text style={[styles.logSub, warnKm ? { color: '#ef4444', fontWeight: '700' } : undefined]}>
+                                    前回から: +{Math.round(kmSince).toLocaleString()} km
+                                  </Text>
+                                ) : null;
+                              })()}
                               {log.nextDueMonths && <Text style={[styles.logSub, warnMonths ? { color: '#ef4444' } : undefined]}>次回目安: {log.nextDueMonths}ヶ月後</Text>}
                               {log.nextDueKm && <Text style={[styles.logSub, warnKm ? { color: '#ef4444' } : undefined]}>次回目安: +{log.nextDueKm.toLocaleString()}km</Text>}
                             </View>
@@ -839,12 +916,15 @@ export default function CarsScreen() {
         </View>
       </Modal>
 
-      {/* 整備記録モーダル */}
+      {/* 整備記録モーダル（追加・編集共用） */}
       <Modal visible={!!showAddMaint} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <ScrollView>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>🔧 整備を記録</Text>
+              <Text style={styles.modalTitle}>{editMaintLog ? '🔧 整備記録を編集' : '🔧 整備を記録'}</Text>
+              <TouchableOpacity style={styles.datePickerBtn} onPress={openDatePicker}>
+                <Text style={styles.datePickerBtnText}>📅 {new Date(maintForm.timestamp).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })}</Text>
+              </TouchableOpacity>
               <View style={styles.typeGrid}>
                 {(Object.keys(MAINTENANCE_LABELS) as MaintenanceType[]).map(t => (
                   <TouchableOpacity
@@ -877,9 +957,9 @@ export default function CarsScreen() {
                 onPress={() => showAddMaint && handleSaveMaint(showAddMaint)}
                 disabled={savingMaint}
               >
-                <Text style={styles.modalButtonText}>{savingMaint ? '保存中...' : '記録する'}</Text>
+                <Text style={styles.modalButtonText}>{savingMaint ? '保存中...' : editMaintLog ? '更新する' : '記録する'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowAddMaint(null)}>
+              <TouchableOpacity onPress={closeMaintModal}>
                 <Text style={styles.modalCancel}>キャンセル</Text>
               </TouchableOpacity>
             </View>
@@ -983,6 +1063,8 @@ const styles = StyleSheet.create({
   modalButton: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 12, marginTop: 4 },
   modalButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   modalCancel: { color: '#9ca3af', textAlign: 'center', fontSize: 14 },
+  datePickerBtn: { backgroundColor: '#f3f4f6', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12, alignSelf: 'flex-start' },
+  datePickerBtnText: { fontSize: 14, color: '#1f2937', fontWeight: '600' },
   sectionLabel: { color: '#9ca3af', fontSize: 11, fontWeight: '600', letterSpacing: 0.5, marginBottom: 8 },
   colorRow: { flexDirection: 'row', gap: 10, marginBottom: 14, flexWrap: 'wrap' },
   colorDot: { width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent' },

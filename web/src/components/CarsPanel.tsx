@@ -136,7 +136,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   // 整備記録編集モーダル
   const [editMaintModal, setEditMaintModal] = useState<{ carId: string; log: MaintenanceLog } | null>(null);
-  const [editMaintForm, setEditMaintForm] = useState<{ itemType: string; nextDueMonths: string; nextDueKm: string; notes: string }>({ itemType: '', nextDueMonths: '', nextDueKm: '', notes: '' });
+  const [editMaintForm, setEditMaintForm] = useState<{ date: string; itemType: string; nextDueMonths: string; nextDueKm: string; notes: string }>({ date: '', itemType: '', nextDueMonths: '', nextDueKm: '', notes: '' });
 
   // Car total odometer edit
   const [editCarOdometer, setEditCarOdometer] = useState<{ carId: string; value: string } | null>(null);
@@ -382,6 +382,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const openEditMaint = (carId: string, log: MaintenanceLog) => {
     setEditMaintModal({ carId, log });
     setEditMaintForm({
+      date: new Date(log.timestamp).toISOString().slice(0, 10),
       itemType: log.itemType || '',
       nextDueMonths: log.nextDueMonths?.toString() || '',
       nextDueKm: log.nextDueKm?.toString() || '',
@@ -392,8 +393,11 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const handleUpdateMaint = async () => {
     if (!editMaintModal) return;
     const { carId, log } = editMaintModal;
+    const [y, m, d] = editMaintForm.date.split('-').map(Number);
+    const newTimestamp = editMaintForm.date ? new Date(y, m - 1, d).getTime() : log.timestamp;
     // 空フィールドはdeleteField()でFirestoreから削除、値があれば更新
     const patch: Record<string, unknown> = {
+      timestamp: newTimestamp,
       itemType: editMaintForm.itemType.trim() || deleteField(),
       notes: editMaintForm.notes.trim() || deleteField(),
       nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : deleteField(),
@@ -401,6 +405,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     };
     await updateMaintenanceLog(carId, log.id!, patch as Parameters<typeof updateMaintenanceLog>[2]);
     const localUpdate: Partial<MaintenanceLog> = {
+      timestamp: newTimestamp,
       itemType: editMaintForm.itemType.trim() || undefined,
       notes: editMaintForm.notes.trim() || undefined,
       nextDueMonths: editMaintForm.nextDueMonths ? parseInt(editMaintForm.nextDueMonths) : undefined,
@@ -1007,7 +1012,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditMaintModal(null)}>
           <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ color: '#1f2937', fontSize: 16, fontWeight: 700, marginBottom: 4 }}>✏️ 整備記録を編集</h3>
-            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16 }}>{MAINTENANCE_LABELS[editMaintModal.log.type]} — {new Date(editMaintModal.log.timestamp).toLocaleDateString('ja-JP')}</div>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>{MAINTENANCE_LABELS[editMaintModal.log.type]}</div>
+            <input style={s.input} type="date" value={editMaintForm.date} onChange={e => setEditMaintForm(f => ({ ...f, date: e.target.value }))} />
             {(editMaintModal.log.type === 'oil' || editMaintModal.log.type === 'tire') && (
               <input style={s.input} placeholder={editMaintModal.log.type === 'oil' ? 'オイル銘柄（任意）' : 'タイヤ銘柄（任意）'} value={editMaintForm.itemType} onChange={e => setEditMaintForm(f => ({ ...f, itemType: e.target.value }))} />
             )}

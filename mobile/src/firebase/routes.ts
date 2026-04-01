@@ -35,9 +35,49 @@ function parseFirestoreValue(v: Record<string, unknown>): unknown {
 
 // ユーザーのルート一覧取得（メタデータのみ — REST API select で points[] をネットワーク転送から除外）
 export async function getUserRoutesMetadata(userId: string): Promise<RouteMetadata[]> {
+  return _fetchRoutesMetadata(userId, null);
+}
+
+// since(ms) 以降に記録されたルートのみ取得（差分フェッチ用）
+export async function getUserRoutesMetadataSince(userId: string, since: number): Promise<RouteMetadata[]> {
+  return _fetchRoutesMetadata(userId, since);
+}
+
+async function _fetchRoutesMetadata(userId: string, since: number | null): Promise<RouteMetadata[]> {
   const projectId = (db.app.options as { projectId: string }).projectId;
   const token = await auth.currentUser?.getIdToken();
   if (!token) throw new Error('Not authenticated');
+
+  const selectFields = [
+    'userId', 'name', 'tags', 'startTime', 'endTime',
+    'totalDistance', 'avgSpeed', 'maxSpeed', 'source', 'mode', 'createdAt',
+  ].map(f => ({ fieldPath: f }));
+
+  const userFilter = {
+    fieldFilter: {
+      field: { fieldPath: 'userId' },
+      op: 'EQUAL',
+      value: { stringValue: userId },
+    },
+  };
+
+  const whereClause = since != null
+    ? {
+        compositeFilter: {
+          op: 'AND',
+          filters: [
+            userFilter,
+            {
+              fieldFilter: {
+                field: { fieldPath: 'startTime' },
+                op: 'GREATER_THAN',
+                value: { timestampValue: new Date(since).toISOString() },
+              },
+            },
+          ],
+        },
+      }
+    : userFilter;
 
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
   const res = await fetch(url, {
@@ -45,20 +85,9 @@ export async function getUserRoutesMetadata(userId: string): Promise<RouteMetada
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       structuredQuery: {
-        select: {
-          fields: [
-            'userId', 'name', 'tags', 'startTime', 'endTime',
-            'totalDistance', 'avgSpeed', 'maxSpeed', 'source', 'mode', 'createdAt',
-          ].map(f => ({ fieldPath: f })),
-        },
+        select: { fields: selectFields },
         from: [{ collectionId: 'routes' }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: 'userId' },
-            op: 'EQUAL',
-            value: { stringValue: userId },
-          },
-        },
+        where: whereClause,
       },
     }),
   });

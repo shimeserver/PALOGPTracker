@@ -11,6 +11,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-community/datetimepicker": "^9.1.0",
     "expo": "~55.0.8",
     "expo-document-picker": "~55.0.9",
     "expo-file-system": "~55.0.11",

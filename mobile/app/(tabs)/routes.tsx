@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
-import { getUserRoutesMetadata, deleteRoute, RouteMetadata } from '../../src/firebase/routes';
+import { getUserRoutesMetadata, getUserRoutesMetadataSince, deleteRoute, RouteMetadata } from '../../src/firebase/routes';
+import { loadCachedRoutes, saveRoutesCache, clearRoutesCache, mergeRoutes } from '../../src/utils/routeCache';
 import HelpModal from '../../src/components/HelpModal';
 import { useUiStore } from '../../src/store/uiStore';
 
@@ -25,21 +26,64 @@ export default function RoutesScreen() {
   const { user } = useAuthStore();
   const [routes, setRoutes] = useState<RouteMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'routes';
+  const initialLoadDone = useRef(false);
 
+  // 起動時: キャッシュを即表示 → 差分フェッチ
+  useEffect(() => {
+    if (!user || initialLoadDone.current) return;
+    initialLoadDone.current = true;
+
+    (async () => {
+      const cached = await loadCachedRoutes(user.uid);
+      if (cached) {
+        setRoutes(cached.routes);
+        setLoading(false);
+        // 差分フェッチ
+        setSyncing(true);
+        try {
+          const newRoutes = await getUserRoutesMetadataSince(user.uid, cached.lastFetchTime);
+          if (newRoutes.length > 0) {
+            const merged = mergeRoutes(cached.routes, newRoutes);
+            setRoutes(merged);
+            await saveRoutesCache(user.uid, merged, Date.now());
+          }
+        } catch {
+          // 差分フェッチ失敗は無視（キャッシュ表示のまま）
+        } finally {
+          setSyncing(false);
+        }
+      } else {
+        // キャッシュなし: フルフェッチ
+        try {
+          const data = await getUserRoutesMetadata(user.uid);
+          setRoutes(data);
+          await saveRoutesCache(user.uid, data, Date.now());
+        } catch {
+          Alert.alert('エラー', 'データの読み込みに失敗しました');
+        } finally {
+          setLoading(false);
+        }
+      }
+    })();
+  }, [user]);
+
+  // プルダウン更新: フルフェッチでキャッシュ再構築
   const loadRoutes = async () => {
     if (!user) return;
     setLoading(true);
     try {
       const data = await getUserRoutesMetadata(user.uid);
       setRoutes(data);
+      await saveRoutesCache(user.uid, data, Date.now());
+    } catch {
+      Alert.alert('エラー', 'データの読み込みに失敗しました');
     } finally {
       setLoading(false);
     }
   };
-
-  useEffect(() => { loadRoutes(); }, [user]);
 
   const handleDelete = (route: RouteMetadata) => {
     Alert.alert('削除確認', `「${route.name}」を削除しますか？`, [
@@ -48,7 +92,11 @@ export default function RoutesScreen() {
         text: '削除', style: 'destructive',
         onPress: async () => {
           await deleteRoute(route.id!);
-          setRoutes(r => r.filter(x => x.id !== route.id));
+          setRoutes(r => {
+            const updated = r.filter(x => x.id !== route.id);
+            if (user) saveRoutesCache(user.uid, updated, Date.now());
+            return updated;
+          });
         },
       },
     ]);
@@ -86,6 +134,12 @@ export default function RoutesScreen() {
   return (
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="ルート画面の使い方" items={ROUTES_HELP} />
+      {syncing && (
+        <View style={styles.syncBar}>
+          <ActivityIndicator size="small" color="#2563eb" />
+          <Text style={styles.syncText}>同期中...</Text>
+        </View>
+      )}
       {loading ? (
         <ActivityIndicator color="#2563eb" style={{ marginTop: 64 }} />
       ) : (
@@ -107,6 +161,8 @@ export default function RoutesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9' },
+  syncBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 6, backgroundColor: '#eff6ff' },
+  syncText: { fontSize: 12, color: '#2563eb' },
   helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   card: {

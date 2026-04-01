@@ -51,18 +51,7 @@ var startMarker = null;
 var landmarkMarkers = [];
 var initialized = false;
 
-function makeLocIcon(arrow){
-  if(arrow) return L.divIcon({
-    html:'<div style="width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:30px solid #2563eb;filter:drop-shadow(0 2px 6px rgba(37,99,235,0.6))"></div>',
-    iconSize:[20,30],iconAnchor:[10,25],className:''
-  });
-  return L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
-}
-
-// アイコン切り替え（主観モードON/OFFをRN側からコール）
-window.setLocArrow = function(arrow){
-  if(locMarker) locMarker.setIcon(makeLocIcon(arrow));
-};
+var locIcon = L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 
 function makeLandmarkIcon(name){
   var short = name.length > 8 ? name.slice(0,8)+'…' : name;
@@ -72,7 +61,7 @@ function makeLandmarkIcon(name){
 
 window.initMap = function(lat,lng,routeCoords,landmarks){
   if(locMarker) map.removeLayer(locMarker);
-  locMarker = L.marker([lat,lng],{icon:makeLocIcon(headingUpMode),zIndexOffset:1000}).addTo(map);
+  locMarker = L.marker([lat,lng],{icon:locIcon,zIndexOffset:1000}).addTo(map);
   if(!initialized){ map.setView([lat,lng],15); initialized=true; }
   window.updateRoute(routeCoords);
   window.setLandmarks(landmarks);
@@ -81,7 +70,7 @@ window.initMap = function(lat,lng,routeCoords,landmarks){
 var followMode = false;
 
 window.updateLocation = function(lat,lng){
-  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(headingUpMode),zIndexOffset:1000}).addTo(map); }
+  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:locIcon,zIndexOffset:1000}).addTo(map); }
   else { locMarker.setLatLng([lat,lng]); }
   if(followMode){ map.panTo([lat,lng],{animate:true,duration:0.5}); }
 };
@@ -221,12 +210,10 @@ export default function MapScreen() {
       setHeadingMode(false);
       setFollowing(false);
       mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: '0deg' }] } });
-      webviewRef.current?.injectJavaScript(`window.setLocArrow(false);true;`);
     } else {
       // ON
       setHeadingMode(true);
       setFollowing(true);
-      webviewRef.current?.injectJavaScript(`window.setLocArrow(true);true;`);
       if (currentLocation) {
         webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
       }
@@ -312,7 +299,6 @@ export default function MapScreen() {
               setHeadingMode(false);
               setFollowing(false);
               mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: '0deg' }] } });
-              webviewRef.current?.injectJavaScript(`window.setLocArrow(false);true;`);
             }
           } catch {}
         }}
@@ -378,13 +364,13 @@ const styles = StyleSheet.create({
   mapOuter: { flex: 1, overflow: 'hidden' },
   helpBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
-  locBtn: { position: 'absolute', bottom: 100, right: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  locBtn: { position: 'absolute', bottom: 24, right: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   locBtnText: { fontSize: 22, color: '#2563eb' },
-  headingBtn: { position: 'absolute', bottom: 204, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  headingBtn: { position: 'absolute', bottom: 128, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   headingBtnActive: { backgroundColor: '#f59e0b' },
   headingBtnText: { fontSize: 13, fontWeight: '700', color: '#6b7280' },
   headingBtnTextActive: { color: '#fff' },
-  followBtn: { position: 'absolute', bottom: 152, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  followBtn: { position: 'absolute', bottom: 76, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   followBtnActive: { backgroundColor: '#2563eb' },
   followBtnText: { fontSize: 13, fontWeight: '700', color: '#2563eb' },
   followBtnTextActive: { color: '#fff' },
