@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useUiStore } from '../../src/store/uiStore';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
 import { useTrackingStore } from '../../src/store/trackingStore';
@@ -24,10 +24,7 @@ const MAP_HTML = `<!DOCTYPE html>
   <link rel="stylesheet" href="file:///android_asset/leaflet.min.css"/>
   <script src="file:///android_asset/leaflet.min.js"></script>
   <style>
-    body,html{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}
-    /* 150%×150%のラッパーで回転時の角切れを防ぐ */
-    #map-outer{position:absolute;width:150%;height:150%;top:-25%;left:-25%;transform-origin:50% 50%}
-    #map{width:100%;height:100%}
+    body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
     .leaflet-control-attribution{font-size:9px}
     .leaflet-popup-content-wrapper{border-radius:10px;box-shadow:0 3px 12px rgba(0,0,0,0.2)}
     .leaflet-popup-content{margin:10px 14px;font-size:13px}
@@ -36,12 +33,11 @@ const MAP_HTML = `<!DOCTYPE html>
     .lm-pin-tail{width:3px;height:8px;background:#f59e0b;margin-top:-1px}
     .lm-label{background:rgba(255,255,255,0.95);color:#1f2937;font-size:10px;font-weight:600;padding:2px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.18);max-width:90px;overflow:hidden;text-overflow:ellipsis}
     .loc-pulse{width:18px;height:18px;background:#2563eb;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 4px rgba(37,99,235,0.25)}
-    .loc-arrow{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:30px solid #2563eb;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.5))}
     .route-start{background:#22c55e;color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.25);white-space:nowrap}
   </style>
 </head>
 <body>
-<div id="map-outer"><div id="map"></div></div>
+<div id="map"></div>
 <script>
 var map = L.map('map',{zoomControl:true}).setView([35.681236,139.767125],13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -54,7 +50,6 @@ var routeLine = null;
 var startMarker = null;
 var landmarkMarkers = [];
 var initialized = false;
-var headingUpMode = false;
 
 function makeLocIcon(arrow){
   if(arrow) return L.divIcon({
@@ -63,6 +58,11 @@ function makeLocIcon(arrow){
   });
   return L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 }
+
+// アイコン切り替え（主観モードON/OFFをRN側からコール）
+window.setLocArrow = function(arrow){
+  if(locMarker) locMarker.setIcon(makeLocIcon(arrow));
+};
 
 function makeLandmarkIcon(name){
   var short = name.length > 8 ? name.slice(0,8)+'…' : name;
@@ -94,30 +94,10 @@ window.setFollowMode = function(enabled){
   followMode = enabled;
 };
 
-// 主観モード（heading-up）
-window.setHeadingUpMode = function(enabled){
-  headingUpMode = enabled;
-  var outer = document.getElementById('map-outer');
-  if(!enabled){
-    outer.style.transform = '';
-    if(locMarker) locMarker.setIcon(makeLocIcon(false));
-  } else {
-    if(locMarker) locMarker.setIcon(makeLocIcon(true));
-  }
-  followMode = enabled; // 主観モードは常にfollow
-};
-
-window.updateHeading = function(deg){
-  if(!headingUpMode) return;
-  document.getElementById('map-outer').style.transform = 'rotate('+(-deg)+'deg)';
-};
-
 // ドラッグで追随・主観モード解除
 map.on('dragstart', function(){
-  if(followMode || headingUpMode){
-    followMode = false; headingUpMode = false;
-    document.getElementById('map-outer').style.transform = '';
-    if(locMarker) locMarker.setIcon(makeLocIcon(false));
+  if(followMode){
+    followMode = false;
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'headingOff'}));
   }
 });
@@ -182,6 +162,8 @@ export default function MapScreen() {
   const [following, setFollowing] = useState(false);
   const [headingMode, setHeadingMode] = useState(false);
   const headingSubRef = useRef<Location.LocationSubscription | null>(null);
+  const mapContainerRef = useRef<View>(null);
+  const { width: screenW, height: screenH } = useWindowDimensions();
 
   useEffect(() => {
     let cancelled = false;
@@ -238,18 +220,19 @@ export default function MapScreen() {
       headingSubRef.current = null;
       setHeadingMode(false);
       setFollowing(false);
-      webviewRef.current?.injectJavaScript(`window.setHeadingUpMode(false);true;`);
+      mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: '0deg' }] } });
+      webviewRef.current?.injectJavaScript(`window.setLocArrow(false);true;`);
     } else {
       // ON
       setHeadingMode(true);
       setFollowing(true);
-      webviewRef.current?.injectJavaScript(`window.setHeadingUpMode(true);true;`);
+      webviewRef.current?.injectJavaScript(`window.setLocArrow(true);true;`);
       if (currentLocation) {
         webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
       }
       headingSubRef.current = await Location.watchHeadingAsync((heading) => {
         const deg = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
-        webviewRef.current?.injectJavaScript(`window.updateHeading(${deg});true;`);
+        mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: `${-deg}deg` }] } });
       });
     }
   };
@@ -304,10 +287,13 @@ export default function MapScreen() {
   return (
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="マップ画面の使い方" items={MAP_HELP} />
+      {/* 主観モード用：150%×150%のViewでWebViewを囲み、RN側でrotate */}
+      <View style={styles.mapOuter}>
+        <View ref={mapContainerRef} style={{ position: 'absolute', width: screenW * 1.5, height: screenH * 1.5, left: -screenW * 0.25, top: -screenH * 0.25 }}>
       <WebView
         ref={webviewRef}
         source={{ html: MAP_HTML, baseUrl: 'https://localhost' }}
-        style={styles.map}
+        style={{ flex: 1 }}
         javaScriptEnabled
         domStorageEnabled
         cacheEnabled
@@ -325,12 +311,16 @@ export default function MapScreen() {
               headingSubRef.current = null;
               setHeadingMode(false);
               setFollowing(false);
+              mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: '0deg' }] } });
+              webviewRef.current?.injectJavaScript(`window.setLocArrow(false);true;`);
             }
           } catch {}
         }}
         overScrollMode="never"
         bounces={false}
       />
+        </View>
+      </View>
 
       {/* 主観モードボタン（常時表示） */}
       <TouchableOpacity
@@ -385,7 +375,7 @@ export default function MapScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  map: { flex: 1 },
+  mapOuter: { flex: 1, overflow: 'hidden' },
   helpBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 4 },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   locBtn: { position: 'absolute', bottom: 100, right: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
