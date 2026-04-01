@@ -24,7 +24,10 @@ const MAP_HTML = `<!DOCTYPE html>
   <link rel="stylesheet" href="file:///android_asset/leaflet.min.css"/>
   <script src="file:///android_asset/leaflet.min.js"></script>
   <style>
-    body,html,#map{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+    body,html{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}
+    /* 150%×150%のラッパーで回転時の角切れを防ぐ */
+    #map-outer{position:absolute;width:150%;height:150%;top:-25%;left:-25%;transform-origin:50% 50%}
+    #map{width:100%;height:100%}
     .leaflet-control-attribution{font-size:9px}
     .leaflet-popup-content-wrapper{border-radius:10px;box-shadow:0 3px 12px rgba(0,0,0,0.2)}
     .leaflet-popup-content{margin:10px 14px;font-size:13px}
@@ -33,11 +36,12 @@ const MAP_HTML = `<!DOCTYPE html>
     .lm-pin-tail{width:3px;height:8px;background:#f59e0b;margin-top:-1px}
     .lm-label{background:rgba(255,255,255,0.95);color:#1f2937;font-size:10px;font-weight:600;padding:2px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.18);max-width:90px;overflow:hidden;text-overflow:ellipsis}
     .loc-pulse{width:18px;height:18px;background:#2563eb;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 4px rgba(37,99,235,0.25)}
+    .loc-arrow{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:30px solid #2563eb;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.5))}
     .route-start{background:#22c55e;color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.25);white-space:nowrap}
   </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map-outer"><div id="map"></div></div>
 <script>
 var map = L.map('map',{zoomControl:true}).setView([35.681236,139.767125],13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -50,8 +54,10 @@ var routeLine = null;
 var startMarker = null;
 var landmarkMarkers = [];
 var initialized = false;
+var headingUpMode = false;
 
-function makeLocIcon(){
+function makeLocIcon(arrow){
+  if(arrow) return L.divIcon({html:'<div class="loc-arrow"></div>',iconSize:[20,30],iconAnchor:[10,20],className:''});
   return L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 }
 
@@ -63,7 +69,7 @@ function makeLandmarkIcon(name){
 
 window.initMap = function(lat,lng,routeCoords,landmarks){
   if(locMarker) map.removeLayer(locMarker);
-  locMarker = L.marker([lat,lng],{icon:makeLocIcon(),zIndexOffset:1000}).addTo(map);
+  locMarker = L.marker([lat,lng],{icon:makeLocIcon(false),zIndexOffset:1000}).addTo(map);
   if(!initialized){ map.setView([lat,lng],15); initialized=true; }
   window.updateRoute(routeCoords);
   window.setLandmarks(landmarks);
@@ -72,7 +78,7 @@ window.initMap = function(lat,lng,routeCoords,landmarks){
 var followMode = false;
 
 window.updateLocation = function(lat,lng){
-  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(),zIndexOffset:1000}).addTo(map); }
+  if(!locMarker){ locMarker=L.marker([lat,lng],{icon:makeLocIcon(false),zIndexOffset:1000}).addTo(map); }
   else { locMarker.setLatLng([lat,lng]); }
   if(followMode){ map.panTo([lat,lng],{animate:true,duration:0.5}); }
 };
@@ -85,8 +91,33 @@ window.setFollowMode = function(enabled){
   followMode = enabled;
 };
 
-// ユーザーが手動でマップを動かしたら追随を解除
-map.on('dragstart', function(){ if(followMode){ followMode=false; window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'followOff'})); } });
+// 主観モード（heading-up）
+window.setHeadingUpMode = function(enabled){
+  headingUpMode = enabled;
+  var outer = document.getElementById('map-outer');
+  if(!enabled){
+    outer.style.transform = '';
+    if(locMarker) locMarker.setIcon(makeLocIcon(false));
+  } else {
+    if(locMarker) locMarker.setIcon(makeLocIcon(true));
+  }
+  followMode = enabled; // 主観モードは常にfollow
+};
+
+window.updateHeading = function(deg){
+  if(!headingUpMode) return;
+  document.getElementById('map-outer').style.transform = 'rotate('+(-deg)+'deg)';
+};
+
+// ドラッグで追随・主観モード解除
+map.on('dragstart', function(){
+  if(followMode || headingUpMode){
+    followMode = false; headingUpMode = false;
+    document.getElementById('map-outer').style.transform = '';
+    if(locMarker) locMarker.setIcon(makeLocIcon(false));
+    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'headingOff'}));
+  }
+});
 
 window.updateRoute = function(coords){
   if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
@@ -95,7 +126,6 @@ window.updateRoute = function(coords){
   routeLine = L.polyline(coords,{color:'#2563eb',weight:5,opacity:0.85}).addTo(map);
   var sIcon = L.divIcon({html:'<div class="route-start">START</div>',className:'',iconAnchor:[24,12]});
   startMarker = L.marker(coords[0],{icon:sIcon}).addTo(map);
-  // panToはfollowModeのupdateLocationに任せる（ここでは移動しない）
 };
 
 window.setLandmarks = function(landmarks){
@@ -147,6 +177,8 @@ export default function MapScreen() {
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'map';
   const [following, setFollowing] = useState(false);
+  const [headingMode, setHeadingMode] = useState(false);
+  const headingSubRef = useRef<Location.LocationSubscription | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +226,35 @@ export default function MapScreen() {
       webviewRef.current?.injectJavaScript(`window.setFollowMode(false);true;`);
     }
   }, [isTracking]);
+
+  // 主観モードON/OFF
+  const toggleHeadingMode = async () => {
+    if (headingMode) {
+      // OFF
+      headingSubRef.current?.remove();
+      headingSubRef.current = null;
+      setHeadingMode(false);
+      setFollowing(false);
+      webviewRef.current?.injectJavaScript(`window.setHeadingUpMode(false);true;`);
+    } else {
+      // ON
+      setHeadingMode(true);
+      setFollowing(true);
+      webviewRef.current?.injectJavaScript(`window.setHeadingUpMode(true);true;`);
+      if (currentLocation) {
+        webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
+      }
+      headingSubRef.current = await Location.watchHeadingAsync((heading) => {
+        const deg = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+        webviewRef.current?.injectJavaScript(`window.updateHeading(${deg});true;`);
+      });
+    }
+  };
+
+  // アンマウント時にheading購読を解除
+  useEffect(() => {
+    return () => { headingSubRef.current?.remove(); };
+  }, []);
 
   // WebView読み込み完了後に初期データを送信
   const handleLoad = () => {
@@ -256,11 +317,27 @@ export default function MapScreen() {
           try {
             const msg = JSON.parse(e.nativeEvent.data);
             if (msg.type === 'followOff') setFollowing(false);
+            if (msg.type === 'headingOff') {
+              headingSubRef.current?.remove();
+              headingSubRef.current = null;
+              setHeadingMode(false);
+              setFollowing(false);
+            }
           } catch {}
         }}
         overScrollMode="never"
         bounces={false}
       />
+
+      {/* 主観モードボタン（常時表示） */}
+      <TouchableOpacity
+        style={[styles.headingBtn, headingMode && styles.headingBtnActive]}
+        onPress={toggleHeadingMode}
+      >
+        <Text style={[styles.headingBtnText, headingMode && styles.headingBtnTextActive]}>
+          {headingMode ? '🧭主観中' : '🧭主観'}
+        </Text>
+      </TouchableOpacity>
 
       {/* 現在位置ボタン */}
       <TouchableOpacity
@@ -274,8 +351,8 @@ export default function MapScreen() {
         <Text style={styles.locBtnText}>◎</Text>
       </TouchableOpacity>
 
-      {/* 追随ボタン（記録中のみ表示） */}
-      {isTracking && (
+      {/* 追随ボタン（記録中のみ・主観モード中は非表示） */}
+      {isTracking && !headingMode && (
         <TouchableOpacity
           style={[styles.followBtn, following && styles.followBtnActive]}
           onPress={() => {
@@ -310,6 +387,10 @@ const styles = StyleSheet.create({
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
   locBtn: { position: 'absolute', bottom: 100, right: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   locBtnText: { fontSize: 22, color: '#2563eb' },
+  headingBtn: { position: 'absolute', bottom: 204, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  headingBtnActive: { backgroundColor: '#f59e0b' },
+  headingBtnText: { fontSize: 13, fontWeight: '700', color: '#6b7280' },
+  headingBtnTextActive: { color: '#fff' },
   followBtn: { position: 'absolute', bottom: 152, right: 16, zIndex: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
   followBtnActive: { backgroundColor: '#2563eb' },
   followBtnText: { fontSize: 13, fontWeight: '700', color: '#2563eb' },
