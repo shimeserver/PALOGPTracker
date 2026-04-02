@@ -49,5 +49,4 @@ android/app/*.keystore
 android/app/src/main/assets/index.android.bundle
 android/app/src/main/assets/index.android.bundle.hbc.map
 android/app/src/main/res/drawable-*/node_modules_*
-android/app/src/main/res/drawable-*/splashscreen_logo*
 android/app/src/main/res/raw/node_modules_*
