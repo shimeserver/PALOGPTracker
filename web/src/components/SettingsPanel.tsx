@@ -173,8 +173,8 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
       }
       if (toDelete.length > 0) {
         for (const id of toDelete) await deleteVisit(lm.id!, id);
-        const newCount = Math.max(0, lm.visitCount - toDelete.length);
-        await updateLandmark(lm.id!, { visitCount: newCount });
+        const remaining = await getVisits(lm.id!);
+        await updateLandmark(lm.id!, { visitCount: remaining.length });
         totalDeleted += toDelete.length;
         affectedSpots++;
       }

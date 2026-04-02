@@ -51,7 +51,14 @@ export default function RoutesScreen() {
             await saveRoutesCache(user.uid, merged, Date.now());
           }
         } catch {
-          // 差分フェッチ失敗は無視（キャッシュ表示のまま）
+          // 差分フェッチ失敗時はフルフェッチにフォールバック
+          try {
+            const data = await getUserRoutesMetadata(user.uid);
+            setRoutes(data);
+            await saveRoutesCache(user.uid, data, Date.now());
+          } catch {
+            // フルフェッチも失敗した場合はキャッシュ表示のまま
+          }
         } finally {
           setSyncing(false);
         }
@@ -86,17 +93,22 @@ export default function RoutesScreen() {
   };
 
   const handleDelete = (route: RouteMetadata) => {
+    if (!route.id) return;
     Alert.alert('削除確認', `「${route.name}」を削除しますか？`, [
       { text: 'キャンセル', style: 'cancel' },
       {
         text: '削除', style: 'destructive',
         onPress: async () => {
-          await deleteRoute(route.id!);
-          setRoutes(r => {
-            const updated = r.filter(x => x.id !== route.id);
-            if (user) saveRoutesCache(user.uid, updated, Date.now());
-            return updated;
-          });
+          try {
+            await deleteRoute(route.id!);
+            setRoutes(r => {
+              const updated = r.filter(x => x.id !== route.id);
+              if (user) saveRoutesCache(user.uid, updated, Date.now());
+              return updated;
+            });
+          } catch {
+            Alert.alert('エラー', '削除に失敗しました');
+          }
         },
       },
     ]);

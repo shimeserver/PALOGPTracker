@@ -1,6 +1,6 @@
 import {
   collection, addDoc, getDocs, doc, updateDoc,
-  query, where, Timestamp, increment
+  query, where, Timestamp, increment, setDoc
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from './config';
@@ -34,7 +34,7 @@ export async function getUserLandmarks(userId: string): Promise<Landmark[]> {
   return landmarks.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-// 来訪記録
+// 来訪記録（visitCount を increment する）
 export async function recordVisit(landmarkId: string, visit: Omit<Visit, 'id'>): Promise<string> {
   const visitRef = await addDoc(
     collection(db, 'landmarks', landmarkId, 'visits'),
@@ -44,6 +44,15 @@ export async function recordVisit(landmarkId: string, visit: Omit<Visit, 'id'>):
     visitCount: increment(1),
     lastVisit: Timestamp.fromMillis(visit.timestamp),
   });
+  return visitRef.id;
+}
+
+// 来訪ログのみ追加（visitCount は変更しない。saveLandmark(visitCount:1)と組み合わせる用）
+export async function recordVisitOnly(landmarkId: string, visit: Omit<Visit, 'id'>): Promise<string> {
+  const visitRef = await addDoc(
+    collection(db, 'landmarks', landmarkId, 'visits'),
+    { ...visit, timestamp: Timestamp.fromMillis(visit.timestamp) }
+  );
   return visitRef.id;
 }
 
