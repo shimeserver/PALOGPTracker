@@ -249,6 +249,7 @@ export async function uploadLandmarkPhotoFromUrl(
 ): Promise<LandmarkPhoto | null> {
   try {
     const res = await fetch(googleUrl);
+    if (!res.ok) throw new Error('fetch failed');
     const blob = await res.blob();
     const path = `landmarks/${userId}/${landmarkId}/${Date.now()}.jpg`;
     const storageRef = ref(storage, path);
@@ -256,7 +257,8 @@ export async function uploadLandmarkPhotoFromUrl(
     const url = await getDownloadURL(storageRef);
     return { url, storagePath: path, takenAt: Date.now() };
   } catch {
-    return null;
+    // CORSなどでfetchできない場合はGoogle URLをそのまま保存
+    return { url: googleUrl, storagePath: '', takenAt: Date.now() };
   }
 }
 
