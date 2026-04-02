@@ -92,6 +92,7 @@ android {
     defaultConfig {
         applicationId 'com.palow.palogptracker'
         minSdkVersion rootProject.ext.minSdkVersion
+        manifestPlaceholders = [GOOGLE_MAPS_API_KEY: project.findProperty("GOOGLE_MAPS_API_KEY") ?: ""]
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 9
         versionName "0.0.9"
