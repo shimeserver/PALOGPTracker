@@ -4,11 +4,11 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } fro
 import WebView from 'react-native-webview';
 import { router } from 'expo-router';
 import HelpModal from '../../src/components/HelpModal';
-import { useTrackingStore } from '../../src/store/trackingStore';
-import { loadRecovery, clearRecovery, RecoveryData } from '../../src/store/trackingStore';
+import { useTrackingStore, loadRecovery, clearRecovery, RecoveryData } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { updateCar } from '../../src/firebase/cars';
+import { saveRoute } from '../../src/firebase/routes';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { recordVisit } from '../../src/firebase/landmarks';
 import { detectStops, matchStopsToLandmarks } from '../../src/utils/visitDetection';
@@ -151,7 +151,6 @@ export default function TrackScreen() {
       const speeds = points.map(p => p.speed).filter(s => s > 0);
       const avgSpeed = speeds.length > 0 ? speeds.reduce((a,b)=>a+b)/speeds.length : 0;
       const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
-      const { saveRoute } = await import('../../src/firebase/routes');
       await saveRoute({
         userId: user.uid, name, tags: [], mode,
         startTime: recStart, endTime: points[points.length-1].timestamp,
