@@ -1,8 +1,36 @@
 import { create } from 'zustand';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackPoint, Route, TrackingMode } from '../types';
 import { saveRoute } from '../firebase/routes';
+
+const RECOVERY_KEY = 'route_recovery';
+
+export interface RecoveryData {
+  points: TrackPoint[];
+  startTime: number;
+  mode: TrackingMode;
+  savedAt: number;
+}
+
+export async function loadRecovery(): Promise<RecoveryData | null> {
+  try {
+    const raw = await AsyncStorage.getItem(RECOVERY_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export async function clearRecovery(): Promise<void> {
+  try { await AsyncStorage.removeItem(RECOVERY_KEY); } catch {}
+}
+
+async function saveRecovery(points: TrackPoint[], startTime: number, mode: TrackingMode) {
+  try {
+    const data: RecoveryData = { points, startTime, mode, savedAt: Date.now() };
+    await AsyncStorage.setItem(RECOVERY_KEY, JSON.stringify(data));
+  } catch {}
+}
 
 export const LOCATION_TASK = 'gps-background-tracking';
 
@@ -48,10 +76,17 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         ? loc.coords.speed * 3.6  // m/s → km/h
         : 0,
     }));
-    set(state => ({
-      currentPoints: [...state.currentPoints, ...newPoints],
-      currentSpeed: newPoints[newPoints.length - 1]?.speed ?? state.currentSpeed,
-    }));
+    set(state => {
+      const updated = [...state.currentPoints, ...newPoints];
+      // 30pt毎にAsyncStorageへ自動バックアップ（電源断対策）
+      if (state.startTime && updated.length % 30 === 0) {
+        saveRecovery(updated, state.startTime, state.trackingMode);
+      }
+      return {
+        currentPoints: updated,
+        currentSpeed: newPoints[newPoints.length - 1]?.speed ?? state.currentSpeed,
+      };
+    });
   },
 
   startTracking: async () => {
@@ -61,6 +96,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     const bg = await Location.requestBackgroundPermissionsAsync();
     if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です（設定から「常に許可」にしてください）');
 
+    await clearRecovery(); // 前回の残存データをクリア
     set({ isTracking: true, currentPoints: [], startTime: Date.now() });
 
     await Location.startLocationUpdatesAsync(LOCATION_TASK, {
@@ -110,6 +146,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     };
 
     const id = await saveRoute(route);
+    await clearRecovery(); // 保存完了後にバックアップを削除
     return id;
   },
 

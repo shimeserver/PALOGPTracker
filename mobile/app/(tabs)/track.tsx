@@ -5,6 +5,7 @@ import WebView from 'react-native-webview';
 import { router } from 'expo-router';
 import HelpModal from '../../src/components/HelpModal';
 import { useTrackingStore } from '../../src/store/trackingStore';
+import { loadRecovery, clearRecovery, RecoveryData } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { updateCar } from '../../src/firebase/cars';
@@ -93,6 +94,7 @@ export default function TrackScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [showNameModal, setShowNameModal] = useState(false);
   const [routeName, setRouteName] = useState('');
+  const [recovery, setRecovery] = useState<RecoveryData | null>(null);
   const miniMapRef = useRef<WebView>(null);
   const miniMapReady = useRef(false);
   const prevMiniMapLen = useRef(0);
@@ -104,6 +106,14 @@ export default function TrackScreen() {
     const timer = setInterval(() => setElapsed(Date.now() - startTime), 1000);
     return () => clearInterval(timer);
   }, [isTracking, startTime]);
+
+  // 起動時: 電源断で失われた未保存データを確認
+  useEffect(() => {
+    if (isTracking) return; // 記録中は不要
+    loadRecovery().then(data => {
+      if (data && data.points.length >= 2) setRecovery(data);
+    });
+  }, []);
 
   const handleMiniMapLoad = () => {
     miniMapReady.current = true;
@@ -129,6 +139,41 @@ export default function TrackScreen() {
   const totalDist = currentPoints.length > 1
     ? currentPoints.reduce((acc, p, i) => i === 0 ? 0 : acc + haversine(currentPoints[i - 1], p), 0)
     : 0;
+
+  const handleSaveRecovery = async () => {
+    if (!user || !recovery) return;
+    try {
+      const { points, startTime: recStart, mode } = recovery;
+      const dt = new Date(recStart);
+      const name = `ルート ${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+      let totalDist = 0;
+      for (let i = 1; i < points.length; i++) totalDist += haversine(points[i-1], points[i]);
+      const speeds = points.map(p => p.speed).filter(s => s > 0);
+      const avgSpeed = speeds.length > 0 ? speeds.reduce((a,b)=>a+b)/speeds.length : 0;
+      const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+      const { saveRoute } = await import('../../src/firebase/routes');
+      await saveRoute({
+        userId: user.uid, name, tags: [], mode,
+        startTime: recStart, endTime: points[points.length-1].timestamp,
+        totalDistance: totalDist, avgSpeed, maxSpeed,
+        points, source: 'recorded', createdAt: Date.now(),
+      });
+      await clearRecovery();
+      setRecovery(null);
+      Alert.alert('復元完了', `「${name}」として保存しました`);
+    } catch {
+      Alert.alert('エラー', '復元に失敗しました');
+    }
+  };
+
+  const handleDiscardRecovery = () => {
+    Alert.alert('破棄確認', 'バックアップデータを削除しますか？', [
+      { text: 'キャンセル', style: 'cancel' },
+      { text: '破棄する', style: 'destructive', onPress: async () => {
+        await clearRecovery(); setRecovery(null);
+      }},
+    ]);
+  };
 
   const handleStart = async () => {
     try {
@@ -188,6 +233,24 @@ export default function TrackScreen() {
 
   return (
     <View style={styles.container}>
+      {/* 電源断バックアップ復元バナー */}
+      {recovery && !isTracking && (
+        <View style={styles.recoveryBanner}>
+          <Text style={styles.recoveryTitle}>⚡ 未保存のルートがあります</Text>
+          <Text style={styles.recoveryDesc}>
+            {new Date(recovery.startTime).toLocaleString('ja-JP')} 開始 / {recovery.points.length}pt
+          </Text>
+          <View style={styles.recoveryButtons}>
+            <TouchableOpacity style={styles.recoverySaveBtn} onPress={handleSaveRecovery}>
+              <Text style={styles.recoverySaveBtnText}>保存する</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.recoveryDiscardBtn} onPress={handleDiscardRecovery}>
+              <Text style={styles.recoveryDiscardBtnText}>破棄</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* ステータス */}
       <View style={styles.statusBar}>
         {isTracking && <View style={styles.statusDotActive} />}
@@ -341,4 +404,12 @@ const styles = StyleSheet.create({
   modalButton: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 12 },
   modalButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   modalCancel: { color: '#9ca3af', textAlign: 'center', fontSize: 14 },
+  recoveryBanner: { backgroundColor: '#fef3c7', borderRadius: 12, padding: 14, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#f59e0b' },
+  recoveryTitle: { color: '#92400e', fontWeight: '700', fontSize: 14, marginBottom: 2 },
+  recoveryDesc: { color: '#78350f', fontSize: 12, marginBottom: 10 },
+  recoveryButtons: { flexDirection: 'row', gap: 8 },
+  recoverySaveBtn: { flex: 1, backgroundColor: '#2563eb', borderRadius: 8, padding: 10, alignItems: 'center' },
+  recoverySaveBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  recoveryDiscardBtn: { backgroundColor: '#f3f4f6', borderRadius: 8, padding: 10, paddingHorizontal: 16, alignItems: 'center' },
+  recoveryDiscardBtnText: { color: '#6b7280', fontSize: 13 },
 });
