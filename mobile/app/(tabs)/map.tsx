@@ -217,8 +217,16 @@ export default function MapScreen() {
       if (currentLocation) {
         webviewRef.current?.injectJavaScript(`window.panToLocation(${currentLocation.lat},${currentLocation.lng});true;`);
       }
+      let lastDeg = -1;
       headingSubRef.current = await Location.watchHeadingAsync((heading) => {
         const deg = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+        // 5°未満の変化は無視してピクつきを抑制
+        if (lastDeg >= 0) {
+          let diff = Math.abs(deg - lastDeg);
+          if (diff > 180) diff = 360 - diff;
+          if (diff < 5) return;
+        }
+        lastDeg = deg;
         mapContainerRef.current?.setNativeProps({ style: { transform: [{ rotate: `${-deg}deg` }] } });
       });
     }

@@ -48,6 +48,7 @@ function haversine(p1: TrackPoint, p2: TrackPoint): number {
 
 interface TrackingState {
   isTracking: boolean;
+  isPaused: boolean;
   currentPoints: TrackPoint[];
   currentSpeed: number;
   startTime: number | null;
@@ -55,12 +56,15 @@ interface TrackingState {
   setTrackingMode: (mode: TrackingMode) => void;
   addPoints: (locations: Location.LocationObject[]) => void;
   startTracking: () => Promise<void>;
+  pauseTracking: () => void;
+  resumeTracking: () => void;
   stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | null>;
   clearTrack: () => void;
 }
 
 export const useTrackingStore = create<TrackingState>((set, get) => ({
   isTracking: false,
+  isPaused: false,
   currentPoints: [],
   currentSpeed: 0,
   startTime: null,
@@ -68,6 +72,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   setTrackingMode: (mode) => set({ trackingMode: mode }),
 
   addPoints: (locations) => {
+    if (get().isPaused) return; // 一時停止中はポイントを無視
     const newPoints: TrackPoint[] = locations.map(loc => ({
       lat: loc.coords.latitude,
       lng: loc.coords.longitude,
@@ -89,6 +94,9 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     });
   },
 
+  pauseTracking: () => set({ isPaused: true, currentSpeed: 0 }),
+  resumeTracking: () => set({ isPaused: false }),
+
   startTracking: async () => {
     const fg = await Location.requestForegroundPermissionsAsync();
     if (fg.status !== 'granted') throw new Error('位置情報の許可が必要です');
@@ -97,7 +105,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です（設定から「常に許可」にしてください）');
 
     await clearRecovery(); // 前回の残存データをクリア
-    set({ isTracking: true, currentPoints: [], startTime: Date.now() });
+    set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
 
     await Location.startLocationUpdatesAsync(LOCATION_TASK, {
       accuracy: Location.Accuracy.BestForNavigation,
@@ -115,7 +123,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   stopTracking: async (userId, name, tagIds) => {
     const isRunning = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
     if (isRunning) await Location.stopLocationUpdatesAsync(LOCATION_TASK);
-    set({ isTracking: false });
+    set({ isTracking: false, isPaused: false });
 
     const { currentPoints, startTime } = get();
     if (currentPoints.length < 2) return null;

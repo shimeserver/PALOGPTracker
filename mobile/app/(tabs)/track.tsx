@@ -88,7 +88,7 @@ const MODE_CONFIG = {
 } as const;
 
 export default function TrackScreen() {
-  const { isTracking, currentPoints, currentSpeed, startTime, startTracking, stopTracking, trackingMode, setTrackingMode } = useTrackingStore();
+  const { isTracking, isPaused, currentPoints, currentSpeed, startTime, startTracking, stopTracking, pauseTracking, resumeTracking, trackingMode, setTrackingMode } = useTrackingStore();
   const { user } = useAuthStore();
   const { activeCar } = useCarStore();
   const [elapsed, setElapsed] = useState(0);
@@ -323,13 +323,23 @@ export default function TrackScreen() {
           <Text style={styles.startButtonText}>▶ 記録開始</Text>
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity style={styles.stopButton} onPress={() => setShowNameModal(true)}>
-          <Text style={styles.stopButtonText}>■ 停止・保存</Text>
-        </TouchableOpacity>
+        <View style={styles.trackingButtons}>
+          <TouchableOpacity
+            style={[styles.pauseButton, isPaused && styles.resumeButton]}
+            onPress={() => isPaused ? resumeTracking() : pauseTracking()}
+          >
+            <Text style={styles.pauseButtonText}>{isPaused ? '▶ 再開' : '⏸ 一時停止'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.stopButton} onPress={() => setShowNameModal(true)}>
+            <Text style={styles.stopButtonText}>■ 停止・保存</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {isTracking && (
-        <Text style={styles.bgNote}>画面をロックしても記録は継続されます</Text>
+        <Text style={styles.bgNote}>
+          {isPaused ? '⏸ 一時停止中 — 再開すると記録を続けます' : '画面をロックしても記録は継続されます'}
+        </Text>
       )}
 
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="記録画面の使い方" items={TRACK_HELP} />
@@ -387,9 +397,17 @@ const styles = StyleSheet.create({
     shadowColor: '#22c55e', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8,
   },
   startButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  trackingButtons: { flexDirection: 'row', alignSelf: 'center', gap: 16, alignItems: 'center' },
+  pauseButton: {
+    backgroundColor: '#f59e0b', borderRadius: 50, height: 90, width: 90,
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 6,
+  },
+  resumeButton: { backgroundColor: '#22c55e', shadowColor: '#22c55e' },
+  pauseButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 13, textAlign: 'center' },
   stopButton: {
     backgroundColor: '#ef4444', borderRadius: 60, height: 120, width: 120,
-    alignSelf: 'center', justifyContent: 'center', alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
     shadowColor: '#ef4444', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8,
   },
   stopButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14, textAlign: 'center' },
