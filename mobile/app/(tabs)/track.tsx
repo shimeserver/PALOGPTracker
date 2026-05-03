@@ -7,7 +7,6 @@ import HelpModal from '../../src/components/HelpModal';
 import { useTrackingStore, loadRecovery, clearRecovery, RecoveryData } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
-import { updateCar } from '../../src/firebase/cars';
 import { saveRoute } from '../../src/firebase/routes';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { recordVisit } from '../../src/firebase/landmarks';
@@ -191,17 +190,6 @@ export default function TrackScreen() {
       const savedPoints = currentPoints;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
       if (id) {
-        // 愛車モードかつアクティブ車があればオドメーターに走行距離を加算
-        if (trackingMode === 'car' && activeCar?.id) {
-          const dist = savedPoints.length > 1
-            ? savedPoints.reduce((acc, p, i) => i === 0 ? 0 : acc + haversine(savedPoints[i - 1], p), 0)
-            : 0;
-          if (dist > 0) {
-            const newOdometer = (activeCar.odometerKm ?? 0) + dist;
-            await updateCar(activeCar.id, { odometerKm: newOdometer }).catch(() => {});
-          }
-        }
-
         // 来訪自動判定（API不使用）
         if (user) {
           const stops = detectStops(savedPoints);
