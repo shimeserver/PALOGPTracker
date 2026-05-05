@@ -424,7 +424,9 @@ export default function CarsScreen() {
     if (isNaN(val) || val < 0) return;
     const setAt = Date.now();
     await updateCar(car.id!, { odometerKm: val, odometerSetAt: setAt });
-    setCars(prev => prev.map(c => c.id === car.id ? { ...c, odometerKm: val, odometerSetAt: setAt } : c));
+    const updatedCar = { ...car, odometerKm: val, odometerSetAt: setAt };
+    setCars(prev => prev.map(c => c.id === car.id ? updatedCar : c));
+    await loadStats(updatedCar, true); // odometerSetAt変更後に distanceAfter を再計算
     showToast('走行距離を保存しました');
   };
 
