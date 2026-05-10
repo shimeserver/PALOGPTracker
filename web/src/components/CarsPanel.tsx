@@ -106,6 +106,14 @@ function distanceSince(ts: number, routes: Route[], allTags: TagDef[], carTagId?
     .reduce((s, r) => s + r.totalDistance, 0);
 }
 
+// 整備記録からの経過距離: 整備時オドメーター+現在総走行距離が揃えばその差、なければルート集計
+function kmSinceMaint(logOdometerKm: number | undefined, displayOdometer: number, ts: number, routes: Route[], allTags: TagDef[], carTagId?: string) {
+  if (logOdometerKm != null && displayOdometer > 0) {
+    return Math.max(0, displayOdometer - logOdometerKm);
+  }
+  return distanceSince(ts, routes, allTags, carTagId);
+}
+
 export default function CarsPanel({ open, onClose, userId, routes, tags, activeCar, onSetActiveCar, onTagsChange, onCarsChange, onRefreshRoutes, onWarningChange }: Props) {
   const [cars, setCars] = useState<Car[]>([]);
   const [loading, setLoading] = useState(true);
@@ -175,8 +183,13 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     if (!onWarningChange) return;
     const anyWarning = cars.some(car => {
       const mLogs = maintLogs[car.id!] || [];
+      const routesAfter = car.odometerSetAt != null
+        ? routes.filter(r => routeMatchesCarTag(r.tags, tags, car.tagId!) && r.startTime >= car.odometerSetAt!)
+        : [];
+      const distAfter = routesAfter.reduce((s, r) => s + r.totalDistance, 0);
+      const displayOdometer = car.odometerKm != null ? car.odometerKm + distAfter : calcCarStats(routes, tags, car.tagId).totalDistance;
       return mLogs.some(log => {
-        const km = distanceSince(log.timestamp, routes, tags, car.tagId);
+        const km = kmSinceMaint(log.odometerKm, displayOdometer, log.timestamp, routes, tags, car.tagId);
         const months = Math.floor((Date.now() - log.timestamp) / 2592000000);
         return (log.nextDueKm != null && km >= log.nextDueKm - 300) || (log.nextDueMonths != null && months >= log.nextDueMonths - 1);
       });
@@ -619,7 +632,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
             const avgEff = avgEfficiency.length > 0 ? avgEfficiency.reduce((a, b) => a + b) / avgEfficiency.length : null;
             const mLogs = maintLogs[car.id!] || [];
             const hasWarning = mLogs.some(log => {
-              const km = distanceSince(log.timestamp, routes, tags, car.tagId);
+              const km = kmSinceMaint(log.odometerKm, displayOdometer, log.timestamp, routes, tags, car.tagId);
               const months = Math.floor((Date.now() - log.timestamp) / 2592000000);
               return (log.nextDueKm != null && km >= log.nextDueKm - 300) || (log.nextDueMonths != null && months >= log.nextDueMonths - 1);
             });
@@ -867,7 +880,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                         {mLogs.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13, textAlign: 'center', padding: '16px 0' }}>整備記録がありません</p>}
                         {mLogs.map(log => {
                           const elapsed = elapsedSince(log.timestamp);
-                          const kmDriven = distanceSince(log.timestamp, routes, tags, car.tagId);
+                          const kmDriven = kmSinceMaint(log.odometerKm, displayOdometer, log.timestamp, routes, tags, car.tagId);
                           const label = log.type === 'other' ? (log.customLabel || 'その他') : MAINTENANCE_LABELS[log.type];
                           const nextMonthsOk = log.nextDueMonths ? Math.floor((Date.now() - log.timestamp) / 2592000000) < log.nextDueMonths - 1 : true;
                           const nextKmOk = log.nextDueKm ? kmDriven < log.nextDueKm - 300 : true;
