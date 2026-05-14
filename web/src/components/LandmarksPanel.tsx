@@ -149,10 +149,14 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
       category: placeTypeToCategory(pendingPlace.types || []),
       placeId: pid,
     };
-    // Google Places の一時URLをFirebase Storageに永続保存
+    // Google Places の一時URLをFirebase Storageに永続保存（既存写真は保持）
     if (googlePhotoUrl && selected.id) {
       const stored = await uploadLandmarkPhotoFromUrl(userId, selected.id, googlePhotoUrl);
-      if (stored) patch.photos = [stored];
+      if (stored) {
+        // 既存写真（Firebase Storage保存済み）は残し、新しい写真を先頭に追加
+        const existingPhotos = (selected.photos || []).filter(p => p.storagePath);
+        patch.photos = [stored, ...existingPhotos];
+      }
     }
     if (newLat !== undefined && newLng !== undefined) { patch.lat = newLat; patch.lng = newLng; }
 

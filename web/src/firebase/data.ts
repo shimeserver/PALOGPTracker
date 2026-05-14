@@ -243,23 +243,52 @@ export async function uploadLandmarkPhoto(
   return { url, storagePath: path, takenAt: Date.now() };
 }
 
+// img→canvasでGoogleURLをBlobに変換（fetchのCORS回避用）
+function urlToBlobViaCanvas(url: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || 600;
+      canvas.height = img.naturalHeight || 600;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('no canvas context')); return; }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('toBlob failed')), 'image/jpeg', 0.9);
+    };
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = url;
+  });
+}
+
 // Google Places の一時URLをFirebase Storageに永続保存
 export async function uploadLandmarkPhotoFromUrl(
   userId: string, landmarkId: string, googleUrl: string
 ): Promise<LandmarkPhoto | null> {
+  const path = `landmarks/${userId}/${landmarkId}/${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
+
+  // 方法1: 直接fetch
   try {
     const res = await fetch(googleUrl);
     if (!res.ok) throw new Error('fetch failed');
     const blob = await res.blob();
-    const path = `landmarks/${userId}/${landmarkId}/${Date.now()}.jpg`;
-    const storageRef = ref(storage, path);
     await uploadBytes(storageRef, blob);
     const url = await getDownloadURL(storageRef);
     return { url, storagePath: path, takenAt: Date.now() };
-  } catch {
-    // CORSなどでfetchできない場合はGoogle URLをそのまま保存
-    return { url: googleUrl, storagePath: '', takenAt: Date.now() };
-  }
+  } catch {}
+
+  // 方法2: img→canvas経由（CORS回避）
+  try {
+    const blob = await urlToBlobViaCanvas(googleUrl);
+    await uploadBytes(storageRef, blob);
+    const url = await getDownloadURL(storageRef);
+    return { url, storagePath: path, takenAt: Date.now() };
+  } catch {}
+
+  // 最終手段: Google URLをそのまま保存（期限切れリスクあり）
+  return { url: googleUrl, storagePath: '', takenAt: Date.now() };
 }
 
 // --- 愛車 CRUD ---
