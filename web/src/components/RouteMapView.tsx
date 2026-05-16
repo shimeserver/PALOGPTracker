@@ -347,7 +347,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         // 保存時に常に速度を再計算（既存データの修復も兼ねる）
         const fixed = calcSpeedsForSegment(editPoints);
         await updateRoutePoints(route.id, fixed);
-        const updatedRoute = { ...route, points: fixed };
+        // ローカル状態もstats含めて更新
+        const speeds = fixed.map(p => p.speed).filter(s => s > 0);
+        let totalDist = 0;
+        for (let i = 1; i < fixed.length; i++) totalDist += haversineKm(fixed[i-1], fixed[i]);
+        const updatedRoute = {
+          ...route, points: fixed,
+          totalDistance: totalDist,
+          avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
+          maxSpeed: speeds.length > 0 ? Math.max(...speeds) : 0,
+        };
         onUpdateRoute?.(updatedRoute);
         setEditMode(false);
       } catch {
