@@ -96,6 +96,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [savingEdit, setSavingEdit] = useState(false);
     const [drawMode, setDrawMode] = useState(false);
     const [drawnPath, setDrawnPath] = useState<{lat: number; lng: number}[]>([]);
+    const [hasUndo, setHasUndo] = useState(false);
     const editPointsRef = useRef<TrackPoint[]>([]);
     const routeModeRef = useRef<string | undefined>(undefined);
     const prevEditPointsRef = useRef<TrackPoint[]>([]);
@@ -124,7 +125,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => {
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
-      setDrawMode(false); setDrawnPath([]);
+      setDrawMode(false); setDrawnPath([]); setHasUndo(false);
+      prevEditPointsRef.current = [];
     }, [route?.id]);
 
     // stale closure 防止用 ref の同期
@@ -206,6 +208,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           }));
 
           prevEditPointsRef.current = cur;
+          setHasUndo(true);
           setEditPoints([...cur.slice(0, si), ...newSeg, ...cur.slice(ei + 1)]);
           setDrawMode(false);
         } catch {
@@ -283,8 +286,20 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     };
 
     const cancelEditMode = () => {
-      setEditMode(false);
-      setEditPoints([]);
+      setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
+      setDrawMode(false); setDrawnPath([]); setHasUndo(false);
+      prevEditPointsRef.current = [];
+    };
+
+    const saveUndo = (pts: TrackPoint[]) => {
+      prevEditPointsRef.current = pts;
+      setHasUndo(true);
+    };
+
+    const applyUndo = () => {
+      setEditPoints(prevEditPointsRef.current);
+      prevEditPointsRef.current = [];
+      setHasUndo(false);
       setSelectedIndices(new Set());
     };
 
@@ -297,6 +312,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     };
 
     const deleteSelected = () => {
+      saveUndo(editPoints);
       setEditPoints(prev => prev.filter((_, i) => !selectedIndices.has(i)));
       setSelectedIndices(new Set());
     };
@@ -336,6 +352,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           if (i + CHUNK < editPoints.length) await new Promise(r => setTimeout(r, 200));
         }
 
+        saveUndo(editPoints);
         setEditPoints(snapped);
         setSelectedIndices(new Set());
       } catch {
@@ -378,8 +395,32 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     }, [route?.id, isAllMode ? allRoutes.length : 0]);
 
-    const displayed = route ? (playback ? route.points.slice(0, playIndex + 1) : route.points) : [];
+    const displayed = useMemo(
+      () => route ? (playback ? route.points.slice(0, playIndex + 1) : route.points) : [],
+      [route, playback, playIndex]
+    );
+    const displayedPath = useMemo(
+      () => displayed.map(p => ({ lat: p.lat, lng: p.lng })),
+      [displayed]
+    );
+    const editPath = useMemo(
+      () => editPoints.map(p => ({ lat: p.lat, lng: p.lng })),
+      [editPoints]
+    );
     const curPt = playback && route ? route.points[playIndex] : null;
+
+    // 編集モード: マップクリックで最近傍点を検出・選択（Markerを使わず軽量）
+    const handleEditMapClick = useCallback((e: google.maps.MapMouseEvent) => {
+      if (!editMode || drawMode || !e.latLng) return;
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      let nearest = -1, minDist = Infinity;
+      editPoints.forEach((p, i) => {
+        const d = Math.sqrt((p.lat - lat) ** 2 + (p.lng - lng) ** 2) * 111000;
+        if (d < minDist) { minDist = d; nearest = i; }
+      });
+      if (nearest >= 0 && minDist < 60) togglePointSelect(nearest);
+    }, [editMode, drawMode, editPoints, togglePointSelect]);
 
     const solidOutlineOpts = useMemo(() => ({ strokeColor: '#1d4ed8', strokeWeight: lineWidth + 4, strokeOpacity: 0.25 }), [lineWidth]);
     const solidMainOpts    = useMemo(() => ({ strokeColor: '#2563eb', strokeWeight: lineWidth, strokeOpacity: 0.95 }), [lineWidth]);
@@ -418,14 +459,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           mapTypeId={tileKey}
           onLoad={onLoad}
           options={mapOptions}
-          onClick={onMapRightClick ? (e: google.maps.MapMouseEvent) => {
-            const placeId = (e as any).placeId as string | undefined;
-            const lat = e.latLng?.lat();
-            const lng = e.latLng?.lng();
-            if (lat !== undefined && lng !== undefined) {
-              onMapRightClick(lat, lng, placeId);
+          onClick={(e: google.maps.MapMouseEvent) => {
+            if (editMode && !drawMode) { handleEditMapClick(e); return; }
+            if (onMapRightClick) {
+              const placeId = (e as any).placeId as string | undefined;
+              const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
+              if (lat !== undefined && lng !== undefined) onMapRightClick(lat, lng, placeId);
             }
-          } : undefined}
+          }}
         >
           {/* 全ルート表示（タグ色対応） */}
           {isAllMode && allRoutes.map((r, i) =>
@@ -441,8 +482,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           {/* 単一ルート：単色 */}
           {!isAllMode && colorMode === 'solid' && displayed.length > 1 && (
             <>
-              <Polyline path={displayed.map(p => ({ lat: p.lat, lng: p.lng }))} options={solidOutlineOpts} />
-              <Polyline path={displayed.map(p => ({ lat: p.lat, lng: p.lng }))} options={solidMainOpts} />
+              <Polyline path={displayedPath} options={solidOutlineOpts} />
+              <Polyline path={displayedPath} options={solidMainOpts} />
             </>
           )}
 
@@ -522,30 +563,18 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             />
           ))}
 
-          {/* 編集モード：GPSポイントを丸で表示してクリック選択 */}
-          {editMode && editPoints.map((p, i) => (
+          {/* 編集モード：グレーPolyline + 選択済みのみMarker表示（軽量化） */}
+          {editMode && editPoints.length > 1 && (
+            <Polyline path={editPath} options={{ strokeColor: '#6b7280', strokeWeight: 3, strokeOpacity: 0.7 }} />
+          )}
+          {editMode && Array.from(selectedIndices).map(i => editPoints[i] && (
             <Marker
-              key={`ep-${i}`}
-              position={{ lat: p.lat, lng: p.lng }}
-              icon={{
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: selectedIndices.has(i) ? 8 : 5,
-                fillColor: selectedIndices.has(i) ? '#ef4444' : '#2563eb',
-                fillOpacity: selectedIndices.has(i) ? 1 : 0.7,
-                strokeColor: '#fff',
-                strokeWeight: 2,
-              }}
-              onClick={() => togglePointSelect(i)}
-              title={`#${i} ${new Date(p.timestamp).toLocaleTimeString('ja-JP')} ${p.speed.toFixed(0)}km/h`}
+              key={`sel-${i}`}
+              position={{ lat: editPoints[i].lat, lng: editPoints[i].lng }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
+              title={`#${i} ${new Date(editPoints[i].timestamp).toLocaleTimeString('ja-JP')}`}
             />
           ))}
-          {/* 編集モード：編集中ルートをグレーで表示 */}
-          {editMode && editPoints.length > 1 && (
-            <Polyline
-              path={editPoints.map(p => ({ lat: p.lat, lng: p.lng }))}
-              options={{ strokeColor: '#6b7280', strokeWeight: 2, strokeOpacity: 0.6 }}
-            />
-          )}
           {/* なぞり描き中のプレビュー */}
           {drawnPath.length > 1 && (
             <Polyline
@@ -626,8 +655,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         {editMode && (
           <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: drawMode ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
             {drawMode
-              ? '✏️ なぞり描きモード — マウスを押しながらドラッグして正しいルートをなぞる'
-              : '✏️ 編集モード — ポイントをクリックして選択（赤 = 選択中）'}
+              ? '✏️ なぞり描き — マウスを押しながら正しいルートをなぞる → 離すと道路に自動吸着'
+              : `✏️ 編集モード — ルート上をクリックして最近傍点を選択 | 選択中: ${selectedIndices.size}点`}
           </div>
         )}
 
@@ -678,9 +707,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               >
                 {drawMode ? '✏️ 描画中...' : '✏️ なぞり描き'}
               </button>
-              {prevEditPointsRef.current.length > 0 && (
+              {hasUndo && (
                 <button
-                  onClick={() => { setEditPoints(prevEditPointsRef.current); prevEditPointsRef.current = []; }}
+                  onClick={applyUndo}
                   style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}
                 >
                   ↩ 元に戻す
