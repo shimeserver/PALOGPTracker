@@ -19,8 +19,9 @@ function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   if (seg.length < 2) return seg;
   const result = seg.map(p => ({ ...p }));
   for (let i = 0; i < result.length - 1; i++) {
-    const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000; // 時間
-    result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+    const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
+    const raw = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+    result[i].speed = Math.min(raw, 400); // 400km/hキャップ（新幹線最高速度以上は異常値）
   }
   result[result.length - 1].speed = result[result.length - 2].speed;
   return result;
@@ -307,9 +308,18 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         // 最大25 waypoint を等間隔でサンプリング
         const N = Math.min(25, editPoints.length);
         const step = (editPoints.length - 1) / (N - 1);
-        const waypoints = Array.from({ length: N }, (_, i) =>
+        const sampled = Array.from({ length: N }, (_, i) =>
           editPoints[Math.round(i * step)]
         );
+        // ワープ点を除去（前点から400km/h超の点をスキップ）
+        const waypoints: TrackPoint[] = [sampled[0]];
+        for (let i = 1; i < sampled.length - 1; i++) {
+          const prev = waypoints[waypoints.length - 1];
+          const dt = (sampled[i].timestamp - prev.timestamp) / 3600000;
+          if (dt > 0 && haversineKm(prev, sampled[i]) / dt > 400) continue;
+          waypoints.push(sampled[i]);
+        }
+        waypoints.push(sampled[sampled.length - 1]);
         const coords = waypoints.map(p => `${p.lng},${p.lat}`).join(';');
 
         const res = await fetch(
