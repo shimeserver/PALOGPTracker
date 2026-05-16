@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { GoogleMap, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
-import { getUserLandmarks, saveLandmark } from '../firebase/data';
-import type { Route, Landmark, TagDef } from '../firebase/data';
+import { getUserLandmarks, saveLandmark, updateRoutePoints } from '../firebase/data';
+import type { Route, Landmark, TagDef, TrackPoint } from '../firebase/data';
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
@@ -42,10 +42,11 @@ interface Props {
   tags: TagDef[];
   onMapRightClick?: (lat: number, lng: number, placeId?: string) => void;
   pinDragMode?: { id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null;
+  onUpdateRoute?: (route: Route) => void;
 }
 
 const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
-  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode }, ref) {
+  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode, onUpdateRoute }, ref) {
     const [landmarks, setLandmarks]   = useState<Landmark[]>([]);
     const [playback, setPlayback]     = useState(false);
     const [playIndex, setPlayIndex]   = useState(0);
@@ -56,6 +57,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [newSpotName, setNewSpotName] = useState('');
     const [newSpotCategory, setNewSpotCategory] = useState('その他');
     const [savingSpot, setSavingSpot] = useState(false);
+    const [editMode, setEditMode] = useState(false);
+    const [editPoints, setEditPoints] = useState<TrackPoint[]>([]);
+    const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+    const [savingEdit, setSavingEdit] = useState(false);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
@@ -78,7 +83,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     }));
 
     useEffect(() => { getUserLandmarks(userId).then(setLandmarks); }, [userId]);
-    useEffect(() => { setPlayback(false); setPlayIndex(0); setStopCandidates([]); }, [route?.id]);
+    useEffect(() => {
+      setPlayback(false); setPlayIndex(0); setStopCandidates([]);
+      setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
+    }, [route?.id]);
 
     // 停車候補を計算（route変化またはlandmarks変化時）
     useEffect(() => {
@@ -127,6 +135,49 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         alert('保存に失敗しました');
       } finally {
         setSavingSpot(false);
+      }
+    };
+
+    const startEditMode = () => {
+      if (!route) return;
+      setEditPoints([...route.points]);
+      setSelectedIndices(new Set());
+      setEditMode(true);
+      setPlayback(false);
+    };
+
+    const cancelEditMode = () => {
+      setEditMode(false);
+      setEditPoints([]);
+      setSelectedIndices(new Set());
+    };
+
+    const togglePointSelect = (idx: number) => {
+      setSelectedIndices(prev => {
+        const next = new Set(prev);
+        next.has(idx) ? next.delete(idx) : next.add(idx);
+        return next;
+      });
+    };
+
+    const deleteSelected = () => {
+      setEditPoints(prev => prev.filter((_, i) => !selectedIndices.has(i)));
+      setSelectedIndices(new Set());
+    };
+
+    const saveEditedRoute = async () => {
+      if (!route?.id || editPoints.length < 2) return;
+      setSavingEdit(true);
+      try {
+        await updateRoutePoints(route.id, editPoints);
+        const updatedRoute = { ...route, points: editPoints };
+        onUpdateRoute?.(updatedRoute);
+        setEditMode(false);
+        setSelectedIndices(new Set());
+      } catch {
+        alert('保存に失敗しました');
+      } finally {
+        setSavingEdit(false);
       }
     };
 
@@ -281,7 +332,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             );
           })}
           {/* 青ピン：未登録の停車候補 */}
-          {!isAllMode && stopCandidates.map((sc, i) => (
+          {!isAllMode && !editMode && stopCandidates.map((sc, i) => (
             <Marker
               key={`stop-${i}`}
               position={{ lat: sc.lat, lng: sc.lng }}
@@ -290,6 +341,31 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               onClick={() => { setAddStopModal(sc); setNewSpotName(''); setNewSpotCategory('その他'); }}
             />
           ))}
+
+          {/* 編集モード：GPSポイントを丸で表示してクリック選択 */}
+          {editMode && editPoints.map((p, i) => (
+            <Marker
+              key={`ep-${i}`}
+              position={{ lat: p.lat, lng: p.lng }}
+              icon={{
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: selectedIndices.has(i) ? 8 : 5,
+                fillColor: selectedIndices.has(i) ? '#ef4444' : '#2563eb',
+                fillOpacity: selectedIndices.has(i) ? 1 : 0.7,
+                strokeColor: '#fff',
+                strokeWeight: 2,
+              }}
+              onClick={() => togglePointSelect(i)}
+              title={`#${i} ${new Date(p.timestamp).toLocaleTimeString('ja-JP')} ${p.speed.toFixed(0)}km/h`}
+            />
+          ))}
+          {/* 編集モード：編集中ルートをグレーで表示 */}
+          {editMode && editPoints.length > 1 && (
+            <Polyline
+              path={editPoints.map(p => ({ lat: p.lat, lng: p.lng }))}
+              options={{ strokeColor: '#6b7280', strokeWeight: 2, strokeOpacity: 0.6 }}
+            />
+          )}
         </GoogleMap>
 
         {/* 青ピン：スポット登録モーダル */}
@@ -359,8 +435,15 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           </div>
         )}
 
+        {/* 編集モードバナー */}
+        {editMode && (
+          <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background:'rgba(239,68,68,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
+            ✏️ 編集モード — ポイントをクリックして選択（赤 = 選択中）
+          </div>
+        )}
+
         {/* 下部コントロール */}
-        {!isAllMode && route && (
+        {!isAllMode && route && !editMode && (
           <div style={ui.panel}>
             <div style={ui.routeInfo}>
               <span style={{ color:'#1f2937', fontWeight:700, fontSize:14 }}>{route.name || '（無名）'}</span>
@@ -376,6 +459,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   <option value={20}>20x</option><option value={50}>50x</option>
                 </select>
                 <button className="btn-primary" style={{ padding:'7px 16px', fontSize:13 }} onClick={() => { setPlayIndex(0); setPlayback(true); }}>▶ 再生</button>
+                {onUpdateRoute && <button onClick={startEditMode} style={{ padding:'7px 14px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', fontWeight:500 }}>✏️ 編集</button>}
               </div>
             ) : (
               <div style={{ display:'flex', gap:12, alignItems:'center' }}>
@@ -386,6 +470,35 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 <button style={ui.stopBtn} onClick={() => { clearInterval(intervalRef.current!); setPlayback(false); }}>■ 停止</button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* 編集モードコントロール */}
+        {!isAllMode && route && editMode && (
+          <div style={ui.panel}>
+            <div style={ui.routeInfo}>
+              <span style={{ color:'#ef4444', fontWeight:700, fontSize:14 }}>✏️ ルート編集</span>
+              <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt | {selectedIndices.size > 0 ? `${selectedIndices.size}点選択中` : 'ポイントをクリックして選択'}</span>
+            </div>
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <button
+                onClick={deleteSelected}
+                disabled={selectedIndices.size === 0}
+                style={{ padding:'7px 14px', fontSize:13, background: selectedIndices.size > 0 ? '#ef4444' : '#f3f4f6', color: selectedIndices.size > 0 ? '#fff' : '#9ca3af', border:'none', borderRadius:6, cursor: selectedIndices.size > 0 ? 'pointer' : 'default', fontWeight:600 }}
+              >
+                🗑 選択削除 ({selectedIndices.size})
+              </button>
+              <button
+                onClick={saveEditedRoute}
+                disabled={savingEdit || editPoints.length < 2}
+                style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+              >
+                {savingEdit ? '保存中...' : '💾 保存'}
+              </button>
+              <button onClick={cancelEditMode} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
+                キャンセル
+              </button>
+            </div>
           </div>
         )}
 

@@ -129,6 +129,25 @@ export async function deleteRoute(routeId: string): Promise<void> {
   await deleteDoc(doc(db, 'routes', routeId));
 }
 
+function haversineKm(p1: TrackPoint, p2: TrackPoint): number {
+  const R = 6371;
+  const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
+  const dLng = ((p2.lng - p1.lng) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((p1.lat * Math.PI) / 180) * Math.cos((p2.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export async function updateRoutePoints(routeId: string, points: TrackPoint[]): Promise<void> {
+  let totalDistance = 0;
+  for (let i = 1; i < points.length; i++) totalDistance += haversineKm(points[i - 1], points[i]);
+  const speeds = points.map(p => p.speed).filter(s => s > 0);
+  const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
+  const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+  const endTime = points[points.length - 1].timestamp;
+  await updateDoc(doc(db, 'routes', routeId), { points, totalDistance, avgSpeed, maxSpeed, endTime });
+}
+
 export async function deleteAllUserLandmarks(userId: string): Promise<number> {
   const q = query(collection(db, 'landmarks'), where('userId', '==', userId));
   const snap = await getDocs(q);

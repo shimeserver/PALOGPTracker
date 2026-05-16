@@ -160,6 +160,7 @@ export default function MainPage({ user }: Props) {
           tags={tags}
           onMapRightClick={mapRightClickCb ?? undefined}
           pinDragMode={tab === 'landmarks' ? pinDragMode : null}
+          onUpdateRoute={handleUpdateRoute}
         />
       </div>
 
