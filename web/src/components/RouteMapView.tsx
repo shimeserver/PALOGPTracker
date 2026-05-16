@@ -14,21 +14,17 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
 }
 
-// GPS速度の外れ値を局所中央値フィルタで除去（前後10点の中央値の3倍超のみ置換）
+// 前後1点と比較して3倍超なら外れ値（例: 40→300→40はNG、40→100→180はOK）
 function filterSpeedOutliers(points: TrackPoint[]): TrackPoint[] {
-  if (points.length < 2) return points;
+  if (points.length < 3) return points;
   const result = points.map(p => ({ ...p }));
-  const speeds = points.map(p => p.speed);
-  const WINDOW = 10, MULT = 3;
-  for (let i = 0; i < speeds.length; i++) {
-    if (speeds[i] <= 0) continue;
-    const neighbors = speeds
-      .slice(Math.max(0, i - WINDOW), Math.min(speeds.length, i + WINDOW + 1))
-      .filter(s => s > 0)
-      .sort((a, b) => a - b);
-    if (neighbors.length === 0) continue;
-    const localMed = neighbors[Math.floor(neighbors.length / 2)];
-    if (speeds[i] > localMed * MULT) result[i].speed = localMed;
+  const s = points.map(p => p.speed);
+  for (let i = 1; i < s.length - 1; i++) {
+    if (s[i] <= 0) continue;
+    const neighborMax = Math.max(s[i-1], s[i+1]);
+    if (neighborMax > 0 && s[i] > neighborMax * 3) {
+      result[i].speed = (s[i-1] + s[i+1]) / 2;
+    }
   }
   return result;
 }
