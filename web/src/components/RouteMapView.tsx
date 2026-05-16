@@ -6,6 +6,39 @@ import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 
+function haversineKm(a: TrackPoint, b: TrackPoint): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+function detectWarpPoints(points: TrackPoint[]): Set<number> {
+  const flagged = new Set<number>();
+  if (points.length < 2) return flagged;
+
+  // ①速度スパイク: 連続2点間の計算速度 > 400km/h → テレポート
+  for (let i = 0; i < points.length - 1; i++) {
+    const dt = (points[i+1].timestamp - points[i].timestamp) / 3600000; // 時間
+    if (dt > 0 && haversineKm(points[i], points[i+1]) / dt > 400) {
+      flagged.add(i + 1);
+    }
+  }
+
+  // ②幾何スパイク: A→B→C合計がA→C直線の5倍超 → 往復バグ(トンネル等)
+  for (let i = 1; i < points.length - 1; i++) {
+    const dAB = haversineKm(points[i-1], points[i]);
+    const dBC = haversineKm(points[i], points[i+1]);
+    const dAC = haversineKm(points[i-1], points[i+1]);
+    if (dAB + dBC > dAC * 5 && dAB + dBC - dAC > 0.3) {
+      flagged.add(i);
+    }
+  }
+
+  return flagged;
+}
+
 export type MapTypeId = 'roadmap' | 'hybrid' | 'terrain';
 export type ColorMode = 'solid' | 'speed';
 export type TileKey = MapTypeId;
@@ -481,6 +514,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt | {selectedIndices.size > 0 ? `${selectedIndices.size}点選択中` : 'ポイントをクリックして選択'}</span>
             </div>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <button
+                onClick={() => setSelectedIndices(detectWarpPoints(editPoints))}
+                style={{ padding:'7px 14px', fontSize:13, background:'#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="速度スパイク・往復バグを自動検出して選択"
+              >
+                🔍 自動検出
+              </button>
               <button
                 onClick={deleteSelected}
                 disabled={selectedIndices.size === 0}
