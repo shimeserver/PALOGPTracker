@@ -137,7 +137,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => {
       if (!mapRef.current || !editMode || !drawMode) return;
       const map = mapRef.current;
-      map.setOptions({ draggable: false, cursor: 'crosshair' });
+      map.setOptions({ draggable: false });
+      map.getDiv().style.cursor = 'crosshair';
 
       let isDown = false;
       let pts: {lat: number; lng: number}[] = [];
@@ -222,7 +223,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         google.maps.event.removeListener(onDown);
         google.maps.event.removeListener(onMove);
         google.maps.event.removeListener(onUp);
-        map.setOptions({ draggable: true, cursor: '' });
+        map.setOptions({ draggable: true });
+        map.getDiv().style.cursor = '';
         setDrawnPath([]);
       };
     }, [editMode, drawMode]);
