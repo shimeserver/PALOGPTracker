@@ -720,45 +720,24 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           <div style={ui.panel}>
             <div style={ui.routeInfo}>
               <span style={{ color:'#ef4444', fontWeight:700, fontSize:14 }}>✏️ ルート編集</span>
-              <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt | {selectedIndices.size > 0 ? `${selectedIndices.size}点選択中` : 'ポイントをクリックして選択'}</span>
+              <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt</span>
             </div>
-            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
               {hasUndo && (
-                <button
-                  onClick={applyUndo}
-                  style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}
-                >
+                <button onClick={applyUndo} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
                   ↩ 元に戻す
                 </button>
               )}
               <button
-                onClick={() => setSelectedIndices(detectWarpPoints(editPoints))}
-                disabled={savingEdit || isDragging}
-                style={{ padding:'7px 14px', fontSize:13, background:'#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="速度スパイク・往復バグを自動検出して選択"
-              >
-                🔍 自動検出
-              </button>
-              <button
                 onClick={snapToRoads}
                 disabled={savingEdit || isDragging}
-                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="全ポイントをOSRMで道路に合わせる"
+                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor: savingEdit || isDragging ? 'default' : 'pointer', fontWeight:600 }}
+                title="OSRMで全ポイントを道路に自動修正"
               >
-                🛣️ 全体スナップ
+                🛣️ ルート自動修正
               </button>
-              <button
-                onClick={deleteSelected}
-                disabled={selectedIndices.size === 0}
-                style={{ padding:'7px 14px', fontSize:13, background: selectedIndices.size > 0 ? '#ef4444' : '#f3f4f6', color: selectedIndices.size > 0 ? '#fff' : '#9ca3af', border:'none', borderRadius:6, cursor: selectedIndices.size > 0 ? 'pointer' : 'default', fontWeight:600 }}
-              >
-                🗑 選択削除 ({selectedIndices.size})
-              </button>
-              <button
-                onClick={saveEditedRoute}
-                disabled={savingEdit || editPoints.length < 2}
-                style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-              >
+              <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
+                style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
                 {savingEdit ? '保存中...' : '💾 保存'}
               </button>
               <button onClick={cancelEditMode} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
