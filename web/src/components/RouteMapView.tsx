@@ -386,8 +386,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (!route?.id || editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        await updateRoutePoints(route.id, editPoints);
-        const updatedRoute = { ...route, points: editPoints };
+        // 保存時に常に速度を再計算（既存データの修復も兼ねる）
+        const fixed = calcSpeedsForSegment(editPoints);
+        await updateRoutePoints(route.id, fixed);
+        const updatedRoute = { ...route, points: fixed };
         onUpdateRoute?.(updatedRoute);
         setEditMode(false);
         setSelectedIndices(new Set());
