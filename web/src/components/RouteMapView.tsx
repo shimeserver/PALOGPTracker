@@ -402,7 +402,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
     // 編集モード: マップクリックで最近傍点を検出・選択（Markerを使わず軽量）
     const handleEditMapClick = useCallback((e: google.maps.MapMouseEvent) => {
-      if (!editMode || drawMode || !e.latLng) return;
+      if (!editMode || isDragging || !e.latLng) return;
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
       let nearest = -1, minDist = Infinity;
@@ -411,7 +411,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         if (d < minDist) { minDist = d; nearest = i; }
       });
       if (nearest >= 0 && minDist < 60) togglePointSelect(nearest);
-    }, [editMode, drawMode, editPoints, togglePointSelect]);
+    }, [editMode, isDragging, editPoints, togglePointSelect]);
 
     const solidOutlineOpts = useMemo(() => ({ strokeColor: '#1d4ed8', strokeWeight: lineWidth + 4, strokeOpacity: 0.25 }), [lineWidth]);
     const solidMainOpts    = useMemo(() => ({ strokeColor: '#2563eb', strokeWeight: lineWidth, strokeOpacity: 0.95 }), [lineWidth]);
@@ -451,7 +451,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           onLoad={onLoad}
           options={mapOptions}
           onClick={(e: google.maps.MapMouseEvent) => {
-            if (editMode && !drawMode) { handleEditMapClick(e); return; }
+            if (editMode && !isDragging) { handleEditMapClick(e); return; }
             if (onMapRightClick) {
               const placeId = (e as any).placeId as string | undefined;
               const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
