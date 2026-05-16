@@ -331,6 +331,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     };
 
 
+    const forceRecalcSpeeds = () => {
+      // 既存速度を無視して座標+タイムスタンプから全点再計算
+      saveUndo(editPoints);
+      const reset = editPoints.map(p => ({ ...p, speed: 0 }));
+      setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(reset)));
+    };
+
     const snapToRoads = async () => {
       if (editPoints.length < 2) return;
       setSavingEdit(true);
@@ -767,6 +774,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   ↩ 元に戻す
                 </button>
               )}
+              <button
+                onClick={forceRecalcSpeeds}
+                disabled={savingEdit || isDragging}
+                style={{ padding:'7px 14px', fontSize:13, background:'#7c3aed', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="座標+タイムスタンプから全速度を強制再計算（速度データが壊れた場合に使用）"
+              >
+                🔄 速度再計算
+              </button>
               <button
                 onClick={snapToRoads}
                 disabled={savingEdit || isDragging}
