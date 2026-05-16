@@ -104,6 +104,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const dragPosRef = useRef<{lat:number;lng:number}|null>(null);
     const dragAnchorRef = useRef<{before:number;after:number}|null>(null);
     const savingEditRef = useRef(false);
+    const hasDraggedRef = useRef(false);
+    const mouseDownPosRef = useRef<{lat:number;lng:number}|null>(null);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
@@ -146,18 +148,32 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       map.setOptions({ draggable: false });
       map.getDiv().style.cursor = 'grabbing';
 
+      const DRAG_THRESHOLD = 0.00015; // 約15m
       const onMove = map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
         if (!e.latLng) return;
-        setDragPos({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+        const lat = e.latLng.lat(), lng = e.latLng.lng();
+        // 閾値を超えるまでプレビューを表示しない
+        if (!hasDraggedRef.current) {
+          const md = mouseDownPosRef.current;
+          if (!md) return;
+          const dist = Math.sqrt((lat - md.lat) ** 2 + (lng - md.lng) ** 2);
+          if (dist < DRAG_THRESHOLD) return;
+          hasDraggedRef.current = true;
+        }
+        setDragPos({ lat, lng });
       });
 
       const onUp = map.addListener('mouseup', async () => {
         setIsDragging(false);
+        const didDrag = hasDraggedRef.current;
         const anchor = dragAnchorRef.current;
         const pos = dragPosRef.current;
         const pts = editPointsRef.current;
         setDragPos(null); setDragAnchor(null);
-        if (!anchor || !pos || pts.length < 2 || savingEditRef.current) return;
+        hasDraggedRef.current = false;
+        mouseDownPosRef.current = null;
+        // 実際にドラッグしていない場合はクリック扱い（OSRM不要）
+        if (!didDrag || !anchor || !pos || pts.length < 2 || savingEditRef.current) return;
 
         setSavingEdit(true);
         try {
@@ -278,8 +294,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       const before = Math.max(0, ni - pad);
       const after = Math.min(pts.length - 1, ni + pad);
       dragAnchorRef.current = { before, after };
+      hasDraggedRef.current = false;
+      mouseDownPosRef.current = { lat, lng };
       setDragAnchor({ before, after });
-      setDragPos({ lat, lng });
       setIsDragging(true);
     }, []);
 
@@ -660,7 +677,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         {/* 編集モードバナー */}
         {editMode && (
           <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: isDragging ? 'rgba(34,197,94,0.95)' : 'rgba(37,99,235,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
-            {isDragging ? '🟢 ドラッグ中 — 離すと道路に自動スナップ' : '✏️ ルートをドラッグして形を変える | クリックで点を選択'}
+            {isDragging && !dragPos ? '🟢 ドラッグ開始 — 離すと道路に自動スナップ'
+            : isDragging ? '🟢 ドラッグ中 — 離すと道路に自動スナップ'
+            : savingEdit ? '🔄 ルート計算中...'
+            : '✏️ ルートをドラッグして形を変える | クリックで点を選択'}
           </div>
         )}
 
