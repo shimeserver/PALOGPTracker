@@ -175,12 +175,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           let snapped: {lat: number; lng: number}[] = pts;
           try {
             const res = await fetch(
-              `https://router.project-osrm.org/match/v1/${profile}/${coords}` +
+              `https://router.project-osrm.org/route/v1/${profile}/${coords}` +
               `?overview=full&geometries=geojson`
             );
             const data = await res.json();
-            if (data.code === 'Ok' && data.matchings?.[0]) {
-              snapped = data.matchings[0].geometry.coordinates.map(
+            if (data.code === 'Ok' && data.routes?.[0]) {
+              snapped = data.routes[0].geometry.coordinates.map(
                 (c: [number, number]) => ({ lng: c[0], lat: c[1] })
               );
             }
@@ -323,36 +323,34 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        const profile = route?.mode === 'walk' ? 'foot' : route?.mode === 'bicycle' ? 'cycling' : 'driving';
-        const CHUNK = 80;
-        const snapped: TrackPoint[] = [];
+        const profile = routeModeRef.current === 'walk' ? 'foot' : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
 
-        for (let i = 0; i < editPoints.length; i += CHUNK - 1) {
-          const chunk = editPoints.slice(i, Math.min(i + CHUNK, editPoints.length));
-          const coords = chunk.map(p => `${p.lng},${p.lat}`).join(';');
-          const timestamps = chunk.map(p => Math.floor(p.timestamp / 1000)).join(';');
-          const radiuses = chunk.map(() => '50').join(';');
+        // 最大25 waypoint を等間隔でサンプリング
+        const N = Math.min(25, editPoints.length);
+        const step = (editPoints.length - 1) / (N - 1);
+        const waypoints = Array.from({ length: N }, (_, i) =>
+          editPoints[Math.round(i * step)]
+        );
+        const coords = waypoints.map(p => `${p.lng},${p.lat}`).join(';');
 
-          const res = await fetch(
-            `https://router.project-osrm.org/match/v1/${profile}/${coords}` +
-            `?overview=false&timestamps=${timestamps}&radiuses=${radiuses}`
-          );
-          const data = await res.json();
-
-          const tracepoints: ({ location: [number, number] } | null)[] =
-            data.code === 'Ok' ? data.tracepoints : [];
-
-          const chunkResult: TrackPoint[] = chunk.map((p, j) => {
-            const tp = tracepoints[j];
-            return tp ? { ...p, lng: tp.location[0], lat: tp.location[1] } : p;
-          });
-
-          // チャンク結合時に先頭の重複を除く
-          snapped.push(...(i === 0 ? chunkResult : chunkResult.slice(1)));
-
-          // レートリミット対策
-          if (i + CHUNK < editPoints.length) await new Promise(r => setTimeout(r, 200));
+        const res = await fetch(
+          `https://router.project-osrm.org/route/v1/${profile}/${coords}` +
+          `?overview=full&geometries=geojson`
+        );
+        const data = await res.json();
+        if (data.code !== 'Ok' || !data.routes?.[0]) {
+          alert(`道路スナップ失敗: ${data.code ?? 'エラー'}`);
+          return;
         }
+
+        const routeCoords: [number, number][] = data.routes[0].geometry.coordinates;
+        const t0 = editPoints[0].timestamp;
+        const t1 = editPoints[editPoints.length - 1].timestamp;
+        const snapped: TrackPoint[] = routeCoords.map((c, i) => ({
+          lng: c[0], lat: c[1],
+          timestamp: t0 + (t1 - t0) * (i / Math.max(routeCoords.length - 1, 1)),
+          speed: 0,
+        }));
 
         saveUndo(editPoints);
         setEditPoints(snapped);
