@@ -198,6 +198,50 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setSelectedIndices(new Set());
     };
 
+    const snapToRoads = async () => {
+      if (editPoints.length < 2) return;
+      setSavingEdit(true);
+      try {
+        const profile = route?.mode === 'walk' ? 'foot' : route?.mode === 'bicycle' ? 'cycling' : 'driving';
+        const CHUNK = 80;
+        const snapped: TrackPoint[] = [];
+
+        for (let i = 0; i < editPoints.length; i += CHUNK - 1) {
+          const chunk = editPoints.slice(i, Math.min(i + CHUNK, editPoints.length));
+          const coords = chunk.map(p => `${p.lng},${p.lat}`).join(';');
+          const timestamps = chunk.map(p => Math.floor(p.timestamp / 1000)).join(';');
+          const radiuses = chunk.map(() => '50').join(';');
+
+          const res = await fetch(
+            `https://router.project-osrm.org/match/v1/${profile}/${coords}` +
+            `?overview=false&timestamps=${timestamps}&radiuses=${radiuses}`
+          );
+          const data = await res.json();
+
+          const tracepoints: ({ location: [number, number] } | null)[] =
+            data.code === 'Ok' ? data.tracepoints : [];
+
+          const chunkResult: TrackPoint[] = chunk.map((p, j) => {
+            const tp = tracepoints[j];
+            return tp ? { ...p, lng: tp.location[0], lat: tp.location[1] } : p;
+          });
+
+          // チャンク結合時に先頭の重複を除く
+          snapped.push(...(i === 0 ? chunkResult : chunkResult.slice(1)));
+
+          // レートリミット対策
+          if (i + CHUNK < editPoints.length) await new Promise(r => setTimeout(r, 200));
+        }
+
+        setEditPoints(snapped);
+        setSelectedIndices(new Set());
+      } catch {
+        alert('道路スナップに失敗しました（ネットワークを確認してください）');
+      } finally {
+        setSavingEdit(false);
+      }
+    };
+
     const saveEditedRoute = async () => {
       if (!route?.id || editPoints.length < 2) return;
       setSavingEdit(true);
@@ -520,6 +564,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 title="速度スパイク・往復バグを自動検出して選択"
               >
                 🔍 自動検出
+              </button>
+              <button
+                onClick={snapToRoads}
+                disabled={savingEdit}
+                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="OSRMを使ってGPSポイントを近くの道路に吸着（APIキー不要）"
+              >
+                🛣️ 道路に合わせる
               </button>
               <button
                 onClick={deleteSelected}
