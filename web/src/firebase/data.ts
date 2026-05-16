@@ -81,6 +81,9 @@ export interface Visit {
   timestamp: number; routeId?: string; notes?: string;
 }
 
+const toMs = (v: unknown): number =>
+  typeof (v as any)?.toMillis === 'function' ? (v as any).toMillis() : (typeof v === 'number' ? v : 0);
+
 export async function getUserRoutes(userId: string): Promise<Route[]> {
   const q = query(collection(db, 'routes'), where('userId', '==', userId));
   const snap = await getDocs(q);
@@ -89,9 +92,9 @@ export async function getUserRoutes(userId: string): Promise<Route[]> {
     return {
       id: d.id, ...data,
       tags: data.tags || [],
-      startTime: data.startTime.toMillis(),
-      endTime: data.endTime.toMillis(),
-      createdAt: data.createdAt.toMillis(),
+      startTime: toMs(data.startTime),
+      endTime: toMs(data.endTime),
+      createdAt: toMs(data.createdAt),
     } as Route;
   });
   return routes.sort((a, b) => b.startTime - a.startTime);
@@ -104,9 +107,9 @@ export async function getRoute(routeId: string): Promise<Route | null> {
   return {
     id: snap.id, ...data,
     tags: data.tags || [],
-    startTime: data.startTime.toMillis(),
-    endTime: data.endTime.toMillis(),
-    createdAt: data.createdAt.toMillis(),
+    startTime: toMs(data.startTime),
+    endTime: toMs(data.endTime),
+    createdAt: toMs(data.createdAt),
   } as Route;
 }
 
@@ -145,7 +148,10 @@ export async function updateRoutePoints(routeId: string, points: TrackPoint[]): 
   const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
   const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
   const endTime = points[points.length - 1].timestamp;
-  await updateDoc(doc(db, 'routes', routeId), { points, totalDistance, avgSpeed, maxSpeed, endTime });
+  await updateDoc(doc(db, 'routes', routeId), {
+    points, totalDistance, avgSpeed, maxSpeed,
+    endTime: Timestamp.fromMillis(endTime),
+  });
 }
 
 export async function deleteAllUserLandmarks(userId: string): Promise<number> {
