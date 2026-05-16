@@ -197,7 +197,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           if (data.code === 'Ok' && data.routes?.[0]) {
             const rc: [number, number][] = data.routes[0].geometry.coordinates;
             const aDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
-            const aDist: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.distance ?? []);
             const hasAnn = aDur.length === rc.length - 1;
             const ct: number[] = [0];
             if (hasAnn) {
@@ -213,8 +212,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             newSeg = rc.map((c, i) => ({
               lng: c[0], lat: c[1],
               timestamp: tt > 0 ? t0 + (t1 - t0) * (ct[i] / tt) : t0,
-              speed: hasAnn && i < aDur.length && aDur[i] > 0
-                ? (aDist[i] / 1000) / (aDur[i] / 3600) : 0,
+              speed: 0,
             }));
           } else {
             newSeg = [p1, { lat: pos.lat, lng: pos.lng, timestamp: (t0+t1)/2, speed: 0 }, p2];
@@ -373,7 +371,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         // 各レグのannotationを結合（レグ間はノード共有なので末尾重複なし）
         const annDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
-        const annDist: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.distance ?? []);
         const hasAnnotations = annDur.length === routeCoords.length - 1;
 
         // タイムスタンプ: annotationがあればOSRM所要時間比例、なければ距離比例
@@ -389,14 +386,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         }
         const totalT = cumTime[cumTime.length - 1];
 
-        const snapped: TrackPoint[] = routeCoords.map((c, i) => {
-          const ts = totalT > 0 ? t0 + (t1 - t0) * (cumTime[i] / totalT) : t0;
-          // annotationがあれば各区間の実際の速度（道路種別推定）を使用
-          const spd = hasAnnotations && i < annDur.length && annDur[i] > 0
-            ? (annDist[i] / 1000) / (annDur[i] / 3600)
-            : 0;
-          return { lng: c[0], lat: c[1], timestamp: ts, speed: spd };
-        });
+        const snapped: TrackPoint[] = routeCoords.map((c, i) => ({
+          lng: c[0], lat: c[1],
+          // タイムスタンプはOSRM比率で配分（道路種別ごとの速度差を反映）
+          // 速度はcalcSpeedsForSegmentで実走ベースで計算するためここは0
+          timestamp: totalT > 0 ? t0 + (t1 - t0) * (cumTime[i] / totalT) : t0,
+          speed: 0,
+        }));
         // speed=0の点だけ距離/時間から補完してフィルタ
         const snappedFixed = calcSpeedsForSegment(snapped);
 
