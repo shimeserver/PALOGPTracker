@@ -20,8 +20,7 @@ function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   const result = seg.map(p => ({ ...p }));
   for (let i = 0; i < result.length - 1; i++) {
     const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
-    const raw = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
-    result[i].speed = Math.min(raw, 400); // 400km/hキャップ（新幹線最高速度以上は異常値）
+    result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
   }
   result[result.length - 1].speed = result[result.length - 2].speed;
   return result;
@@ -177,9 +176,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           let newSeg: TrackPoint[];
           if (data.code === 'Ok' && data.routes?.[0]) {
             const rc: [number, number][] = data.routes[0].geometry.coordinates;
+            const cd: number[] = [0];
+            for (let i = 1; i < rc.length; i++) {
+              const a = { lat: rc[i-1][1], lng: rc[i-1][0], timestamp: 0, speed: 0 };
+              const b = { lat: rc[i][1], lng: rc[i][0], timestamp: 0, speed: 0 };
+              cd.push(cd[i-1] + haversineKm(a, b));
+            }
+            const td = cd[cd.length - 1];
             newSeg = rc.map((c, i) => ({
               lng: c[0], lat: c[1],
-              timestamp: t0 + (t1 - t0) * (i / Math.max(rc.length - 1, 1)),
+              timestamp: td > 0 ? t0 + (t1 - t0) * (cd[i] / td) : t0 + (t1 - t0) * (i / Math.max(rc.length - 1, 1)),
               speed: 0,
             }));
           } else {
@@ -335,9 +341,19 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const routeCoords: [number, number][] = data.routes[0].geometry.coordinates;
         const t0 = editPoints[0].timestamp;
         const t1 = editPoints[editPoints.length - 1].timestamp;
+        // 累積距離でタイムスタンプを比例割り当て（均等割りだと密な交差点で異常速度になる）
+        const cumDist: number[] = [0];
+        for (let i = 1; i < routeCoords.length; i++) {
+          const a = { lat: routeCoords[i-1][1], lng: routeCoords[i-1][0], timestamp: 0, speed: 0 };
+          const b = { lat: routeCoords[i][1], lng: routeCoords[i][0], timestamp: 0, speed: 0 };
+          cumDist.push(cumDist[i-1] + haversineKm(a, b));
+        }
+        const totalD = cumDist[cumDist.length - 1];
         const snapped = calcSpeedsForSegment(routeCoords.map((c, i) => ({
           lng: c[0], lat: c[1],
-          timestamp: t0 + (t1 - t0) * (i / Math.max(routeCoords.length - 1, 1)),
+          timestamp: totalD > 0
+            ? t0 + (t1 - t0) * (cumDist[i] / totalD)
+            : t0 + (t1 - t0) * (i / Math.max(routeCoords.length - 1, 1)),
           speed: 0,
         })));
 
