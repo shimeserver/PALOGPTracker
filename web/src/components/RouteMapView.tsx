@@ -212,8 +212,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           setHasUndo(true);
           setEditPoints([...cur.slice(0, si), ...newSeg, ...cur.slice(ei + 1)]);
           setDrawMode(false);
-        } catch {
-          alert('処理に失敗しました');
+        } catch (e) {
+          alert(`処理失敗: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
           setSavingEdit(false);
         }
@@ -355,8 +355,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         saveUndo(editPoints);
         setEditPoints(snapped);
         setSelectedIndices(new Set());
-      } catch {
-        alert('道路スナップに失敗しました（ネットワークを確認してください）');
+      } catch (e) {
+        alert(`道路スナップ失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setSavingEdit(false);
       }
@@ -479,16 +479,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             )
           )}
 
-          {/* 単一ルート：単色 */}
-          {!isAllMode && colorMode === 'solid' && displayed.length > 1 && (
+          {/* 単一ルート：単色（編集モード中は非表示） */}
+          {!isAllMode && !editMode && colorMode === 'solid' && displayed.length > 1 && (
             <>
               <Polyline path={displayedPath} options={solidOutlineOpts} />
               <Polyline path={displayedPath} options={solidMainOpts} />
             </>
           )}
 
-          {/* 単一ルート：速度カラー */}
-          {!isAllMode && colorMode === 'speed' && displayed.length > 1 &&
+          {/* 単一ルート：速度カラー（編集モード中は非表示） */}
+          {!isAllMode && !editMode && colorMode === 'speed' && displayed.length > 1 &&
             displayed.slice(0, -1).map((p, i) => (
               <Polyline
                 key={i}
@@ -498,14 +498,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             ))
           }
 
-          {/* スタート・ゴール */}
-          {!isAllMode && route && route.points.length > 0 && (
+          {/* スタート・ゴール（編集モード中は非表示） */}
+          {!isAllMode && !editMode && route && route.points.length > 0 && (
             <Marker
               position={{ lat: route.points[0].lat, lng: route.points[0].lng }}
               icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#22c55e', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
             />
           )}
-          {!isAllMode && route && !playback && route.points.length > 1 && (
+          {!isAllMode && !editMode && route && !playback && route.points.length > 1 && (
             <Marker
               position={{ lat: route.points[route.points.length-1].lat, lng: route.points[route.points.length-1].lng }}
               icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
