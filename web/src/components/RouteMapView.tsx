@@ -14,31 +14,38 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
 }
 
-// タイムスタンプから速度を再計算し、中央値ベースで外れ値を除去
+// GPS速度の外れ値を局所中央値フィルタで除去（前後10点の中央値の3倍超のみ置換）
+function filterSpeedOutliers(points: TrackPoint[]): TrackPoint[] {
+  if (points.length < 2) return points;
+  const result = points.map(p => ({ ...p }));
+  const speeds = points.map(p => p.speed);
+  const WINDOW = 10, MULT = 3;
+  for (let i = 0; i < speeds.length; i++) {
+    if (speeds[i] <= 0) continue;
+    const neighbors = speeds
+      .slice(Math.max(0, i - WINDOW), Math.min(speeds.length, i + WINDOW + 1))
+      .filter(s => s > 0)
+      .sort((a, b) => a - b);
+    if (neighbors.length === 0) continue;
+    const localMed = neighbors[Math.floor(neighbors.length / 2)];
+    if (speeds[i] > localMed * MULT) result[i].speed = localMed;
+  }
+  return result;
+}
+
+// OSRM出力（speed=0）の点にタイムスタンプから速度を計算して付与
 function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   if (seg.length < 2) return seg;
   const result = seg.map(p => ({ ...p }));
-
-  // 1pass: 生の速度を計算
-  const raw: number[] = [];
   for (let i = 0; i < result.length - 1; i++) {
-    const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
-    raw.push(dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0);
-  }
-  raw.push(raw[raw.length - 1]);
-
-  // 2pass: 中央値を求めて外れ値を置換（中央値の4倍超 or 最低200km/h超）
-  const positive = raw.filter(s => s > 0).sort((a, b) => a - b);
-  if (positive.length > 0) {
-    const median = positive[Math.floor(positive.length / 2)];
-    const cap = Math.max(median * 4, 200);
-    for (let i = 0; i < raw.length; i++) {
-      if (raw[i] > cap) raw[i] = median;
+    if (result[i].speed === 0) {
+      const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
+      result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
     }
   }
-
-  for (let i = 0; i < result.length; i++) result[i].speed = raw[i];
-  return result;
+  if (result[result.length - 1].speed === 0)
+    result[result.length - 1].speed = result[result.length - 2].speed;
+  return filterSpeedOutliers(result);
 }
 
 
@@ -193,17 +200,25 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           let newSeg: TrackPoint[];
           if (data.code === 'Ok' && data.routes?.[0]) {
             const rc: [number, number][] = data.routes[0].geometry.coordinates;
-            const cd: number[] = [0];
-            for (let i = 1; i < rc.length; i++) {
-              const a = { lat: rc[i-1][1], lng: rc[i-1][0], timestamp: 0, speed: 0 };
-              const b = { lat: rc[i][1], lng: rc[i][0], timestamp: 0, speed: 0 };
-              cd.push(cd[i-1] + haversineKm(a, b));
+            const aDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
+            const aDist: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.distance ?? []);
+            const hasAnn = aDur.length === rc.length - 1;
+            const ct: number[] = [0];
+            if (hasAnn) {
+              for (const d of aDur) ct.push(ct[ct.length-1] + d);
+            } else {
+              for (let i = 1; i < rc.length; i++) {
+                const a = { lat: rc[i-1][1], lng: rc[i-1][0], timestamp: 0, speed: 0 };
+                const b = { lat: rc[i][1], lng: rc[i][0], timestamp: 0, speed: 0 };
+                ct.push(ct[i-1] + haversineKm(a, b));
+              }
             }
-            const td = cd[cd.length - 1];
+            const tt = ct[ct.length-1];
             newSeg = rc.map((c, i) => ({
               lng: c[0], lat: c[1],
-              timestamp: td > 0 ? t0 + (t1 - t0) * (cd[i] / td) : t0 + (t1 - t0) * (i / Math.max(rc.length - 1, 1)),
-              speed: 0,
+              timestamp: tt > 0 ? t0 + (t1 - t0) * (ct[i] / tt) : t0,
+              speed: hasAnn && i < aDur.length && aDur[i] > 0
+                ? (aDist[i] / 1000) / (aDur[i] / 3600) : 0,
             }));
           } else {
             newSeg = [p1, { lat: pos.lat, lng: pos.lng, timestamp: (t0+t1)/2, speed: 0 }, p2];
@@ -345,9 +360,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         waypoints.push(sampled[sampled.length - 1]);
         const coords = waypoints.map(p => `${p.lng},${p.lat}`).join(';');
 
+        // annotations=duration,distance で道路種別ごとの速度推定を取得
         const res = await fetch(
           `https://router.project-osrm.org/route/v1/${profile}/${coords}` +
-          `?overview=full&geometries=geojson`
+          `?overview=full&geometries=geojson&annotations=duration,distance`
         );
         const data = await res.json();
         if (data.code !== 'Ok' || !data.routes?.[0]) {
@@ -358,24 +374,38 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const routeCoords: [number, number][] = data.routes[0].geometry.coordinates;
         const t0 = editPoints[0].timestamp;
         const t1 = editPoints[editPoints.length - 1].timestamp;
-        // 累積距離でタイムスタンプを比例割り当て（均等割りだと密な交差点で異常速度になる）
-        const cumDist: number[] = [0];
-        for (let i = 1; i < routeCoords.length; i++) {
-          const a = { lat: routeCoords[i-1][1], lng: routeCoords[i-1][0], timestamp: 0, speed: 0 };
-          const b = { lat: routeCoords[i][1], lng: routeCoords[i][0], timestamp: 0, speed: 0 };
-          cumDist.push(cumDist[i-1] + haversineKm(a, b));
+
+        // 各レグのannotationを結合（レグ間はノード共有なので末尾重複なし）
+        const annDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
+        const annDist: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.distance ?? []);
+        const hasAnnotations = annDur.length === routeCoords.length - 1;
+
+        // タイムスタンプ: annotationがあればOSRM所要時間比例、なければ距離比例
+        const cumTime: number[] = [0];
+        if (hasAnnotations) {
+          for (const d of annDur) cumTime.push(cumTime[cumTime.length-1] + d);
+        } else {
+          for (let i = 1; i < routeCoords.length; i++) {
+            const a = { lat: routeCoords[i-1][1], lng: routeCoords[i-1][0], timestamp: 0, speed: 0 };
+            const b = { lat: routeCoords[i][1], lng: routeCoords[i][0], timestamp: 0, speed: 0 };
+            cumTime.push(cumTime[i-1] + haversineKm(a, b));
+          }
         }
-        const totalD = cumDist[cumDist.length - 1];
-        const snapped = calcSpeedsForSegment(routeCoords.map((c, i) => ({
-          lng: c[0], lat: c[1],
-          timestamp: totalD > 0
-            ? t0 + (t1 - t0) * (cumDist[i] / totalD)
-            : t0 + (t1 - t0) * (i / Math.max(routeCoords.length - 1, 1)),
-          speed: 0,
-        })));
+        const totalT = cumTime[cumTime.length - 1];
+
+        const snapped: TrackPoint[] = routeCoords.map((c, i) => {
+          const ts = totalT > 0 ? t0 + (t1 - t0) * (cumTime[i] / totalT) : t0;
+          // annotationがあれば各区間の実際の速度（道路種別推定）を使用
+          const spd = hasAnnotations && i < annDur.length && annDur[i] > 0
+            ? (annDist[i] / 1000) / (annDur[i] / 3600)
+            : 0;
+          return { lng: c[0], lat: c[1], timestamp: ts, speed: spd };
+        });
+        // speed=0の点だけ距離/時間から補完してフィルタ
+        const snappedFixed = calcSpeedsForSegment(snapped);
 
         saveUndo(editPoints);
-        setEditPoints(snapped);
+        setEditPoints(snappedFixed);
       } catch (e) {
         alert(`道路スナップ失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -387,8 +417,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (!route?.id || editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        // 保存時に常に速度を再計算（既存データの修復も兼ねる）
-        const fixed = calcSpeedsForSegment(editPoints);
+        // speed=0の点は座標から補完、既存GPS速度は保持しつつ外れ値のみ除去
+        const fixed = filterSpeedOutliers(calcSpeedsForSegment(editPoints));
         await updateRoutePoints(route.id, fixed);
         // ローカル状態もstats含めて更新
         const speeds = fixed.map(p => p.speed).filter(s => s > 0);
