@@ -644,7 +644,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           </div>
         )}
 
-        {/* 左下：地図タイプ切替 */}
+        {/* 左下：地図タイプ切替 + 速度カラー */}
         <div style={{ position:'absolute', bottom:20, left:10, zIndex:1000, display:'flex', flexDirection:'column', gap:4 }}>
           {MAP_TYPE_BTNS.map(btn => (
             <button
@@ -653,18 +653,30 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               style={{
                 background: tileKey === btn.key ? 'rgba(37,99,235,0.95)' : 'rgba(255,255,255,0.95)',
                 color: tileKey === btn.key ? '#fff' : '#374151',
-                border: '1px solid #e8eaed',
-                borderRadius: 6,
-                padding: '5px 10px',
-                fontSize: 12,
+                border: '1px solid #e8eaed', borderRadius: 6,
+                padding: '5px 10px', fontSize: 12,
                 fontWeight: tileKey === btn.key ? 700 : 400,
-                cursor: 'pointer',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
               }}
             >
               {btn.label}
             </button>
           ))}
+          {!isAllMode && route && (
+            <button
+              onClick={() => onMapSettings({ ...mapSettings, colorMode: colorMode === 'speed' ? 'solid' : 'speed' })}
+              style={{
+                background: colorMode === 'speed' ? 'rgba(31,41,55,0.95)' : 'rgba(255,255,255,0.95)',
+                color: colorMode === 'speed' ? '#fff' : '#374151',
+                border: '1px solid #e8eaed', borderRadius: 6,
+                padding: '5px 10px', fontSize: 12, fontWeight: colorMode === 'speed' ? 700 : 400,
+                cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+              }}
+              title="速度カラー表示の切替"
+            >
+              🎨 速度色
+            </button>
+          )}
         </div>
 
         {/* 速度凡例（中央下） */}
@@ -705,13 +717,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   <option value={1}>1x</option><option value={5}>5x</option>
                   <option value={20}>20x</option><option value={50}>50x</option>
                 </select>
-                <button
-                  onClick={() => onMapSettings({ ...mapSettings, colorMode: colorMode === 'speed' ? 'solid' : 'speed' })}
-                  style={{ padding:'7px 12px', fontSize:13, background: colorMode === 'speed' ? '#1f2937' : '#f3f4f6', color: colorMode === 'speed' ? '#fff' : '#374151', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', fontWeight:500 }}
-                  title="速度カラー表示の切替"
-                >
-                  🎨 速度色
-                </button>
                 <button className="btn-primary" style={{ padding:'7px 16px', fontSize:13 }} onClick={() => { setPlayIndex(0); setPlayback(true); }}>▶ 再生</button>
                 {onUpdateRoute && <button onClick={startEditMode} style={{ padding:'7px 14px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', fontWeight:500 }}>✏️ 編集</button>}
               </div>
