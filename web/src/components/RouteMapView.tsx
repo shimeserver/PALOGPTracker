@@ -62,11 +62,13 @@ const MAP_TYPE_BTNS: { key: MapTypeId; label: string }[] = [
 ];
 
 function speedColor(s: number): string {
-  if (s <= 0)  return '#9ca3af';
-  if (s < 20)  return '#2196f3';
-  if (s < 60)  return '#4caf50';
-  if (s < 100) return '#ff9800';
-  return '#ef4444';
+  if (s <= 0)   return '#9ca3af'; // 停止
+  if (s <= 20)  return '#ef4444'; // 〜20 赤
+  if (s <= 60)  return '#f97316'; // 〜60 オレンジ
+  if (s <= 100) return '#eab308'; // 〜100 黄
+  if (s <= 150) return '#22c55e'; // 〜150 緑
+  if (s <= 200) return '#3b82f6'; // 〜200 青
+  return '#a855f7';               // 200〜 紫
 }
 
 interface Props {
@@ -667,9 +669,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         {/* 速度凡例（中央下） */}
         {!isAllMode && colorMode === 'speed' && (
-          <div style={{ position:'absolute', bottom:80, left:'50%', transform:'translateX(-50%)', zIndex:1000, display:'flex', gap:10, background:'rgba(255,255,255,0.95)', borderRadius:8, padding:'5px 14px', fontSize:11, boxShadow:'0 2px 8px rgba(0,0,0,0.15)', border:'1px solid #e8eaed', whiteSpace:'nowrap' }}>
-            {(['#2196f3','#4caf50','#ff9800','#ef4444'] as const).map((c,i) => (
-              <span key={i} style={{ color:c, fontWeight:600 }}>● {['低速','中速','高速','超高速'][i]}</span>
+          <div style={{ position:'absolute', bottom:80, left:'50%', transform:'translateX(-50%)', zIndex:1000, display:'flex', gap:8, background:'rgba(255,255,255,0.97)', borderRadius:8, padding:'5px 14px', fontSize:11, boxShadow:'0 2px 8px rgba(0,0,0,0.15)', border:'1px solid #e8eaed', whiteSpace:'nowrap' }}>
+            {([
+              ['#ef4444','〜20'],['#f97316','〜60'],['#eab308','〜100'],
+              ['#22c55e','〜150'],['#3b82f6','〜200'],['#a855f7','200+'],
+            ] as [string,string][]).map(([c,l]) => (
+              <span key={l} style={{ color:c, fontWeight:700 }}>● <span style={{ color:'#374151', fontWeight:400 }}>{l}</span></span>
             ))}
           </div>
         )}
@@ -700,6 +705,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   <option value={1}>1x</option><option value={5}>5x</option>
                   <option value={20}>20x</option><option value={50}>50x</option>
                 </select>
+                <button
+                  onClick={() => onMapSettings({ ...mapSettings, colorMode: colorMode === 'speed' ? 'solid' : 'speed' })}
+                  style={{ padding:'7px 12px', fontSize:13, background: colorMode === 'speed' ? '#1f2937' : '#f3f4f6', color: colorMode === 'speed' ? '#fff' : '#374151', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', fontWeight:500 }}
+                  title="速度カラー表示の切替"
+                >
+                  🎨 速度色
+                </button>
                 <button className="btn-primary" style={{ padding:'7px 16px', fontSize:13 }} onClick={() => { setPlayIndex(0); setPlayback(true); }}>▶ 再生</button>
                 {onUpdateRoute && <button onClick={startEditMode} style={{ padding:'7px 14px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', fontWeight:500 }}>✏️ 編集</button>}
               </div>
