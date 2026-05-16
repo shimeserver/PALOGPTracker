@@ -94,6 +94,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [editPoints, setEditPoints] = useState<TrackPoint[]>([]);
     const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
     const [savingEdit, setSavingEdit] = useState(false);
+    const [drawMode, setDrawMode] = useState(false);
+    const [drawnPath, setDrawnPath] = useState<{lat: number; lng: number}[]>([]);
+    const editPointsRef = useRef<TrackPoint[]>([]);
+    const routeModeRef = useRef<string | undefined>(undefined);
+    const prevEditPointsRef = useRef<TrackPoint[]>([]);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
@@ -119,7 +124,105 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => {
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
+      setDrawMode(false); setDrawnPath([]);
     }, [route?.id]);
+
+    // stale closure 防止用 ref の同期
+    useEffect(() => { editPointsRef.current = editPoints; }, [editPoints]);
+    useEffect(() => { routeModeRef.current = route?.mode; }, [route?.mode]);
+
+    // なぞり描きモード: map イベントリスナーを直接登録
+    useEffect(() => {
+      if (!mapRef.current || !editMode || !drawMode) return;
+      const map = mapRef.current;
+      map.setOptions({ draggable: false, cursor: 'crosshair' });
+
+      let isDown = false;
+      let pts: {lat: number; lng: number}[] = [];
+      let lastPt: {lat: number; lng: number} | null = null;
+
+      const onDown = map.addListener('mousedown', (e: google.maps.MapMouseEvent) => {
+        if (!e.latLng) return;
+        isDown = true; pts = []; lastPt = null;
+        const p = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+        pts.push(p); lastPt = p;
+        setDrawnPath([...pts]);
+      });
+
+      const onMove = map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
+        if (!isDown || !e.latLng) return;
+        const p = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+        if (lastPt) {
+          const d = Math.sqrt((p.lat - lastPt.lat) ** 2 + (p.lng - lastPt.lng) ** 2) * 111000;
+          if (d < 20) return;
+        }
+        pts.push(p); lastPt = p;
+        setDrawnPath([...pts]);
+      });
+
+      const onUp = map.addListener('mouseup', async () => {
+        if (!isDown || pts.length < 2) { isDown = false; setDrawnPath([]); return; }
+        isDown = false;
+        setDrawnPath([]);
+        setSavingEdit(true);
+        try {
+          const profile = routeModeRef.current === 'walk' ? 'foot'
+            : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
+          const coords = pts.map(p => `${p.lng},${p.lat}`).join(';');
+          let snapped: {lat: number; lng: number}[] = pts;
+          try {
+            const res = await fetch(
+              `https://router.project-osrm.org/match/v1/${profile}/${coords}` +
+              `?overview=full&geometries=geojson`
+            );
+            const data = await res.json();
+            if (data.code === 'Ok' && data.matchings?.[0]) {
+              snapped = data.matchings[0].geometry.coordinates.map(
+                (c: [number, number]) => ({ lng: c[0], lat: c[1] })
+              );
+            }
+          } catch {}
+
+          const cur = editPointsRef.current;
+          const start = snapped[0];
+          const end = snapped[snapped.length - 1];
+          const d2d = (p: TrackPoint, q: {lat: number; lng: number}) =>
+            Math.sqrt((p.lat - q.lat) ** 2 + (p.lng - q.lng) ** 2);
+
+          let si = 0, ei = cur.length - 1, minS = Infinity, minE = Infinity;
+          cur.forEach((p, i) => {
+            const ds = d2d(p, start); const de = d2d(p, end);
+            if (ds < minS) { minS = ds; si = i; }
+            if (de < minE) { minE = de; ei = i; }
+          });
+          if (si > ei) { const t = si; si = ei; ei = t; }
+
+          const t0 = cur[si]?.timestamp ?? Date.now();
+          const t1 = cur[ei]?.timestamp ?? Date.now() + 1000;
+          const newSeg: TrackPoint[] = snapped.map((p, i) => ({
+            lat: p.lat, lng: p.lng,
+            timestamp: t0 + (t1 - t0) * (i / Math.max(snapped.length - 1, 1)),
+            speed: 0,
+          }));
+
+          prevEditPointsRef.current = cur;
+          setEditPoints([...cur.slice(0, si), ...newSeg, ...cur.slice(ei + 1)]);
+          setDrawMode(false);
+        } catch {
+          alert('処理に失敗しました');
+        } finally {
+          setSavingEdit(false);
+        }
+      });
+
+      return () => {
+        google.maps.event.removeListener(onDown);
+        google.maps.event.removeListener(onMove);
+        google.maps.event.removeListener(onUp);
+        map.setOptions({ draggable: true, cursor: '' });
+        setDrawnPath([]);
+      };
+    }, [editMode, drawMode]);
 
     // 停車候補を計算（route変化またはlandmarks変化時）
     useEffect(() => {
@@ -443,6 +546,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               options={{ strokeColor: '#6b7280', strokeWeight: 2, strokeOpacity: 0.6 }}
             />
           )}
+          {/* なぞり描き中のプレビュー */}
+          {drawnPath.length > 1 && (
+            <Polyline
+              path={drawnPath}
+              options={{ strokeColor: '#22c55e', strokeWeight: 3, strokeOpacity: 0.9, zIndex: 10 }}
+            />
+          )}
         </GoogleMap>
 
         {/* 青ピン：スポット登録モーダル */}
@@ -514,8 +624,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         {/* 編集モードバナー */}
         {editMode && (
-          <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background:'rgba(239,68,68,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
-            ✏️ 編集モード — ポイントをクリックして選択（赤 = 選択中）
+          <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: drawMode ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
+            {drawMode
+              ? '✏️ なぞり描きモード — マウスを押しながらドラッグして正しいルートをなぞる'
+              : '✏️ 編集モード — ポイントをクリックして選択（赤 = 選択中）'}
           </div>
         )}
 
@@ -557,9 +669,26 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <span style={{ color:'#ef4444', fontWeight:700, fontSize:14 }}>✏️ ルート編集</span>
               <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt | {selectedIndices.size > 0 ? `${selectedIndices.size}点選択中` : 'ポイントをクリックして選択'}</span>
             </div>
-            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <button
+                onClick={() => setDrawMode(d => !d)}
+                disabled={savingEdit}
+                style={{ padding:'7px 14px', fontSize:13, background: drawMode ? '#22c55e' : '#6366f1', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="マウスでなぞると道路に自動スナップして区間を置換"
+              >
+                {drawMode ? '✏️ 描画中...' : '✏️ なぞり描き'}
+              </button>
+              {prevEditPointsRef.current.length > 0 && (
+                <button
+                  onClick={() => { setEditPoints(prevEditPointsRef.current); prevEditPointsRef.current = []; }}
+                  style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}
+                >
+                  ↩ 元に戻す
+                </button>
+              )}
               <button
                 onClick={() => setSelectedIndices(detectWarpPoints(editPoints))}
+                disabled={drawMode}
                 style={{ padding:'7px 14px', fontSize:13, background:'#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
                 title="速度スパイク・往復バグを自動検出して選択"
               >
@@ -567,11 +696,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               </button>
               <button
                 onClick={snapToRoads}
-                disabled={savingEdit}
+                disabled={savingEdit || drawMode}
                 style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="OSRMを使ってGPSポイントを近くの道路に吸着（APIキー不要）"
+                title="全ポイントを道路に吸着"
               >
-                🛣️ 道路に合わせる
+                🛣️ 全体スナップ
               </button>
               <button
                 onClick={deleteSelected}
