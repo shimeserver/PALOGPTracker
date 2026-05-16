@@ -14,6 +14,18 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
 }
 
+// タイムスタンプ補間済みのセグメントから速度を再計算
+function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
+  if (seg.length < 2) return seg;
+  const result = seg.map(p => ({ ...p }));
+  for (let i = 0; i < result.length - 1; i++) {
+    const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000; // 時間
+    result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+  }
+  result[result.length - 1].speed = result[result.length - 2].speed;
+  return result;
+}
+
 function detectWarpPoints(points: TrackPoint[]): Set<number> {
   const flagged = new Set<number>();
   if (points.length < 2) return flagged;
@@ -199,7 +211,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           }
           prevEditPointsRef.current = pts;
           setHasUndo(true);
-          setEditPoints([...pts.slice(0, anchor.before), ...newSeg, ...pts.slice(anchor.after + 1)]);
+          setEditPoints([...pts.slice(0, anchor.before), ...calcSpeedsForSegment(newSeg), ...pts.slice(anchor.after + 1)]);
         } catch (e) {
           alert(`ルート更新失敗: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -354,11 +366,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const routeCoords: [number, number][] = data.routes[0].geometry.coordinates;
         const t0 = editPoints[0].timestamp;
         const t1 = editPoints[editPoints.length - 1].timestamp;
-        const snapped: TrackPoint[] = routeCoords.map((c, i) => ({
+        const snapped = calcSpeedsForSegment(routeCoords.map((c, i) => ({
           lng: c[0], lat: c[1],
           timestamp: t0 + (t1 - t0) * (i / Math.max(routeCoords.length - 1, 1)),
           speed: 0,
-        }));
+        })));
 
         saveUndo(editPoints);
         setEditPoints(snapped);
