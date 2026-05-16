@@ -36,9 +36,9 @@ export async function clearRoutesCache(uid: string): Promise<void> {
 
 // Merge cached + new routes, dedup by id, sort newest first
 export function mergeRoutes(cached: RouteMetadata[], newRoutes: RouteMetadata[]): RouteMetadata[] {
-  const map = new Map(cached.map(r => [r.id, r]));
+  const map = new Map(cached.filter(r => r.id).map(r => [r.id, r]));
   for (const r of newRoutes) {
-    map.set(r.id, r);
+    if (r.id) map.set(r.id, r);
   }
   return Array.from(map.values()).sort((a, b) => b.startTime - a.startTime);
 }

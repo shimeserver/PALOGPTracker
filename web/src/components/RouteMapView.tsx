@@ -26,30 +26,6 @@ function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   return result;
 }
 
-function detectWarpPoints(points: TrackPoint[]): Set<number> {
-  const flagged = new Set<number>();
-  if (points.length < 2) return flagged;
-
-  // ①速度スパイク: 連続2点間の計算速度 > 400km/h → テレポート
-  for (let i = 0; i < points.length - 1; i++) {
-    const dt = (points[i+1].timestamp - points[i].timestamp) / 3600000; // 時間
-    if (dt > 0 && haversineKm(points[i], points[i+1]) / dt > 400) {
-      flagged.add(i + 1);
-    }
-  }
-
-  // ②幾何スパイク: A→B→C合計がA→C直線の5倍超 → 往復バグ(トンネル等)
-  for (let i = 1; i < points.length - 1; i++) {
-    const dAB = haversineKm(points[i-1], points[i]);
-    const dBC = haversineKm(points[i], points[i+1]);
-    const dAC = haversineKm(points[i-1], points[i+1]);
-    if (dAB + dBC > dAC * 5 && dAB + dBC - dAC > 0.3) {
-      flagged.add(i);
-    }
-  }
-
-  return flagged;
-}
 
 export type MapTypeId = 'roadmap' | 'hybrid' | 'terrain';
 export type ColorMode = 'solid' | 'speed';
@@ -104,7 +80,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [savingSpot, setSavingSpot] = useState(false);
     const [editMode, setEditMode] = useState(false);
     const [editPoints, setEditPoints] = useState<TrackPoint[]>([]);
-    const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
     const [savingEdit, setSavingEdit] = useState(false);
     const [hasUndo, setHasUndo] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
@@ -142,7 +117,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => { getUserLandmarks(userId).then(setLandmarks); }, [userId]);
     useEffect(() => {
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
-      setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
+      setEditMode(false); setEditPoints([]);
       setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
       prevEditPointsRef.current = [];
     }, [route?.id]);
@@ -281,13 +256,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const startEditMode = () => {
       if (!route) return;
       setEditPoints([...route.points]);
-      setSelectedIndices(new Set());
       setEditMode(true);
       setPlayback(false);
     };
 
     const cancelEditMode = () => {
-      setEditMode(false); setEditPoints([]); setSelectedIndices(new Set());
+      setEditMode(false); setEditPoints([]);
       setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
       prevEditPointsRef.current = [];
     };
@@ -321,23 +295,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints(prevEditPointsRef.current);
       prevEditPointsRef.current = [];
       setHasUndo(false);
-      setSelectedIndices(new Set());
     };
 
-    const togglePointSelect = (idx: number) => {
-      setSelectedIndices(prev => {
-        const next = new Set(prev);
-        next.has(idx) ? next.delete(idx) : next.add(idx);
-        return next;
-      });
-    };
-
-    const deleteSelected = () => {
-      if (selectedIndices.size === 0) return;
-      saveUndo(editPoints);
-      setEditPoints(prev => prev.filter((_, i) => !selectedIndices.has(i)));
-      setSelectedIndices(new Set());
-    };
 
     const snapToRoads = async () => {
       if (editPoints.length < 2) return;
@@ -374,7 +333,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         saveUndo(editPoints);
         setEditPoints(snapped);
-        setSelectedIndices(new Set());
       } catch (e) {
         alert(`道路スナップ失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -392,7 +350,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const updatedRoute = { ...route, points: fixed };
         onUpdateRoute?.(updatedRoute);
         setEditMode(false);
-        setSelectedIndices(new Set());
       } catch {
         alert('保存に失敗しました');
       } finally {
@@ -432,17 +389,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const curPt = playback && route ? route.points[playIndex] : null;
 
     // 編集モード: マップクリックで最近傍点を検出・選択（Markerを使わず軽量）
-    const handleEditMapClick = useCallback((e: google.maps.MapMouseEvent) => {
-      if (!editMode || isDragging || !e.latLng) return;
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      let nearest = -1, minDist = Infinity;
-      editPoints.forEach((p, i) => {
-        const d = Math.sqrt((p.lat - lat) ** 2 + (p.lng - lng) ** 2) * 111000;
-        if (d < minDist) { minDist = d; nearest = i; }
-      });
-      if (nearest >= 0 && minDist < 60) togglePointSelect(nearest);
-    }, [editMode, isDragging, editPoints, togglePointSelect]);
 
     const solidOutlineOpts = useMemo(() => ({ strokeColor: '#1d4ed8', strokeWeight: lineWidth + 4, strokeOpacity: 0.25 }), [lineWidth]);
     const solidMainOpts    = useMemo(() => ({ strokeColor: '#2563eb', strokeWeight: lineWidth, strokeOpacity: 0.95 }), [lineWidth]);
@@ -482,7 +428,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           onLoad={onLoad}
           options={mapOptions}
           onClick={(e: google.maps.MapMouseEvent) => {
-            if (editMode && !isDragging) { handleEditMapClick(e); return; }
             if (onMapRightClick) {
               const placeId = (e as any).placeId as string | undefined;
               const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
@@ -593,15 +538,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               onMouseDown={handleEditPolylineMouseDown}
             />
           )}
-          {/* 選択済み点のみMarker表示 */}
-          {editMode && Array.from(selectedIndices).map(i => editPoints[i] && (
-            <Marker
-              key={`sel-${i}`}
-              position={{ lat: editPoints[i].lat, lng: editPoints[i].lng }}
-              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
-              title={`#${i} ${new Date(editPoints[i].timestamp).toLocaleTimeString('ja-JP')}`}
-            />
-          ))}
           {/* ドラッグ中プレビュー: anchor-before → dragPos → anchor-after */}
           {editMode && dragPos && dragAnchor && editPoints[dragAnchor.before] && editPoints[dragAnchor.after] && (
             <>
@@ -694,7 +630,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             {isDragging && !dragPos ? '🟢 ドラッグ開始 — 離すと道路に自動スナップ'
             : isDragging ? '🟢 ドラッグ中 — 離すと道路に自動スナップ'
             : savingEdit ? '🔄 ルート計算中...'
-            : '✏️ ルートをドラッグして形を変える | クリックで点を選択'}
+            : '✏️ ルートをドラッグして形を変える'}
           </div>
         )}
 

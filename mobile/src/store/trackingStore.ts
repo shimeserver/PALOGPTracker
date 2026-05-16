@@ -29,7 +29,9 @@ async function saveRecovery(points: TrackPoint[], startTime: number, mode: Track
   try {
     const data: RecoveryData = { points, startTime, mode, savedAt: Date.now() };
     await AsyncStorage.setItem(RECOVERY_KEY, JSON.stringify(data));
-  } catch {}
+  } catch (e) {
+    console.warn('[Recovery] save failed:', e);
+  }
 }
 
 export const LOCATION_TASK = 'gps-background-tracking';

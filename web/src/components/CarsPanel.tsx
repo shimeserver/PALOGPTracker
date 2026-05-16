@@ -227,6 +227,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         if (car.photoUrl && !_carPhotoBlobUrls[car.id!]) {
           fetch(car.photoUrl).then(r => r.blob()).then(b => {
             if (!isMounted) return;
+            // 既存BlobURLがあれば先にrevoke
+            if (_carPhotoBlobUrls[car.id!]) URL.revokeObjectURL(_carPhotoBlobUrls[car.id!]);
             _carPhotoBlobUrls[car.id!] = URL.createObjectURL(b);
             setPhotoRefresh(n => n + 1);
           }).catch(() => {});
@@ -460,8 +462,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     if (!cropModal) return;
     const { carId, src: cropSrc } = cropModal;
     try {
-      const rawBlob = completedCrop ? await getCroppedBlob() : await resizeImage(cropModal.file);
-      const blob = completedCrop ? rawBlob : rawBlob;
+      const blob = completedCrop ? await getCroppedBlob() : await resizeImage(cropModal.file);
       const resized = await resizeImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
       const localUrl = URL.createObjectURL(resized);
 
