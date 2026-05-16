@@ -14,15 +14,30 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
 }
 
-// タイムスタンプ補間済みのセグメントから速度を再計算
+// タイムスタンプから速度を再計算し、中央値ベースで外れ値を除去
 function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   if (seg.length < 2) return seg;
   const result = seg.map(p => ({ ...p }));
+
+  // 1pass: 生の速度を計算
+  const raw: number[] = [];
   for (let i = 0; i < result.length - 1; i++) {
     const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
-    result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+    raw.push(dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0);
   }
-  result[result.length - 1].speed = result[result.length - 2].speed;
+  raw.push(raw[raw.length - 1]);
+
+  // 2pass: 中央値を求めて外れ値を置換（中央値の4倍超 or 最低200km/h超）
+  const positive = raw.filter(s => s > 0).sort((a, b) => a - b);
+  if (positive.length > 0) {
+    const median = positive[Math.floor(positive.length / 2)];
+    const cap = Math.max(median * 4, 200);
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] > cap) raw[i] = median;
+    }
+  }
+
+  for (let i = 0; i < result.length; i++) result[i].speed = raw[i];
   return result;
 }
 
