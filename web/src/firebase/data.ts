@@ -120,9 +120,9 @@ export async function getUserLandmarks(userId: string): Promise<Landmark[]> {
     const data = d.data();
     return {
       id: d.id, ...data,
-      createdAt: data.createdAt.toMillis(),
-      firstVisit: data.firstVisit?.toMillis(),
-      lastVisit: data.lastVisit?.toMillis(),
+      createdAt: toMs(data.createdAt),
+      firstVisit: data.firstVisit ? toMs(data.firstVisit) : undefined,
+      lastVisit: data.lastVisit ? toMs(data.lastVisit) : undefined,
     } as Landmark;
   });
   return landmarks.sort((a, b) => b.visitCount - a.visitCount);

@@ -29,6 +29,20 @@ function filterSpeedOutliers(points: TrackPoint[]): TrackPoint[] {
   return result;
 }
 
+// OSRM補正後の新座標に対し、元のGPS点から最近傍2点の速度を距離加重補間
+function interpolateSpeedFromOriginals(lat: number, lng: number, originals: TrackPoint[]): number {
+  const valid = originals.filter(p => p.speed > 0);
+  if (valid.length === 0) return 0;
+  const withDist = valid
+    .map(p => ({ speed: p.speed, d2: (p.lat - lat) ** 2 + (p.lng - lng) ** 2 }))
+    .sort((a, b) => a.d2 - b.d2);
+  if (withDist[0].d2 === 0) return withDist[0].speed;
+  const top = withDist.slice(0, 2);
+  const w0 = 1 / Math.sqrt(top[0].d2);
+  const w1 = top[1] ? 1 / Math.sqrt(top[1].d2) : 0;
+  return (top[0].speed * w0 + (top[1]?.speed ?? 0) * w1) / (w0 + w1);
+}
+
 // OSRM出力（speed=0）の点にタイムスタンプから速度を計算して付与
 function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   if (seg.length < 2) return seg;
@@ -212,10 +226,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             newSeg = rc.map((c, i) => ({
               lng: c[0], lat: c[1],
               timestamp: tt > 0 ? t0 + (t1 - t0) * (ct[i] / tt) : t0,
-              speed: 0,
+              speed: interpolateSpeedFromOriginals(c[1], c[0], pts),
             }));
           } else {
-            newSeg = [p1, { lat: pos.lat, lng: pos.lng, timestamp: (t0+t1)/2, speed: 0 }, p2];
+            newSeg = [p1, { lat: pos.lat, lng: pos.lng, timestamp: (t0+t1)/2, speed: interpolateSpeedFromOriginals(pos.lat, pos.lng, pts) }, p2];
           }
           prevEditPointsRef.current = pts;
           setHasUndo(true);
@@ -252,7 +266,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         });
       }, 100);
       return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    }, [playback, playSpeed, route?.id]);
+    }, [playback, playSpeed, route?.id, route?.points.length]);
 
     const handleSaveStop = async () => {
       if (!addStopModal || !newSpotName.trim()) return;
@@ -393,14 +407,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         }
         const totalT = cumTime[cumTime.length - 1];
 
+        // 元のGPS点から速度を補間して保持（OSRM補正後も実測速度を維持）
+        const originals = editPoints; // capture before state update
         const snapped: TrackPoint[] = routeCoords.map((c, i) => ({
           lng: c[0], lat: c[1],
-          // タイムスタンプはOSRM比率で配分（道路種別ごとの速度差を反映）
-          // 速度はcalcSpeedsForSegmentで実走ベースで計算するためここは0
           timestamp: totalT > 0 ? t0 + (t1 - t0) * (cumTime[i] / totalT) : t0,
-          speed: 0,
+          speed: interpolateSpeedFromOriginals(c[1], c[0], originals),
         }));
-        // speed=0の点だけ距離/時間から補完してフィルタ
+        // speed=0が残った点だけ距離/時間で補完し、外れ値フィルタをかける
         const snappedFixed = calcSpeedsForSegment(snapped);
 
         saveUndo(editPoints);
@@ -453,7 +467,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         route.points.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }));
         mapRef.current.fitBounds(bounds, 40);
       }
-    }, [route?.id, isAllMode ? allRoutes.length : 0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route?.id, isAllMode, allRoutes.length]);
 
     const displayed = useMemo(
       () => route ? (playback ? route.points.slice(0, playIndex + 1) : route.points) : [],
