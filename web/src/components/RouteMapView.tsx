@@ -636,7 +636,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 draggable={isDragTarget}
                 onClick={() => {
                   if (onMapRightClick || isDragTarget) return;
-                  if (lm.category === 'ガソリンスタンド' && route && cars.length > 0) {
+                  if (lm.category === 'ガソリンスタンド' && route) {
                     openFuelModal(lm);
                   } else {
                     setOpenLandmark(lm.id!);
@@ -657,7 +657,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                       <strong>{lm.name}</strong><br />
                       {lm.category} | 来訪{lm.visitCount}回
                       {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }} /></>}
-                      {lm.category === 'ガソリンスタンド' && route && cars.length > 0 && (
+                      {lm.category === 'ガソリンスタンド' && route && (
                         <><br /><button onClick={() => openFuelModal(lm)} style={{ marginTop: 6, padding: '4px 10px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>⛽ 給油記録</button></>
                       )}
                     </div>
@@ -746,6 +746,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>⛽ 給油記録</div>
               <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>{fuelModal.name}</div>
 
+              {/* 愛車未登録の場合 */}
+              {cars.length === 0 && (
+                <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>⚠️ 愛車が登録されていません。先に愛車パネルで登録してください。</div>
+              )}
               {/* 愛車選択（自動特定できない場合） */}
               {!fuelForm.carId && cars.length > 1 && (
                 <select value={fuelForm.carId} onChange={e => setFuelForm(f => ({ ...f, carId: e.target.value }))}
