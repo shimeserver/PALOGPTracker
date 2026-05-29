@@ -324,14 +324,15 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const pricePerLiter = fuelForm.pricePerLiter ? parseFloat(fuelForm.pricePerLiter) : undefined;
         const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
           : (pricePerLiter && liters ? pricePerLiter * liters : undefined);
-        await addFuelLog(fuelForm.carId, {
+        const logData: Parameters<typeof addFuelLog>[1] = {
           timestamp: route?.startTime ?? Date.now(),
           liters,
-          pricePerLiter,
-          totalCost,
           isFull: fuelForm.isFull,
-          notes: fuelForm.notes || undefined,
-        });
+        };
+        if (pricePerLiter !== undefined) logData.pricePerLiter = pricePerLiter;
+        if (totalCost !== undefined) logData.totalCost = totalCost;
+        if (fuelForm.notes.trim()) logData.notes = fuelForm.notes.trim();
+        await addFuelLog(fuelForm.carId, logData);
         setFuelModal(null);
         alert(`⛽ ${fuelModal.name} の給油記録を保存しました`);
       } catch (e) {
