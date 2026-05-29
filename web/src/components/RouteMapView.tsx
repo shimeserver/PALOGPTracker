@@ -325,7 +325,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
           : (pricePerLiter && liters ? pricePerLiter * liters : undefined);
         await addFuelLog(fuelForm.carId, {
-          carId: fuelForm.carId,
           timestamp: route?.startTime ?? Date.now(),
           liters,
           pricePerLiter,
