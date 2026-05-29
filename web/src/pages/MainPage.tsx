@@ -31,7 +31,7 @@ export default function MainPage({ user }: Props) {
   const [activityOpen, setActivityOpen]     = useState(false);
   const [landmarkCount, setLandmarkCount]   = useState(0);
   const [tags, setTags]                     = useState<TagDef[]>([]);
-  const [, setCars]                         = useState<Car[]>([]);
+  const [cars, setCars]                     = useState<Car[]>([]);
   const [activeCar, setActiveCar]           = useState<Car | null>(null);
   const [carWarning, setCarWarning]         = useState(false);
   const [mapRightClickCb, setMapPickCallback] = useState<((lat: number, lng: number, placeId?: string) => void) | null>(null);
@@ -158,6 +158,7 @@ export default function MainPage({ user }: Props) {
           mapSettings={mapSettings}
           onMapSettings={setMapSettings}
           tags={tags}
+          cars={cars}
           onMapRightClick={mapRightClickCb ?? undefined}
           pinDragMode={tab === 'landmarks' ? pinDragMode : null}
           onUpdateRoute={handleUpdateRoute}

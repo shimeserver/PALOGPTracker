@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { GoogleMap, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
-import { getUserLandmarks, saveLandmark, updateRoutePoints } from '../firebase/data';
-import type { Route, Landmark, TagDef, TrackPoint } from '../firebase/data';
+import { getUserLandmarks, saveLandmark, updateRoutePoints, addFuelLog } from '../firebase/data';
+import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data';
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
@@ -98,15 +98,19 @@ interface Props {
   onMapRightClick?: (lat: number, lng: number, placeId?: string) => void;
   pinDragMode?: { id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null;
   onUpdateRoute?: (route: Route) => void;
+  cars?: Car[];
 }
 
 const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
-  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode, onUpdateRoute }, ref) {
+  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode, onUpdateRoute, cars = [] }, ref) {
     const [landmarks, setLandmarks]   = useState<Landmark[]>([]);
     const [playback, setPlayback]     = useState(false);
     const [playIndex, setPlayIndex]   = useState(0);
     const [playSpeed, setPlaySpeed]   = useState(5);
     const [openLandmark, setOpenLandmark] = useState<string | null>(null);
+    const [fuelModal, setFuelModal] = useState<Landmark | null>(null);
+    const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', carId: '' });
+    const [savingFuel, setSavingFuel] = useState(false);
     const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
     const [addStopModal, setAddStopModal] = useState<StopCluster | null>(null);
     const [newSpotName, setNewSpotName] = useState('');
@@ -297,6 +301,44 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         alert('保存に失敗しました');
       } finally {
         setSavingSpot(false);
+      }
+    };
+
+    const openFuelModal = (lm: Landmark) => {
+      // ルートのタグから愛車を自動特定
+      const tagId = route?.tags?.[0];
+      const matchedCar = cars.find(c => c.tagId === tagId);
+      setFuelForm({
+        liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '',
+        carId: matchedCar?.id ?? (cars.length === 1 ? cars[0].id : ''),
+      });
+      setFuelModal(lm);
+      setOpenLandmark(null);
+    };
+
+    const handleSaveFuel = async () => {
+      if (!fuelModal || !fuelForm.carId || !fuelForm.liters) return;
+      setSavingFuel(true);
+      try {
+        const liters = parseFloat(fuelForm.liters);
+        const pricePerLiter = fuelForm.pricePerLiter ? parseFloat(fuelForm.pricePerLiter) : undefined;
+        const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
+          : (pricePerLiter && liters ? pricePerLiter * liters : undefined);
+        await addFuelLog(fuelForm.carId, {
+          carId: fuelForm.carId,
+          timestamp: route?.startTime ?? Date.now(),
+          liters,
+          pricePerLiter,
+          totalCost,
+          isFull: fuelForm.isFull,
+          notes: fuelForm.notes || undefined,
+        });
+        setFuelModal(null);
+        alert(`⛽ ${fuelModal.name} の給油記録を保存しました`);
+      } catch (e) {
+        alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSavingFuel(false);
       }
     };
 
@@ -590,10 +632,17 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <Marker
                 key={lm.id}
                 position={{ lat: lm.lat, lng: lm.lng }}
-                label={{ text: isDragTarget ? '✥' : '★', color: isDragTarget ? '#ef4444' : '#f59e0b', fontSize: isDragTarget ? '20px' : '16px' }}
+                label={{ text: isDragTarget ? '✥' : lm.category === 'ガソリンスタンド' ? '⛽' : '★', color: isDragTarget ? '#ef4444' : lm.category === 'ガソリンスタンド' ? '#16a34a' : '#f59e0b', fontSize: isDragTarget ? '20px' : '16px' }}
                 clickable={!onMapRightClick && !isDragTarget}
                 draggable={isDragTarget}
-                onClick={() => !onMapRightClick && !isDragTarget && setOpenLandmark(lm.id!)}
+                onClick={() => {
+                  if (onMapRightClick || isDragTarget) return;
+                  if (lm.category === 'ガソリンスタンド' && route && cars.length > 0) {
+                    openFuelModal(lm);
+                  } else {
+                    setOpenLandmark(lm.id!);
+                  }
+                }}
                 onDragEnd={isDragTarget ? (e: google.maps.MapMouseEvent) => {
                   const lat = e.latLng?.lat();
                   const lng = e.latLng?.lng();
@@ -609,6 +658,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                       <strong>{lm.name}</strong><br />
                       {lm.category} | 来訪{lm.visitCount}回
                       {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }} /></>}
+                      {lm.category === 'ガソリンスタンド' && route && cars.length > 0 && (
+                        <><br /><button onClick={() => openFuelModal(lm)} style={{ marginTop: 6, padding: '4px 10px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>⛽ 給油記録</button></>
+                      )}
                     </div>
                   </InfoWindow>
                 )}
@@ -682,6 +734,73 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 <button onClick={handleSaveStop} disabled={!newSpotName.trim() || savingSpot}
                   style={{ flex: 1, padding: '9px', background: newSpotName.trim() ? '#3b82f6' : '#93c5fd', border: 'none', borderRadius: 8, cursor: newSpotName.trim() ? 'pointer' : 'default', fontSize: 13, color: '#fff', fontWeight: 600 }}>
                   {savingSpot ? '保存中...' : '登録'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 給油記録モーダル */}
+        {fuelModal && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>⛽ 給油記録</div>
+              <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>{fuelModal.name}</div>
+
+              {/* 愛車選択（自動特定できない場合） */}
+              {!fuelForm.carId && cars.length > 1 && (
+                <select value={fuelForm.carId} onChange={e => setFuelForm(f => ({ ...f, carId: e.target.value }))}
+                  style={{ width: '100%', marginBottom: 12, padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14 }}>
+                  <option value="">愛車を選択...</option>
+                  {cars.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
+                </select>
+              )}
+              {fuelForm.carId && <div style={{ color: '#16a34a', fontSize: 12, marginBottom: 12 }}>🚗 {cars.find(c => c.id === fuelForm.carId)?.nickname}</div>}
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>給油量 (L) *</div>
+                  <input type="number" step="0.01" placeholder="例: 40.5" value={fuelForm.liters}
+                    onChange={e => {
+                      const l = e.target.value;
+                      const ppl = parseFloat(fuelForm.pricePerLiter);
+                      setFuelForm(f => ({ ...f, liters: l, totalCost: l && ppl ? (parseFloat(l) * ppl).toFixed(0) : f.totalCost }));
+                    }}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14 }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>単価 (円/L)</div>
+                  <input type="number" step="0.1" placeholder="例: 175" value={fuelForm.pricePerLiter}
+                    onChange={e => {
+                      const ppl = e.target.value;
+                      const l = parseFloat(fuelForm.liters);
+                      setFuelForm(f => ({ ...f, pricePerLiter: ppl, totalCost: l && ppl ? (l * parseFloat(ppl)).toFixed(0) : f.totalCost }));
+                    }}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14 }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>合計 (円)</div>
+                  <input type="number" placeholder="例: 7100" value={fuelForm.totalCost}
+                    onChange={e => setFuelForm(f => ({ ...f, totalCost: e.target.value }))}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14 }} />
+                </div>
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, cursor: 'pointer', fontSize: 14 }}>
+                <input type="checkbox" checked={fuelForm.isFull} onChange={e => setFuelForm(f => ({ ...f, isFull: e.target.checked }))} />
+                満タン給油
+              </label>
+
+              <input placeholder="メモ（任意）" value={fuelForm.notes}
+                onChange={e => setFuelForm(f => ({ ...f, notes: e.target.value }))}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14, marginBottom: 16 }} />
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setFuelModal(null)} style={{ flex: 1, padding: 10, background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>キャンセル</button>
+                <button onClick={handleSaveFuel}
+                  disabled={savingFuel || !fuelForm.liters || (!fuelForm.carId && cars.length > 0)}
+                  style={{ flex: 2, padding: 10, background: fuelForm.liters && fuelForm.carId ? '#16a34a' : '#9ca3af', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>
+                  {savingFuel ? '保存中...' : '⛽ 給油記録を保存'}
                 </button>
               </div>
             </div>
