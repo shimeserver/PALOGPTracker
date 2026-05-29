@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { GoogleMap, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
-import { getUserLandmarks, saveLandmark, updateRoutePoints, addFuelLog } from '../firebase/data';
+import { getUserLandmarks, saveLandmark, updateRoutePoints, addFuelLog, getUserCars } from '../firebase/data';
 import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data';
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
@@ -111,6 +111,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [fuelModal, setFuelModal] = useState<Landmark | null>(null);
     const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', carId: '' });
     const [savingFuel, setSavingFuel] = useState(false);
+    const [loadedCars, setLoadedCars] = useState<Car[]>(cars);
     const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
     const [addStopModal, setAddStopModal] = useState<StopCluster | null>(null);
     const [newSpotName, setNewSpotName] = useState('');
@@ -159,6 +160,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
       prevEditPointsRef.current = [];
     }, [route?.id]);
+
+    // carsが親から渡されたら同期
+    useEffect(() => { if (cars.length > 0) setLoadedCars(cars); }, [cars]);
 
     // stale closure 防止用 ref の同期
     useEffect(() => { editPointsRef.current = editPoints; }, [editPoints]);
@@ -304,13 +308,20 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     };
 
-    const openFuelModal = (lm: Landmark) => {
-      // ルートのタグから愛車を自動特定
+    const openFuelModal = async (lm: Landmark) => {
+      // cars が未ロードなら自動フェッチ
+      let activeCars = loadedCars;
+      if (activeCars.length === 0) {
+        try {
+          activeCars = await getUserCars(userId);
+          setLoadedCars(activeCars);
+        } catch {}
+      }
       const tagId = route?.tags?.[0];
-      const matchedCar = cars.find(c => c.tagId === tagId);
+      const matchedCar = activeCars.find(c => c.tagId === tagId);
       setFuelForm({
         liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '',
-        carId: matchedCar?.id ?? (cars.length === 1 ? cars[0].id : ''),
+        carId: matchedCar?.id ?? (activeCars.length === 1 ? (activeCars[0].id ?? '') : ''),
       });
       setFuelModal(lm);
       setOpenLandmark(null);
@@ -318,9 +329,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
     const handleSaveFuel = async () => {
       if (!fuelModal || !fuelForm.carId || !fuelForm.liters) return;
+      const liters = parseFloat(fuelForm.liters);
+      if (isNaN(liters) || liters <= 0) { alert('給油量を正しく入力してください'); return; }
       setSavingFuel(true);
       try {
-        const liters = parseFloat(fuelForm.liters);
         const pricePerLiter = fuelForm.pricePerLiter ? parseFloat(fuelForm.pricePerLiter) : undefined;
         const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
           : (pricePerLiter && liters ? pricePerLiter * liters : undefined);
@@ -748,18 +760,18 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>{fuelModal.name}</div>
 
               {/* 愛車未登録の場合 */}
-              {cars.length === 0 && (
+              {loadedCars.length === 0 && (
                 <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>⚠️ 愛車が登録されていません。先に愛車パネルで登録してください。</div>
               )}
               {/* 愛車選択（自動特定できない場合） */}
-              {!fuelForm.carId && cars.length > 1 && (
+              {!fuelForm.carId && loadedCars.length > 1 && (
                 <select value={fuelForm.carId} onChange={e => setFuelForm(f => ({ ...f, carId: e.target.value }))}
                   style={{ width: '100%', marginBottom: 12, padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e8eaed', fontSize: 14 }}>
                   <option value="">愛車を選択...</option>
-                  {cars.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
+                  {loadedCars.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
                 </select>
               )}
-              {fuelForm.carId && <div style={{ color: '#16a34a', fontSize: 12, marginBottom: 12 }}>🚗 {cars.find(c => c.id === fuelForm.carId)?.nickname}</div>}
+              {fuelForm.carId && <div style={{ color: '#16a34a', fontSize: 12, marginBottom: 12 }}>🚗 {loadedCars.find(c => c.id === fuelForm.carId)?.nickname}</div>}
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <div style={{ flex: 1 }}>
@@ -802,7 +814,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={() => setFuelModal(null)} style={{ flex: 1, padding: 10, background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>キャンセル</button>
                 <button onClick={handleSaveFuel}
-                  disabled={savingFuel || !fuelForm.liters || (!fuelForm.carId && cars.length > 0)}
+                  disabled={savingFuel || !fuelForm.liters || (!fuelForm.carId && loadedCars.length > 0)}
                   style={{ flex: 2, padding: 10, background: fuelForm.liters && fuelForm.carId ? '#16a34a' : '#9ca3af', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>
                   {savingFuel ? '保存中...' : '⛽ 給油記録を保存'}
                 </button>
