@@ -109,7 +109,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [playSpeed, setPlaySpeed]   = useState(5);
     const [openLandmark, setOpenLandmark] = useState<string | null>(null);
     const [fuelModal, setFuelModal] = useState<Landmark | null>(null);
-    const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', carId: '' });
+    const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', carId: '', timestamp: 0 });
     const [savingFuel, setSavingFuel] = useState(false);
     const [loadedCars, setLoadedCars] = useState<Car[]>(cars);
     const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
@@ -319,9 +319,22 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
       const tagId = route?.tags?.[0];
       const matchedCar = activeCars.find(c => c.tagId === tagId);
+
+      // ルートの停車クラスタから最寄りの停車時刻を取得（精度向上）
+      let fuelTimestamp = route?.startTime ?? Date.now();
+      if (route && route.points.length >= 2) {
+        const stops = detectStops(route.points);
+        let minDist = 0.15; // 150m以内
+        for (const stop of stops) {
+          const d = Math.sqrt((stop.lat - lm.lat) ** 2 + (stop.lng - lm.lng) ** 2) * 111;
+          if (d < minDist) { minDist = d; fuelTimestamp = Math.round((stop.startTime + stop.endTime) / 2); }
+        }
+      }
+
       setFuelForm({
         liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '',
         carId: matchedCar?.id ?? (activeCars.length === 1 ? (activeCars[0].id ?? '') : ''),
+        timestamp: fuelTimestamp,
       });
       setFuelModal(lm);
       setOpenLandmark(null);
@@ -337,7 +350,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
           : (pricePerLiter && liters ? pricePerLiter * liters : undefined);
         const logData: Parameters<typeof addFuelLog>[1] = {
-          timestamp: route?.startTime ?? Date.now(),
+          timestamp: fuelForm.timestamp || route?.startTime || Date.now(),
           liters,
           isFull: fuelForm.isFull,
         };
@@ -757,7 +770,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
               <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>⛽ 給油記録</div>
-              <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>{fuelModal.name}</div>
+              <div style={{ color: '#6b7280', fontSize: 13 }}>{fuelModal.name}</div>
+              <div style={{ color: '#9ca3af', fontSize: 11, marginBottom: 16 }}>
+                🕐 {new Date(fuelForm.timestamp).toLocaleString('ja-JP')}
+              </div>
 
               {/* 愛車未登録の場合 */}
               {loadedCars.length === 0 && (
