@@ -83,18 +83,18 @@ function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], car
     if (i === 0 || !log.isFull || !carTagId) return log;
     const prevFull = asc.slice(0, i).reverse().find(l => l.isFull);
     if (!prevFull) return log;
+    // 期間[prevFull.timestamp, log.timestamp]と重なる全ルートの重複部分を計算
+    // ルートが期間をまたいでいても正確に案分する
     const distanceSince = routes
       .filter(r => routeMatchesCarTag(r.tags, allTags, carTagId)
-        && r.startTime >= prevFull.timestamp
-        && r.startTime <= log.timestamp)
+        && r.endTime > prevFull.timestamp   // 前回給油より後に終了
+        && r.startTime < log.timestamp)     // 今回給油より前に開始
       .reduce((s, r) => {
-        // ルートが給油時刻をまたぐ場合は時間比例で部分計算
-        if (r.endTime > log.timestamp) {
-          const dur = r.endTime - r.startTime;
-          const frac = dur > 0 ? (log.timestamp - r.startTime) / dur : 1;
-          return s + r.totalDistance * frac;
-        }
-        return s + r.totalDistance;
+        const effStart = Math.max(r.startTime, prevFull.timestamp);
+        const effEnd = Math.min(r.endTime, log.timestamp);
+        const dur = r.endTime - r.startTime;
+        if (dur <= 0 || effEnd <= effStart) return s;
+        return s + r.totalDistance * ((effEnd - effStart) / dur);
       }, 0);
     const efficiency = distanceSince > 0 ? distanceSince / log.liters : undefined;
     return { ...log, distanceSince, efficiency };
