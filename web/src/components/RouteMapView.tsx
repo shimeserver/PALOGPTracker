@@ -320,13 +320,24 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       const tagId = route?.tags?.[0];
       const matchedCar = activeCars.find(c => c.tagId === tagId);
 
-      // ルートのGPSポイントから最も近い点のタイムスタンプを給油時刻として使用
+      // 給油時刻の決定: 停車クラスタ中間時刻 > 最近傍GPS点 > ルート開始
       let fuelTimestamp = route?.startTime ?? Date.now();
       if (route && route.points.length > 0) {
-        let minD = Infinity;
+        // まず最近傍GPS点を求める
+        let minD = Infinity, nearestTs = fuelTimestamp;
         for (const pt of route.points) {
           const d = (pt.lat - lm.lat) ** 2 + (pt.lng - lm.lng) ** 2;
-          if (d < minD) { minD = d; fuelTimestamp = pt.timestamp; }
+          if (d < minD) { minD = d; nearestTs = pt.timestamp; }
+        }
+        fuelTimestamp = nearestTs;
+        // 停車クラスタ（3分以上停車）がランドマーク周辺にあれば中間時刻を使用（より正確）
+        const stops = detectStops(route.points);
+        for (const stop of stops) {
+          const d = Math.sqrt((stop.lat - lm.lat) ** 2 + (stop.lng - lm.lng) ** 2) * 111;
+          if (d < 0.2) { // 200m以内
+            fuelTimestamp = Math.round((stop.startTime + stop.endTime) / 2);
+            break;
+          }
         }
       }
 
