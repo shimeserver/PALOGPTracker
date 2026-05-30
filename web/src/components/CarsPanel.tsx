@@ -53,6 +53,29 @@ interface Props {
 
 type DetailTab = 'stats' | 'fuel' | 'maintenance';
 
+function haversineKm(a: {lat:number;lng:number}, b: {lat:number;lng:number}): number {
+  const R = 6371, dLat = (b.lat-a.lat)*Math.PI/180, dLng = (b.lng-a.lng)*Math.PI/180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+// GPS点列の時間窓内の実走距離を計算（窓をまたぐ最初と最後の区間は時間比例で補間）
+function distanceInWindow(pts: {lat:number;lng:number;timestamp:number}[], t0: number, t1: number): number {
+  if (pts.length < 2) return 0;
+  let dist = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i+1];
+    if (b.timestamp <= t0 || a.timestamp >= t1) continue;
+    const segDist = haversineKm(a, b);
+    const segDur = b.timestamp - a.timestamp;
+    if (segDur <= 0) { dist += segDist; continue; }
+    const effStart = Math.max(a.timestamp, t0);
+    const effEnd = Math.min(b.timestamp, t1);
+    dist += segDist * (effEnd - effStart) / segDur;
+  }
+  return dist;
+}
+
 // ルートのタグがcarTagIdと「同名」かどうかを判定（ID直接一致 + 名前一致の両方）
 function routeMatchesCarTag(routeTags: string[], allTags: TagDef[], carTagId: string): boolean {
   const carTagName = allTags.find(t => t.id === carTagId)?.name;
@@ -83,13 +106,16 @@ function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], car
     if (i === 0 || !log.isFull || !carTagId) return log;
     const prevFull = asc.slice(0, i).reverse().find(l => l.isFull);
     if (!prevFull) return log;
-    // 期間[prevFull.timestamp, log.timestamp]と重なる全ルートの重複部分を計算
-    // ルートが期間をまたいでいても正確に案分する
+    // GPS点の実座標で時間窓内の距離を計算（時間比例の誤差を排除）
     const distanceSince = routes
       .filter(r => routeMatchesCarTag(r.tags, allTags, carTagId)
-        && r.endTime > prevFull.timestamp   // 前回給油より後に終了
-        && r.startTime < log.timestamp)     // 今回給油より前に開始
+        && r.endTime > prevFull.timestamp
+        && r.startTime < log.timestamp)
       .reduce((s, r) => {
+        if (r.points?.length >= 2) {
+          return s + distanceInWindow(r.points, prevFull.timestamp, log.timestamp);
+        }
+        // pointsがない場合のフォールバック（時間比例）
         const effStart = Math.max(r.startTime, prevFull.timestamp);
         const effEnd = Math.min(r.endTime, log.timestamp);
         const dur = r.endTime - r.startTime;
