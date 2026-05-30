@@ -355,6 +355,10 @@ export async function deleteFuelLog(carId: string, logId: string): Promise<void>
   await deleteDoc(doc(db, 'cars', carId, 'fuelLogs', logId));
 }
 
+export async function updateFuelLog(carId: string, logId: string, patch: Partial<Omit<FuelLog, 'id' | 'carId'>>): Promise<void> {
+  await updateDoc(doc(db, 'cars', carId, 'fuelLogs', logId), patch as Record<string, unknown>);
+}
+
 // --- 整備ログ ---
 export async function getMaintenanceLogs(carId: string): Promise<MaintenanceLog[]> {
   const snap = await getDocs(collection(db, 'cars', carId, 'maintenanceLogs'));

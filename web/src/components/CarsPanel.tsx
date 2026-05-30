@@ -3,7 +3,7 @@ import ReactCrop, { type Crop, centerCrop, makeAspectCrop, type PixelCrop } from
 import 'react-image-crop/dist/ReactCrop.css';
 import {
   getUserCars, createCar, updateCar, deleteCar,
-  getFuelLogs, addFuelLog, deleteFuelLog,
+  getFuelLogs, addFuelLog, deleteFuelLog, updateFuelLog,
   getMaintenanceLogs, addMaintenanceLog, updateMaintenanceLog, deleteMaintenanceLog,
   uploadCarPhotoBlob, createTag,
   MAINTENANCE_LABELS,
@@ -172,6 +172,8 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   // Add fuel log form
   const [showAddFuel, setShowAddFuel] = useState<string | null>(null);
   const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: new Date().toISOString().slice(0, 10) });
+  const [editFuelLog, setEditFuelLog] = useState<FuelLog | null>(null);
+  const [editFuelForm, setEditFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: '' });
 
   // Add maintenance form
   const [showAddMaint, setShowAddMaint] = useState<string | null>(null);
@@ -349,6 +351,39 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     } finally {
       setSavingFuel(false);
     }
+  };
+
+  const handleOpenEditFuel = (log: FuelLog) => {
+    setEditFuelLog(log);
+    setEditFuelForm({
+      liters: log.liters.toString(),
+      pricePerLiter: log.pricePerLiter?.toString() ?? '',
+      totalCost: log.totalCost?.toString() ?? '',
+      isFull: log.isFull,
+      notes: log.notes ?? '',
+      date: new Date(log.timestamp).toISOString().slice(0, 16),
+    });
+  };
+
+  const handleSaveEditFuel = async () => {
+    if (!editFuelLog?.id || !editFuelForm.liters) return;
+    const liters = parseFloat(editFuelForm.liters);
+    if (isNaN(liters) || liters <= 0) return;
+    const patch: Parameters<typeof updateFuelLog>[2] = {
+      timestamp: new Date(editFuelForm.date).getTime(),
+      liters,
+      isFull: editFuelForm.isFull,
+    };
+    if (editFuelForm.pricePerLiter) patch.pricePerLiter = parseFloat(editFuelForm.pricePerLiter);
+    if (editFuelForm.totalCost) patch.totalCost = parseFloat(editFuelForm.totalCost);
+    if (editFuelForm.notes.trim()) patch.notes = editFuelForm.notes.trim();
+    await updateFuelLog(editFuelLog.carId, editFuelLog.id, patch);
+    setFuelLogs(prev => ({
+      ...prev,
+      [editFuelLog.carId]: (prev[editFuelLog.carId] || []).map(l => l.id === editFuelLog.id ? { ...l, ...patch } : l),
+    }));
+    setEditFuelLog(null);
+    showToast('更新しました');
   };
 
   const handleDeleteFuel = async (carId: string, logId: string) => {
@@ -862,7 +897,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                                 )}
                                 {!log.isFull && <span style={{ fontSize: 10, color: '#f59e0b', background: '#fef3c7', borderRadius: 4, padding: '1px 5px' }}>非満タン</span>}
                               </div>
-                              <button onClick={() => handleDeleteFuel(car.id!, log.id!)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 14 }}>🗑</button>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                <button onClick={() => handleOpenEditFuel(log)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 13 }}>✏️</button>
+                                <button onClick={() => handleDeleteFuel(car.id!, log.id!)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 14 }}>🗑</button>
+                              </div>
                             </div>
                           </div>
                         ))}
@@ -1021,6 +1059,40 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       </div>
 
       {/* 給油記録モーダル */}
+      {/* 給油記録編集モーダル */}
+      {editFuelLog && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditFuelLog(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ color: '#1f2937', fontSize: 16, fontWeight: 700, marginBottom: 16 }}>⛽ 給油記録を編集</h3>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>日時</div>
+            <input style={s.input} type="datetime-local" value={editFuelForm.date} onChange={e => setEditFuelForm(f => ({ ...f, date: e.target.value }))} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>給油量 (L)</div>
+                <input style={s.input} type="number" step="0.01" value={editFuelForm.liters} onChange={e => setEditFuelForm(f => ({ ...f, liters: e.target.value }))} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>単価 (円/L)</div>
+                <input style={s.input} type="number" value={editFuelForm.pricePerLiter} onChange={e => setEditFuelForm(f => ({ ...f, pricePerLiter: e.target.value }))} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>合計 (円)</div>
+                <input style={s.input} type="number" value={editFuelForm.totalCost} onChange={e => setEditFuelForm(f => ({ ...f, totalCost: e.target.value }))} />
+              </div>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0', cursor: 'pointer', fontSize: 14 }}>
+              <input type="checkbox" checked={editFuelForm.isFull} onChange={e => setEditFuelForm(f => ({ ...f, isFull: e.target.checked }))} />
+              満タン給油
+            </label>
+            <input style={s.input} placeholder="メモ（任意）" value={editFuelForm.notes} onChange={e => setEditFuelForm(f => ({ ...f, notes: e.target.value }))} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setEditFuelLog(null)} style={{ flex: 1, padding: '9px', background: '#f3f4f6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>キャンセル</button>
+              <button onClick={handleSaveEditFuel} style={{ flex: 2, padding: '9px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 整備記録編集モーダル */}
       {editMaintModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditMaintModal(null)}>
