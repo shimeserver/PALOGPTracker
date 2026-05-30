@@ -84,8 +84,18 @@ function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], car
     const prevFull = asc.slice(0, i).reverse().find(l => l.isFull);
     if (!prevFull) return log;
     const distanceSince = routes
-      .filter(r => routeMatchesCarTag(r.tags, allTags, carTagId) && r.startTime >= prevFull.timestamp && r.startTime <= log.timestamp)
-      .reduce((s, r) => s + r.totalDistance, 0);
+      .filter(r => routeMatchesCarTag(r.tags, allTags, carTagId)
+        && r.startTime >= prevFull.timestamp
+        && r.startTime <= log.timestamp)
+      .reduce((s, r) => {
+        // ルートが給油時刻をまたぐ場合は時間比例で部分計算
+        if (r.endTime > log.timestamp) {
+          const dur = r.endTime - r.startTime;
+          const frac = dur > 0 ? (log.timestamp - r.startTime) / dur : 1;
+          return s + r.totalDistance * frac;
+        }
+        return s + r.totalDistance;
+      }, 0);
     const efficiency = distanceSince > 0 ? distanceSince / log.liters : undefined;
     return { ...log, distanceSince, efficiency };
   }).reverse();
