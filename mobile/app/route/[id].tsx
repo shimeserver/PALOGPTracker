@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Tex
 import { useLocalSearchParams } from 'expo-router';
 import WebView from 'react-native-webview';
 import { getRoute, updateRoute } from '../../src/firebase/routes';
-import { getUserTags } from '../../src/firebase/cars';
+import { getUserTags, getUserCars, addFuelLog } from '../../src/firebase/cars';
 import { saveLandmark, getUserLandmarks, recordVisit, recordVisitOnly } from '../../src/firebase/landmarks';
 import { Route, TrackingMode } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
@@ -34,6 +34,10 @@ const MAP_HTML = `<!DOCTYPE html>
     .pin-end{background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);white-space:nowrap}
     .pin-cursor{width:16px;height:16px;background:#4fc3f7;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(79,195,247,0.4)}
     .pin-stop{width:20px;height:20px;background:#3b82f6;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4);cursor:pointer}
+    .pin-lm{display:flex;flex-direction:column;align-items:center;cursor:pointer}
+    .pin-lm-dot{width:28px;height:28px;background:#f59e0b;border:2.5px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,0.3)}
+    .pin-lm-fuel{background:#16a34a}
+    .pin-lm-label{background:rgba(255,255,255,0.95);color:#1f2937;font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;box-shadow:0 1px 3px rgba(0,0,0,0.15)}
   </style>
 </head>
 <body>
@@ -50,6 +54,7 @@ var startMarker = null;
 var endMarker = null;
 var cursorMarker = null;
 var stopMarkers = [];
+var lmMarkers = [];
 var playbackPoints = null;
 
 function makeIcon(cls){ return L.divIcon({html:'<div class="'+cls+'"></div>',className:'',iconAnchor:[20,10]}); }
@@ -65,6 +70,26 @@ window.initRoute = function(points) {
   if(points.length>1){
     endMarker = L.marker([points[points.length-1].lat,points[points.length-1].lng],{icon:makeIcon('pin-end')}).addTo(map);
   }
+};
+
+window.setLandmarks = function(landmarks) {
+  lmMarkers.forEach(function(m){map.removeLayer(m);});
+  lmMarkers = [];
+  landmarks.forEach(function(lm){
+    var isFuel = lm.category === 'ガソリンスタンド';
+    var emoji = isFuel ? '⛽' : '★';
+    var dotCls = 'pin-lm-dot' + (isFuel ? ' pin-lm-fuel' : '');
+    var short = lm.name.length > 8 ? lm.name.slice(0,8)+'…' : lm.name;
+    var html = '<div class="pin-lm"><div class="'+dotCls+'">'+emoji+'</div><div class="pin-lm-label">'+short+'</div></div>';
+    var icon = L.divIcon({html:html,className:'',iconSize:[80,42],iconAnchor:[40,34]});
+    var m = L.marker([lm.lat,lm.lng],{icon:icon}).addTo(map);
+    m.on('click',function(){
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type:'tapLandmark',id:lm.id,name:lm.name,category:lm.category,lat:lm.lat,lng:lm.lng
+      }));
+    });
+    lmMarkers.push(m);
+  });
 };
 
 window.setStopCandidates = function(stops) {
@@ -141,6 +166,14 @@ export default function RouteDetailScreen() {
   const [newSpotCategory, setNewSpotCategory] = useState('その他');
   const [saving, setSaving] = useState(false);
 
+  // 給油モーダル
+  const [fuelModal, setFuelModal] = useState<{ name: string; lat: number; lng: number } | null>(null);
+  const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '' });
+  const [fuelCarId, setFuelCarId] = useState('');
+  const [fuelTimestamp, setFuelTimestamp] = useState(0);
+  const [savingFuel, setSavingFuel] = useState(false);
+  const [userCars, setUserCars] = useState<{ id: string; nickname: string; tagId?: string }[]>([]);
+
   // モード／タグ編集
   const [editModeModal, setEditModeModal] = useState(false);
   const [editMode, setEditMode] = useState<TrackingMode>('car');
@@ -158,16 +191,23 @@ export default function RouteDetailScreen() {
     getUserTags(user.uid).then(setUserTags).catch(() => {});
   }, [user]);
 
-  // ルート読み込み後に停車クラスタを解析
+  // ルート読み込み後に停車クラスタ解析＋ランドマーク表示
   useEffect(() => {
     if (!route || !user) return;
     const stops = detectStops(route.points);
-    if (stops.length === 0) return;
     getUserLandmarks(user.uid).then(landmarks => {
-      const { unmatchedStops } = matchStopsToLandmarks(stops, landmarks);
-      setStopCandidates(unmatchedStops);
-      if (initialized.current && unmatchedStops.length > 0) {
-        webviewRef.current?.injectJavaScript(`window.setStopCandidates(${JSON.stringify(unmatchedStops)});true;`);
+      // 停車候補（未登録スポット）
+      if (stops.length > 0) {
+        const { unmatchedStops } = matchStopsToLandmarks(stops, landmarks);
+        setStopCandidates(unmatchedStops);
+        if (initialized.current && unmatchedStops.length > 0) {
+          webviewRef.current?.injectJavaScript(`window.setStopCandidates(${JSON.stringify(unmatchedStops)});true;`);
+        }
+      }
+      // ランドマーク表示
+      const lmData = landmarks.map(lm => ({ id: lm.id, name: lm.name, category: lm.category, lat: lm.lat, lng: lm.lng }));
+      if (initialized.current) {
+        webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lmData)});true;`);
       }
     }).catch(() => {});
   }, [route, user]);
@@ -197,8 +237,67 @@ export default function RouteDetailScreen() {
         setAddStopModal({ lat: msg.lat, lng: msg.lng, durationMs: msg.durationMs });
         setNewSpotName('');
         setNewSpotCategory('その他');
+      } else if (msg.type === 'tapLandmark' && msg.category === 'ガソリンスタンド' && route) {
+        openFuelModal(msg);
       }
     } catch {}
+  };
+
+  const openFuelModal = async (lm: { name: string; lat: number; lng: number }) => {
+    if (!user || !route) return;
+    // 愛車を自動取得・特定
+    let cars = userCars;
+    if (cars.length === 0) {
+      try { cars = await getUserCars(user.uid); setUserCars(cars); } catch {}
+    }
+    const tagId = route.tags?.[0];
+    const matched = cars.find(c => c.tagId === tagId);
+    setFuelCarId(matched?.id ?? (cars.length === 1 ? (cars[0].id ?? '') : ''));
+    // タイムスタンプ: 停車クラスタ中間 > 最近傍GPS点
+    let ts = route.startTime;
+    const stops = detectStops(route.points);
+    let usedStop = false;
+    for (const stop of stops) {
+      const d = Math.sqrt((stop.lat - lm.lat) ** 2 + (stop.lng - lm.lng) ** 2) * 111;
+      if (d < 0.2) { ts = Math.round((stop.startTime + stop.endTime) / 2); usedStop = true; break; }
+    }
+    if (!usedStop) {
+      let minD = Infinity;
+      for (const pt of route.points) {
+        const d = (pt.lat - lm.lat) ** 2 + (pt.lng - lm.lng) ** 2;
+        if (d < minD) { minD = d; ts = pt.timestamp; }
+      }
+    }
+    setFuelTimestamp(ts);
+    setFuelForm({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '' });
+    setFuelModal(lm);
+  };
+
+  const handleSaveFuel = async () => {
+    if (!fuelCarId || !fuelForm.liters) return;
+    const liters = parseFloat(fuelForm.liters);
+    if (isNaN(liters) || liters <= 0) { Alert.alert('エラー', '給油量を正しく入力してください'); return; }
+    setSavingFuel(true);
+    try {
+      const pricePerLiter = fuelForm.pricePerLiter ? parseFloat(fuelForm.pricePerLiter) : undefined;
+      const totalCost = fuelForm.totalCost ? parseFloat(fuelForm.totalCost)
+        : (pricePerLiter ? pricePerLiter * liters : undefined);
+      const logData: Omit<import('../../src/types').FuelLog, 'id' | 'carId'> = {
+        timestamp: fuelTimestamp,
+        liters,
+        isFull: fuelForm.isFull,
+        ...(pricePerLiter !== undefined && { pricePerLiter }),
+        ...(totalCost !== undefined && { totalCost }),
+        ...(fuelForm.notes.trim() && { notes: fuelForm.notes.trim() }),
+      };
+      await addFuelLog(fuelCarId, logData);
+      setFuelModal(null);
+      Alert.alert('完了', `⛽ ${fuelModal?.name} の給油記録を保存しました`);
+    } catch (e: any) {
+      Alert.alert('エラー', e.message ?? '保存に失敗しました');
+    } finally {
+      setSavingFuel(false);
+    }
   };
 
   const handleOpenEditMode = () => {
@@ -331,6 +430,9 @@ export default function RouteDetailScreen() {
               {route.mode === 'walk' ? '🚶' : route.mode === 'bicycle' ? '🚲' : '🚗'} 変更
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setLoading(true); getRoute(id!).then(r => { setRoute(r); setLoading(false); initialized.current = false; }); }} style={{ backgroundColor: '#1e3a5f', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3 }}>
+            <Text style={{ color: '#4fc3f7', fontSize: 12 }}>🔄</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.metrics}>
@@ -408,6 +510,65 @@ export default function RouteDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
+      </Modal>
+
+      {/* 給油記録モーダル */}
+      <Modal visible={!!fuelModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <ScrollView>
+            <View style={[styles.modalCard, { maxHeight: '90%' }]}>
+              <Text style={styles.modalTitle}>⛽ 給油記録</Text>
+              <Text style={{ color: '#6b7280', fontSize: 13, marginBottom: 4 }}>{fuelModal?.name}</Text>
+              <Text style={{ color: '#9ca3af', fontSize: 11, marginBottom: 16 }}>
+                🕐 {new Date(fuelTimestamp).toLocaleString('ja-JP')}
+              </Text>
+              {userCars.length > 1 && !fuelCarId && (
+                <Text style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>愛車を選択してください</Text>
+              )}
+              {fuelCarId ? (
+                <Text style={{ color: '#16a34a', fontSize: 13, marginBottom: 12 }}>
+                  🚗 {userCars.find(c => c.id === fuelCarId)?.nickname}
+                </Text>
+              ) : null}
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#6b7280', fontSize: 12, marginBottom: 4 }}>給油量 (L) *</Text>
+                  <TextInput style={styles.modalInput} placeholder="例: 45.5" placeholderTextColor="#9ca3af"
+                    keyboardType="decimal-pad" value={fuelForm.liters}
+                    onChangeText={v => setFuelForm(f => ({ ...f, liters: v }))} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#6b7280', fontSize: 12, marginBottom: 4 }}>単価 (円/L)</Text>
+                  <TextInput style={styles.modalInput} placeholder="例: 165" placeholderTextColor="#9ca3af"
+                    keyboardType="decimal-pad" value={fuelForm.pricePerLiter}
+                    onChangeText={v => setFuelForm(f => ({ ...f, pricePerLiter: v }))} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#6b7280', fontSize: 12, marginBottom: 4 }}>合計 (円)</Text>
+                  <TextInput style={styles.modalInput} placeholder="例: 7500" placeholderTextColor="#9ca3af"
+                    keyboardType="decimal-pad" value={fuelForm.totalCost}
+                    onChangeText={v => setFuelForm(f => ({ ...f, totalCost: v }))} />
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setFuelForm(f => ({ ...f, isFull: !f.isFull }))}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <View style={{ width: 20, height: 20, borderRadius: 4, borderWidth: 2, borderColor: fuelForm.isFull ? '#2563eb' : '#d1d5db', backgroundColor: fuelForm.isFull ? '#2563eb' : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                  {fuelForm.isFull && <Text style={{ color: '#fff', fontSize: 12 }}>✓</Text>}
+                </View>
+                <Text style={{ color: '#374151', fontSize: 14 }}>満タン給油</Text>
+              </TouchableOpacity>
+              <TextInput style={styles.modalInput} placeholder="メモ（任意）" placeholderTextColor="#9ca3af"
+                value={fuelForm.notes} onChangeText={v => setFuelForm(f => ({ ...f, notes: v }))} />
+              <TouchableOpacity style={[styles.modalButton, { backgroundColor: '#16a34a', marginTop: 16 }]}
+                onPress={handleSaveFuel} disabled={savingFuel || !fuelForm.liters}>
+                <Text style={styles.modalButtonText}>{savingFuel ? '保存中...' : '⛽ 給油記録を保存'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setFuelModal(null)}>
+                <Text style={styles.modalCancel}>キャンセル</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -502,4 +663,8 @@ const styles = StyleSheet.create({
   saveBtn: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: '#2563eb', alignItems: 'center' },
   saveBtnDisabled: { backgroundColor: '#93c5fd' },
   saveBtnText: { color: '#fff', fontWeight: '700' },
+  modalInput: { borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, padding: 10, fontSize: 14, color: '#1f2937', backgroundColor: '#f9fafb', marginBottom: 0 },
+  modalButton: { padding: 14, borderRadius: 10, alignItems: 'center' as const, backgroundColor: '#2563eb' },
+  modalButtonText: { color: '#fff', fontWeight: '700' as const, fontSize: 15 },
+  modalCancel: { textAlign: 'center' as const, color: '#9ca3af', fontSize: 14, marginTop: 12 },
 });
