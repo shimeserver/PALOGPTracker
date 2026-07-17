@@ -74,15 +74,32 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   setTrackingMode: (mode) => set({ trackingMode: mode }),
 
   addPoints: (locations) => {
-    if (get().isPaused) return; // 一時停止中はポイントを無視
-    const newPoints: TrackPoint[] = locations.map(loc => ({
-      lat: loc.coords.latitude,
-      lng: loc.coords.longitude,
-      timestamp: loc.timestamp,
-      speed: loc.coords.speed != null && loc.coords.speed >= 0
-        ? loc.coords.speed * 3.6  // m/s → km/h
-        : 0,
-    }));
+    if (get().isPaused) return;
+    const existing = get().currentPoints;
+    const newPoints: TrackPoint[] = [];
+    for (const loc of locations) {
+      // 精度が50m超の場合はスキップ（GPSが安定していない）
+      if (loc.coords.accuracy != null && loc.coords.accuracy > 50) continue;
+      const pt: TrackPoint = {
+        lat: loc.coords.latitude,
+        lng: loc.coords.longitude,
+        timestamp: loc.timestamp,
+        speed: loc.coords.speed != null && loc.coords.speed >= 0
+          ? loc.coords.speed * 3.6
+          : 0,
+      };
+      // 直前点との速度チェック（300km/h超 = GPSジャンプとみなしてスキップ）
+      const prev = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
+      if (prev) {
+        const dtH = (pt.timestamp - prev.timestamp) / 3600000;
+        if (dtH > 0) {
+          const distKm = haversine(prev, pt);
+          if (distKm / dtH > 300) continue;
+        }
+      }
+      newPoints.push(pt);
+    }
+    if (newPoints.length === 0) return;
     set(state => {
       const updated = [...state.currentPoints, ...newPoints];
       // 30pt毎にAsyncStorageへ自動バックアップ（電源断対策）

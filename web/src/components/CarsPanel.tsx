@@ -947,7 +947,10 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                     {detailTab === 'maintenance' && (
                       <div style={{ padding: '12px 18px' }}>
                         <button
-                          onClick={() => setShowAddMaint(car.id!)}
+                          onClick={() => {
+                            if (displayOdometer > 0) setMaintForm(f => ({ ...f, odometerKm: Math.round(displayOdometer).toString() }));
+                            setShowAddMaint(car.id!);
+                          }}
                           style={{ width: '100%', background: '#fff', border: '1.5px dashed #2563eb', borderRadius: 8, padding: '8px', color: '#2563eb', cursor: 'pointer', fontSize: 13, marginBottom: 10 }}
                         >
                           + 整備を記録

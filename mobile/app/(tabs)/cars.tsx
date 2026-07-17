@@ -774,7 +774,10 @@ export default function CarsScreen() {
                   {/* 整備タブ */}
                   {detailTab === 'maintenance' && (
                     <View style={styles.tabContent}>
-                      <TouchableOpacity style={styles.addLogBtn} onPress={() => setShowAddMaint(car.id!)}>
+                      <TouchableOpacity style={styles.addLogBtn} onPress={() => {
+                        if (kmDriven > 0) setMaintForm(f => ({ ...f, odometerKm: Math.round(kmDriven).toString() }));
+                        setShowAddMaint(car.id!);
+                      }}>
                         <Text style={styles.addLogBtnText}>+ 整備を記録</Text>
                       </TouchableOpacity>
                       {mLogs.length === 0 && <Text style={styles.empty}>整備記録がありません</Text>}
