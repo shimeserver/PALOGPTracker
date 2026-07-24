@@ -89,9 +89,10 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
         let maxDev = 0;
         for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
         const detourRatio = distKm > 0 ? total / distKm : 1;
-        // 地下高速トンネル対策: OSRM経路が直線の1.3倍超 or 横ずれ350m超=地上を回りくどく迂回した誤経路とみなし不採用。
-        // 地下トンネル/高速はほぼ直線なので、直線的な経路だけを補間として採用する。
-        const surfaceDetour = profile === 'driving' && (detourRatio > 1.3 || maxDev > 0.35);
+        // 地下高速トンネル対策: 「回りくどい迂回」は経路長が直線より大幅に長い（比率大）。
+        // トンネル/高速はコリドーが湾曲しても経路自体は直線的（比率≈1.1）なので、横ずれではなく比率で判定。
+        // 比率1.4超（40%以上遠回り）＝地上迂回とみなし不採用。maxDevは極端時のみの保険。
+        const surfaceDetour = profile === 'driving' && (detourRatio > 1.4 || maxDev > 2.0);
         if (surfaceDetour) rejectedDetour++;
         if (total >= distKm * 0.9 && !surfaceDetour) {
           bridged++;
