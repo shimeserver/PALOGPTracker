@@ -1,32 +1,27 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { Route } from '../firebase/data';
 
 // 全ルートの「通過回数」密度オーバーレイ。
-// 約40mグリッドで各セルを通ったルート数を数え、1回=青 → 回数が増えるほど色相を赤へ回す。
-// 大量セグメントでも軽いよう Canvas に直接描画する（Polyline数千本はMapsが重くなるため）。
+// 約40mグリッドで各セルを通った別ルート数を数え、1回=青 → 回数が増えるほど色相を赤へ。
+// 描画は google.maps.OverlayView のペイン内 canvas — ペインはマップと一緒に
+// 平行移動されるため、パン中も完全に追随する（ズーム/アイドルで再描画）。
 
 const CELL_LAT = 0.00036; // ≈40m
-const CELL_LNG = 0.00045; // ≈40m（東京緯度）
-const MAX_PTS_PER_ROUTE = 300;
+const CELL_LNG = 0.00045;
+const COUNT_SAMPLE = 300;   // 回数集計用の間引き
+const DRAW_MAX_PTS = 1000;  // 描画用の間引き（高解像度＝滑らか）
 
-// 通過回数 → 色。1回=青(220°) から回数ごとに色相環を赤(0°)へ。
 function countColor(n: number): string {
-  const hue = Math.max(0, 220 - (n - 1) * 40); // 1:220 2:180 3:140 4:100 5:60 6:20 7+:0
-  return `hsl(${hue}, 85%, ${hue > 60 ? 48 : 50}%)`;
+  const hue = Math.max(0, 220 - (n - 1) * 40); // 1:220(青) → 7+:0(赤)
+  return `hsl(${hue}, 85%, 50%)`;
 }
 
-interface Seg { lat1: number; lng1: number; lat2: number; lng2: number; n: number; }
+interface Run { color: string; pts: { lat: number; lng: number }[]; minLat: number; maxLat: number; minLng: number; maxLng: number; }
 
-function buildSegments(routes: Route[]): { segs: Seg[]; maxN: number } {
-  // 各ルートを間引き
-  const sampled = routes
-    .filter(r => r.points?.length > 1)
-    .map(r => {
-      const step = Math.max(1, Math.floor(r.points.length / MAX_PTS_PER_ROUTE));
-      return r.points.filter((_, i) => i % step === 0 || i === r.points.length - 1);
-    });
+function buildRuns(routes: Route[]): Run[] {
+  const valid = routes.filter(r => r.points?.length > 1);
 
-  // セルごとに「通った別ルート数」をカウント（同一ルートの重複はSetで排除）
+  // --- 回数集計（40mグリッド、同一ルートはSetで1回だけ） ---
   const cellRoutes = new Map<string, Set<number>>();
   const mark = (lat: number, lng: number, ri: number) => {
     const key = `${Math.round(lat / CELL_LAT)}_${Math.round(lng / CELL_LNG)}`;
@@ -34,129 +29,142 @@ function buildSegments(routes: Route[]): { segs: Seg[]; maxN: number } {
     if (!s) { s = new Set(); cellRoutes.set(key, s); }
     s.add(ri);
   };
-  sampled.forEach((pts, ri) => {
-    for (let i = 0; i < pts.length; i++) {
-      mark(pts[i].lat, pts[i].lng, ri);
-      // 点間が離れている場合はセル抜けを防ぐため補間してマーク
-      if (i > 0) {
-        const a = pts[i - 1], b = pts[i];
-        const dLat = Math.abs(b.lat - a.lat) / CELL_LAT;
-        const dLng = Math.abs(b.lng - a.lng) / CELL_LNG;
+  valid.forEach((r, ri) => {
+    const step = Math.max(1, Math.floor(r.points.length / COUNT_SAMPLE));
+    let prev: { lat: number; lng: number } | null = null;
+    for (let i = 0; i < r.points.length; i += step) {
+      const p = r.points[i];
+      mark(p.lat, p.lng, ri);
+      if (prev) {
+        const dLat = Math.abs(p.lat - prev.lat) / CELL_LAT;
+        const dLng = Math.abs(p.lng - prev.lng) / CELL_LNG;
         const steps = Math.min(20, Math.floor(Math.max(dLat, dLng)));
         for (let k = 1; k < steps; k++) {
           const f = k / steps;
-          mark(a.lat + (b.lat - a.lat) * f, a.lng + (b.lng - a.lng) * f, ri);
+          mark(prev.lat + (p.lat - prev.lat) * f, prev.lng + (p.lng - prev.lng) * f, ri);
         }
       }
+      prev = p;
     }
   });
-
   const countAt = (lat: number, lng: number): number =>
     cellRoutes.get(`${Math.round(lat / CELL_LAT)}_${Math.round(lng / CELL_LNG)}`)?.size ?? 1;
 
-  const segs: Seg[] = [];
-  let maxN = 1;
-  sampled.forEach(pts => {
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1], b = pts[i];
-      const n = countAt((a.lat + b.lat) / 2, (a.lng + b.lng) / 2);
-      if (n > maxN) maxN = n;
-      segs.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, n });
+  // --- 描画ラン（同色の連続区間ごとに1本のポリライン） ---
+  const runs: Run[] = [];
+  for (const r of valid) {
+    const step = Math.max(1, Math.floor(r.points.length / DRAW_MAX_PTS));
+    const pts = r.points.filter((_, i) => i % step === 0 || i === r.points.length - 1);
+    let cur: Run | null = null;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const color = countColor(countAt(p.lat, p.lng));
+      if (!cur || cur.color !== color) {
+        // 前のランの終点と繋げる（色替わり目の隙間を防ぐ）
+        const prevRun: Run | null = cur;
+        const startPts: { lat: number; lng: number }[] = prevRun ? [prevRun.pts[prevRun.pts.length - 1]] : [];
+        if (prevRun && prevRun.pts.length > 1) runs.push(prevRun);
+        cur = { color, pts: [...startPts, { lat: p.lat, lng: p.lng }], minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng };
+        for (const sp of startPts) {
+          cur.minLat = Math.min(cur.minLat, sp.lat); cur.maxLat = Math.max(cur.maxLat, sp.lat);
+          cur.minLng = Math.min(cur.minLng, sp.lng); cur.maxLng = Math.max(cur.maxLng, sp.lng);
+        }
+      } else {
+        cur.pts.push({ lat: p.lat, lng: p.lng });
+        cur.minLat = Math.min(cur.minLat, p.lat); cur.maxLat = Math.max(cur.maxLat, p.lat);
+        cur.minLng = Math.min(cur.minLng, p.lng); cur.maxLng = Math.max(cur.maxLng, p.lng);
+      }
     }
-  });
-  // 回数の少ない順に描く（よく通る道が上に来る）
-  segs.sort((x, y) => x.n - y.n);
-  return { segs, maxN };
-}
-
-// Webメルカトル: latLng → ワールドpx(zoom0で256px)
-function project(lat: number, lng: number): { x: number; y: number } {
-  const sin = Math.min(Math.max(Math.sin((lat * Math.PI) / 180), -0.9999), 0.9999);
-  return {
-    x: 256 * (0.5 + lng / 360),
-    y: 256 * (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)),
-  };
+    if (cur && cur.pts.length > 1) runs.push(cur);
+  }
+  // 回数の少ない色を先に描く（ホットな道が上）— 色相が小さいほど回数多
+  const hueOf = (c: string) => parseInt(c.slice(4), 10);
+  runs.sort((a, b) => hueOf(b.color) - hueOf(a.color));
+  return runs;
 }
 
 interface Props { map: google.maps.Map | null; routes: Route[]; }
 
 export default function DensityOverlay({ map, routes }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const { segs } = useMemo(() => buildSegments(routes), [routes]);
-  const segsRef = useRef(segs);
-  useEffect(() => { segsRef.current = segs; }, [segs]);
+  const runs = useMemo(() => buildRuns(routes), [routes]);
 
   useEffect(() => {
-    if (!map) return;
-    const div = map.getDiv() as HTMLElement;
-    const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;';
-    div.appendChild(canvas);
-    canvasRef.current = canvas;
+    if (!map || runs.length === 0) return;
 
-    let raf = 0;
-    const draw = () => {
-      raf = 0;
-      const ctx = canvas.getContext('2d');
-      const bounds = map.getBounds();
-      const zoom = map.getZoom();
-      if (!ctx || !bounds || zoom == null) return;
-      const w = div.clientWidth, h = div.clientHeight;
-      const dpr = window.devicePixelRatio || 1;
-      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-        canvas.width = w * dpr; canvas.height = h * dpr;
-        canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
+    class DensityView extends google.maps.OverlayView {
+      canvas: HTMLCanvasElement | null = null;
+      onAdd() {
+        this.canvas = document.createElement('canvas');
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.pointerEvents = 'none';
+        this.getPanes()!.overlayLayer.appendChild(this.canvas);
       }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-
-      const scale = Math.pow(2, zoom);
-      const c = map.getCenter()!;
-      const cp = project(c.lat(), c.lng());
-      const toPx = (lat: number, lng: number) => {
-        const p = project(lat, lng);
-        return { x: (p.x - cp.x) * scale + w / 2, y: (p.y - cp.y) * scale + h / 2 };
-      };
-
-      // 画面外セグメントを間引くための可視範囲（少し余白）
-      const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-      const latPad = (ne.lat() - sw.lat()) * 0.05, lngPad = (ne.lng() - sw.lng()) * 0.05;
-      const latMin = sw.lat() - latPad, latMax = ne.lat() + latPad;
-      const lngMin = sw.lng() - lngPad, lngMax = ne.lng() + lngPad;
-
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.globalAlpha = 0.9;
-      const lw = zoom >= 14 ? 5 : zoom >= 12 ? 4 : 3;
-      let lastColor = '';
-      for (const s of segsRef.current) {
-        if ((s.lat1 < latMin && s.lat2 < latMin) || (s.lat1 > latMax && s.lat2 > latMax)) continue;
-        if ((s.lng1 < lngMin && s.lng2 < lngMin) || (s.lng1 > lngMax && s.lng2 > lngMax)) continue;
-        const col = countColor(s.n);
-        if (col !== lastColor) { ctx.strokeStyle = col; lastColor = col; }
-        const p1 = toPx(s.lat1, s.lng1), p2 = toPx(s.lat2, s.lng2);
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.lineWidth = lw;
-        ctx.stroke();
+      onRemove() {
+        this.canvas?.remove();
+        this.canvas = null;
       }
-    };
+      draw() {
+        const proj = this.getProjection();
+        const canvas = this.canvas;
+        if (!proj || !canvas) return;
+        const div = map!.getDiv() as HTMLElement;
+        const w = div.clientWidth, h = div.clientHeight;
+        const bounds = map!.getBounds();
+        if (!bounds || w === 0) return;
 
-    const schedule = () => { if (!raf) raf = requestAnimationFrame(draw); };
-    const listeners = [
-      map.addListener('bounds_changed', schedule),
-      map.addListener('idle', schedule),
-    ];
-    schedule();
+        // ビューポート左上（NW）をアンカーにキャンバスを配置
+        const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+        const nwPx = proj.fromLatLngToDivPixel(new google.maps.LatLng(ne.lat(), sw.lng()))!;
+        // パン余白: 周囲に半画面ぶん広く描いておく（パン中も切れない）
+        const M = Math.round(Math.max(w, h) / 2);
+        canvas.style.left = `${nwPx.x - M}px`;
+        canvas.style.top = `${nwPx.y - M}px`;
+        const cw = w + M * 2, ch = h + M * 2;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = cw * dpr; canvas.height = ch * dpr;
+        canvas.style.width = `${cw}px`; canvas.style.height = `${ch}px`;
+        const ctx = canvas.getContext('2d')!;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cw, ch);
+
+        // 可視範囲（余白込み）でランをカリング
+        const latPad = (ne.lat() - sw.lat()) * (M / h);
+        const lngPad = (ne.lng() - sw.lng()) * (M / w);
+        const latMin = sw.lat() - latPad, latMax = ne.lat() + latPad;
+        const lngMin = sw.lng() - lngPad, lngMax = ne.lng() + lngPad;
+
+        const zoom = map!.getZoom() ?? 12;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = zoom >= 14 ? 5 : zoom >= 12 ? 4 : 3;
+        ctx.globalAlpha = 0.92;
+
+        let lastColor = '';
+        for (const run of runs) {
+          if (run.maxLat < latMin || run.minLat > latMax || run.maxLng < lngMin || run.minLng > lngMax) continue;
+          if (run.color !== lastColor) { ctx.strokeStyle = run.color; lastColor = run.color; }
+          ctx.beginPath();
+          for (let i = 0; i < run.pts.length; i++) {
+            const px = proj.fromLatLngToDivPixel(new google.maps.LatLng(run.pts[i].lat, run.pts[i].lng))!;
+            const x = px.x - nwPx.x + M, y = px.y - nwPx.y + M;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
+    const overlay = new DensityView();
+    overlay.setMap(map);
+    // コンテナリサイズにも追随
+    const ro = new ResizeObserver(() => overlay.draw());
+    ro.observe(map.getDiv());
 
     return () => {
-      listeners.forEach(l => google.maps.event.removeListener(l));
-      if (raf) cancelAnimationFrame(raf);
-      canvas.remove();
-      canvasRef.current = null;
+      ro.disconnect();
+      overlay.setMap(null);
     };
-  }, [map, segs]);
+  }, [map, runs]);
 
   return null;
 }
