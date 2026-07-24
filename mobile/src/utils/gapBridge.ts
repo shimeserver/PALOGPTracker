@@ -8,7 +8,7 @@ import { TrackPoint } from '../types';
 
 const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
 const GAP_MIN_DIST_KM = 0.2;  // これ未満の離れなら停止/渋滞とみなし補間しない
-const GAP_MIN_DT_S = 15;      // これ未満の時間差なら通常の記録とみなす
+const GAP_MIN_DT_S = 4;       // これ未満はGPS瞬間ワープ（誤データ）とみなし対象外
 const MAX_GAPS = 12;          // 1ルートで補間するギャップ数の上限（時間/負荷の保険）
 const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
 const TOTAL_BUDGET_MS = 15000; // 補間全体の時間予算（保存がハングしないよう）
@@ -91,9 +91,9 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
         for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
         const impliedKmh = distKm / (dtS / 3600);
         // 地下高速トンネル（山手トンネル等）対策:
-        // 高速走行（≥40km/h）なのにOSRM経路が直線から250m超膨らむ = 地上の一般道に迂回した誤経路。
-        // その場合は採用せず直線のまま（地下トンネルはほぼ直線なので直線の方が実態に近い）。
-        const surfaceDetour = impliedKmh >= 40 && maxDev > 0.25;
+        // 高速走行（≥50km/h）なのにOSRM経路が直線から400m超膨らむ = 地上の一般道に大迂回した誤経路。
+        // その場合のみ採用せず直線のまま（地下トンネルはほぼ直線）。通常の曲がった道は補間を許可。
+        const surfaceDetour = impliedKmh >= 50 && maxDev > 0.4;
         // サニティ: 道路経路は直線より長いはずだが3倍超は誤ルーティング。地上迂回も除外。
         if (total >= distKm * 0.9 && total <= distKm * 3 && !surfaceDetour) {
           bridged++;

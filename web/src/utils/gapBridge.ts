@@ -7,7 +7,7 @@ import type { TrackPoint } from '../firebase/data';
 
 const OSRM = 'https://router.project-osrm.org/route/v1/';
 const GAP_MIN_DIST_KM = 0.2;
-const GAP_MIN_DT_S = 15;
+const GAP_MIN_DT_S = 4;
 const MAX_GAPS = 20;
 const CALL_TIMEOUT_MS = 6000;
 const TOTAL_BUDGET_MS = 20000;
@@ -55,24 +55,31 @@ async function osrmRoute(profile: string, a: TrackPoint, b: TrackPoint): Promise
   }
 }
 
-export interface BridgeResult { points: TrackPoint[]; bridged: number; }
+export interface BridgeResult {
+  points: TrackPoint[];
+  bridged: number;      // 実際に補間したギャップ数
+  detected: number;     // 検出したギャップ数
+  rejectedDetour: number; // 地上迂回とみなして除外した数
+  failed: number;       // OSRM取得失敗（オフライン等）した数
+}
 
 export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<BridgeResult> {
-  if (points.length < 2) return { points, bridged: 0 };
+  if (points.length < 2) return { points, bridged: 0, detected: 0, rejectedDetour: 0, failed: 0 };
   const profile = mode === 'walk' ? 'foot' : mode === 'bicycle' ? 'cycling' : 'driving';
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const out: TrackPoint[] = [points[0]];
-  let bridged = 0, fails = 0;
+  let bridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
     const dtS = (cur.timestamp - prev.timestamp) / 1000;
     const distKm = haversineKm(prev, cur);
     const isGap = dtS >= GAP_MIN_DT_S && distKm >= GAP_MIN_DIST_KM;
+    if (isGap) detected++;
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {
       const coords = await osrmRoute(profile, prev, cur);
-      if (!coords) fails++;
+      if (!coords) { fails++; failed++; }
       if (coords && coords.length >= 2) {
         fails = 0;
         const path = coords.map(([lng, lat]) => ({ lat, lng }));
@@ -82,8 +89,9 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
         let maxDev = 0;
         for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
         const impliedKmh = dtS > 0 ? distKm / (dtS / 3600) : 0;
-        // 地下高速トンネル対策: 高速走行なのに直線から250m超膨らむ=地上迂回とみなし不採用
-        const surfaceDetour = profile === 'driving' && impliedKmh >= 40 && maxDev > 0.25;
+        // 地下高速トンネル対策: 高速走行(≥50km/h)なのに直線から400m超膨らむ=地上大迂回とみなし不採用
+        const surfaceDetour = profile === 'driving' && impliedKmh >= 50 && maxDev > 0.4;
+        if (surfaceDetour) rejectedDetour++;
         if (total >= distKm * 0.9 && total <= distKm * 3 && !surfaceDetour) {
           bridged++;
           const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
@@ -99,5 +107,5 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
     }
     out.push(cur);
   }
-  return { points: out, bridged };
+  return { points: out, bridged, detected, rejectedDetour, failed };
 }

@@ -437,14 +437,22 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        const { points: bridged, bridged: n } = await bridgeGaps(editPoints, routeModeRef.current);
-        if (n === 0) {
-          alert('補間が必要なギャップは見つかりませんでした。\n（トンネル/電波切れによる離れた区間なし、地上迂回として除外、またはオフライン）');
+        const r = await bridgeGaps(editPoints, routeModeRef.current);
+        if (r.bridged === 0) {
+          if (r.detected === 0) {
+            alert('補間が必要なギャップは見つかりませんでした。\n（点が離れた区間がない＝すでに連続したGPS記録）');
+          } else {
+            const parts: string[] = [];
+            if (r.failed > 0) parts.push(`OSRM取得失敗 ${r.failed}件（オフライン等）`);
+            if (r.rejectedDetour > 0) parts.push(`地上迂回として除外 ${r.rejectedDetour}件`);
+            alert(`ギャップを ${r.detected}か所検出しましたが補間できませんでした。\n${parts.join(' / ') || '道路経路が得られませんでした'}`);
+          }
           return;
         }
         saveUndo(editPoints);
-        setEditPoints(calcSpeedsForSegment(bridged));
-        alert(`${n}か所のギャップを道なりに補間しました。内容を確認して「保存」してください。`);
+        setEditPoints(calcSpeedsForSegment(r.points));
+        const extra = r.rejectedDetour > 0 ? `（地上迂回として除外: ${r.rejectedDetour}か所）` : '';
+        alert(`${r.bridged}か所のギャップを道なりに補間しました${extra}。内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
