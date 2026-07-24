@@ -23,6 +23,21 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
+type LL = { lat: number; lng: number };
+
+// 点pから線分ab への概算垂直距離(km)。正距円筒近似。
+function perpKm(p: LL, a: LL, b: LL): number {
+  const kx = 111.32 * Math.cos((a.lat * Math.PI) / 180); // km/度(経度)
+  const ky = 110.57; // km/度(緯度)
+  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky;
+  const px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
+  const len2 = bx * bx + by * by;
+  if (len2 === 0) return Math.hypot(px, py);
+  let t = (px * bx + py * by) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - t * bx, py - t * by);
+}
+
 // OSRM で2点間の道路経路の座標列 [lng,lat][] を返す。失敗時 null。
 async function osrmRoute(a: TrackPoint, b: TrackPoint): Promise<[number, number][] | null> {
   const url = `${OSRM}${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`;
@@ -71,8 +86,16 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
           segDist.push(d);
           total += d;
         }
-        // サニティ: 道路経路は直線より長いはずだが、3倍超は誤ルーティング（フェリー/迂回など）とみなし不採用
-        if (total >= distKm * 0.9 && total <= distKm * 3) {
+        // 直線からの最大膨らみ（横ずれ）と平均速度
+        let maxDev = 0;
+        for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
+        const impliedKmh = distKm / (dtS / 3600);
+        // 地下高速トンネル（山手トンネル等）対策:
+        // 高速走行（≥40km/h）なのにOSRM経路が直線から250m超膨らむ = 地上の一般道に迂回した誤経路。
+        // その場合は採用せず直線のまま（地下トンネルはほぼ直線なので直線の方が実態に近い）。
+        const surfaceDetour = impliedKmh >= 40 && maxDev > 0.25;
+        // サニティ: 道路経路は直線より長いはずだが3倍超は誤ルーティング。地上迂回も除外。
+        if (total >= distKm * 0.9 && total <= distKm * 3 && !surfaceDetour) {
           bridged++;
           // このギャップの平均速度（補間点に付与）
           const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
