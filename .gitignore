@@ -36,3 +36,8 @@ Thumbs.db
 
 # ===== Expo =====
 mobile/.expo-shared/
+
+# Large local artifacts (do not commit)
+mobile/android_secrets*.zip
+mobile/android_min.zip
+mobile/android_min.b64

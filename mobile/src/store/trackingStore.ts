@@ -37,6 +37,21 @@ async function saveRecovery(points: TrackPoint[], startTime: number, mode: Track
 
 export const LOCATION_TASK = 'gps-background-tracking';
 
+// 前回リカバリー保存時のポイント数（バッチ受信で30の倍数を跨いでも確実に保存するため）
+let lastBackupLen = 0;
+
+const LOCATION_OPTIONS: Location.LocationTaskOptions = {
+  accuracy: Location.Accuracy.BestForNavigation,
+  timeInterval: 3000,
+  distanceInterval: 5,
+  foregroundService: {
+    notificationTitle: 'PALOGPTracker 記録中',
+    notificationBody: 'GPSルートを記録しています',
+    notificationColor: '#2563eb',
+  },
+  showsBackgroundLocationIndicator: true,
+};
+
 function haversine(p1: TrackPoint, p2: TrackPoint): number {
   const R = 6371;
   const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
@@ -59,8 +74,8 @@ interface TrackingState {
   setTrackingMode: (mode: TrackingMode) => void;
   addPoints: (locations: Location.LocationObject[]) => void;
   startTracking: () => Promise<void>;
-  pauseTracking: () => void;
-  resumeTracking: () => void;
+  pauseTracking: () => Promise<void>;
+  resumeTracking: () => Promise<void>;
   stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | 'queued' | null>;
   clearTrack: () => void;
 }
@@ -103,8 +118,10 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (newPoints.length === 0) return;
     set(state => {
       const updated = [...state.currentPoints, ...newPoints];
-      // 30pt毎にAsyncStorageへ自動バックアップ（電源断対策）
-      if (state.startTime && updated.length % 30 === 0) {
+      // 30pt以上たまるごとにAsyncStorageへ自動バックアップ（電源断対策）
+      // バッチ受信で30の倍数を飛び越えても保存されるよう差分で判定
+      if (state.startTime && updated.length - lastBackupLen >= 30) {
+        lastBackupLen = updated.length;
         saveRecovery(updated, state.startTime, state.trackingMode);
       }
       return {
@@ -114,8 +131,17 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     });
   },
 
-  pauseTracking: () => set({ isPaused: true, currentSpeed: 0 }),
-  resumeTracking: () => set({ isPaused: false }),
+  pauseTracking: async () => {
+    set({ isPaused: true, currentSpeed: 0 });
+    // GPSも止めてバッテリー消費を抑える（再開時に再取得）
+    const running = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
+    if (running) await Location.stopLocationUpdatesAsync(LOCATION_TASK).catch(() => {});
+  },
+  resumeTracking: async () => {
+    set({ isPaused: false });
+    const running = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
+    if (!running) await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS).catch(() => {});
+  },
 
   startTracking: async () => {
     const fg = await Location.requestForegroundPermissionsAsync();
@@ -125,19 +151,10 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です（設定から「常に許可」にしてください）');
 
     await clearRecovery(); // 前回の残存データをクリア
+    lastBackupLen = 0;
     set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
 
-    await Location.startLocationUpdatesAsync(LOCATION_TASK, {
-      accuracy: Location.Accuracy.BestForNavigation,
-      timeInterval: 3000,
-      distanceInterval: 5,
-      foregroundService: {
-        notificationTitle: 'PALOGPTracker 記録中',
-        notificationBody: 'GPSルートを記録しています',
-        notificationColor: '#2563eb',
-      },
-      showsBackgroundLocationIndicator: true,
-    });
+    await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS);
   },
 
   stopTracking: async (userId, name, tagIds) => {
@@ -176,11 +193,13 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     try {
       const id = await saveRoute(route);
       await clearRecovery(); // 保存完了後にバックアップを削除
+      set({ currentPoints: [], startTime: null, currentSpeed: 0 }); // 記録状態をリセット
       return id;
     } catch {
       // オフライン等で保存失敗 → ローカルキューに退避（次回オンライン時に自動送信）
       await enqueuePendingRoute(route);
       await clearRecovery();
+      set({ currentPoints: [], startTime: null, currentSpeed: 0 });
       return 'queued';
     }
   },

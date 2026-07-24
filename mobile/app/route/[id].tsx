@@ -256,15 +256,18 @@ export default function RouteDetailScreen() {
     // タイムスタンプ: 停車クラスタ中間 > 最近傍GPS点
     let ts = route.startTime;
     const stops = detectStops(route.points);
+    const cosLat = Math.cos((lm.lat * Math.PI) / 180); // 経度は緯度により縮む
     let usedStop = false;
     for (const stop of stops) {
-      const d = Math.sqrt((stop.lat - lm.lat) ** 2 + (stop.lng - lm.lng) ** 2) * 111;
+      const dLat = stop.lat - lm.lat, dLng = (stop.lng - lm.lng) * cosLat;
+      const d = Math.sqrt(dLat ** 2 + dLng ** 2) * 111;
       if (d < 0.2) { ts = Math.round((stop.startTime + stop.endTime) / 2); usedStop = true; break; }
     }
     if (!usedStop) {
       let minD = Infinity;
       for (const pt of route.points) {
-        const d = (pt.lat - lm.lat) ** 2 + (pt.lng - lm.lng) ** 2;
+        const dLat = pt.lat - lm.lat, dLng = (pt.lng - lm.lng) * cosLat;
+        const d = dLat ** 2 + dLng ** 2;
         if (d < minD) { minD = d; ts = pt.timestamp; }
       }
     }
@@ -523,14 +526,28 @@ export default function RouteDetailScreen() {
               <Text style={{ color: '#9ca3af', fontSize: 11, marginBottom: 16 }}>
                 🕐 {new Date(fuelTimestamp).toLocaleString('ja-JP')}
               </Text>
-              {userCars.length > 1 && !fuelCarId && (
-                <Text style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>愛車を選択してください</Text>
+              {/* 愛車の選択（複数ある場合や自動特定できない場合に選べる） */}
+              {userCars.length > 0 && (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ color: '#6b7280', fontSize: 12, marginBottom: 6 }}>
+                    愛車{!fuelCarId ? ' — 選択してください' : ''}
+                  </Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {userCars.map(c => (
+                      <TouchableOpacity key={c.id} onPress={() => setFuelCarId(c.id ?? '')}
+                        style={{
+                          paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, borderWidth: 1.5,
+                          borderColor: fuelCarId === c.id ? '#16a34a' : '#d1d5db',
+                          backgroundColor: fuelCarId === c.id ? '#dcfce7' : '#fff',
+                        }}>
+                        <Text style={{ color: fuelCarId === c.id ? '#16a34a' : '#6b7280', fontSize: 13, fontWeight: fuelCarId === c.id ? '700' : '400' }}>
+                          🚗 {c.nickname}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
               )}
-              {fuelCarId ? (
-                <Text style={{ color: '#16a34a', fontSize: 13, marginBottom: 12 }}>
-                  🚗 {userCars.find(c => c.id === fuelCarId)?.nickname}
-                </Text>
-              ) : null}
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: '#6b7280', fontSize: 12, marginBottom: 4 }}>給油量 (L) *</Text>
@@ -560,9 +577,9 @@ export default function RouteDetailScreen() {
               </TouchableOpacity>
               <TextInput style={styles.modalInput} placeholder="メモ（任意）" placeholderTextColor="#9ca3af"
                 value={fuelForm.notes} onChangeText={v => setFuelForm(f => ({ ...f, notes: v }))} />
-              <TouchableOpacity style={[styles.modalButton, { backgroundColor: '#16a34a', marginTop: 16 }]}
-                onPress={handleSaveFuel} disabled={savingFuel || !fuelForm.liters}>
-                <Text style={styles.modalButtonText}>{savingFuel ? '保存中...' : '⛽ 給油記録を保存'}</Text>
+              <TouchableOpacity style={[styles.modalButton, { backgroundColor: (!fuelCarId || !fuelForm.liters) ? '#9ca3af' : '#16a34a', marginTop: 16 }]}
+                onPress={handleSaveFuel} disabled={savingFuel || !fuelForm.liters || !fuelCarId}>
+                <Text style={styles.modalButtonText}>{savingFuel ? '保存中...' : !fuelCarId ? '愛車を選択してください' : '⛽ 給油記録を保存'}</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setFuelModal(null)}>
                 <Text style={styles.modalCancel}>キャンセル</Text>

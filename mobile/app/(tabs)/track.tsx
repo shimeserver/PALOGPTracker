@@ -172,7 +172,7 @@ export default function TrackScreen() {
       for (let i = 1; i < points.length; i++) totalDist += haversine(points[i-1], points[i]);
       const speeds = points.map(p => p.speed).filter(s => s > 0);
       const avgSpeed = speeds.length > 0 ? speeds.reduce((a,b)=>a+b)/speeds.length : 0;
-      const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+      const maxSpeed = speeds.reduce((m, s) => s > m ? s : m, 0);
       const routeData = {
         userId: user.uid, name, tags: [], mode,
         startTime: recStart, endTime: points[points.length-1].timestamp,
@@ -244,6 +244,9 @@ export default function TrackScreen() {
             Alert.alert('保存完了', `ルートを保存しました（${savedPoints.length}ポイント）${carMsg}`);
           }
         }
+      } else {
+        // id === null: ポイントが2点未満で保存されなかった
+        Alert.alert('保存できません', 'GPSポイントが少なすぎて記録を保存できませんでした。');
       }
     } catch (error) {
       Alert.alert('保存エラー', error instanceof Error ? error.message : String(error));
@@ -260,6 +263,7 @@ export default function TrackScreen() {
           <Text style={styles.recoveryTitle}>⚡ 未保存のルートがあります</Text>
           <Text style={styles.recoveryDesc}>
             {new Date(recovery.startTime).toLocaleString('ja-JP')} 開始 / {recovery.points.length}pt
+            {Date.now() - recovery.startTime > 86400000 ? `（${Math.floor((Date.now() - recovery.startTime) / 86400000)}日前）` : ''}
           </Text>
           <View style={styles.recoveryButtons}>
             <TouchableOpacity style={styles.recoverySaveBtn} onPress={handleSaveRecovery}>

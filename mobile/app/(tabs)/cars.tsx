@@ -69,28 +69,33 @@ function carTagIdSet(userTags: TagDef[], carTagId?: string): Set<string> {
   return new Set(userTags.filter(x => x.name === t.name).map(x => x.id!).filter(Boolean));
 }
 
-type FuelLogEnriched = FuelLog & { distanceSince?: number; efficiency?: number };
+type FuelLogEnriched = FuelLog & { distanceSince?: number; litersSince?: number; efficiency?: number };
 
-// 満タン法: 満タン給油ごとに「前回満タンからの走行距離 ÷ 給油量」で燃費を算出。
+// 満タン法: 満タン給油ごとに「前回満タンからの走行距離 ÷ その区間の全給油量」で燃費を算出。
+// 途中の継ぎ足し（非満タン）給油量も分母に含めるのが正しい満タン法。
 // ルートはメタデータのみ（GPS点なし）のため時間比例で距離を按分する。
 function enrichFuelLogs(logs: FuelLog[], routes: RouteMetadata[], tagIds: Set<string>): FuelLogEnriched[] {
   const asc = [...logs].sort((a, b) => a.timestamp - b.timestamp);
   return asc.map((log, i) => {
     if (i === 0 || !log.isFull || tagIds.size === 0) return log;
-    let prevFull: FuelLog | undefined;
-    for (let j = i - 1; j >= 0; j--) { if (asc[j].isFull) { prevFull = asc[j]; break; } }
-    if (!prevFull) return log;
+    let prevFullIdx = -1;
+    for (let j = i - 1; j >= 0; j--) { if (asc[j].isFull) { prevFullIdx = j; break; } }
+    if (prevFullIdx < 0) return log;
+    const prevFull = asc[prevFullIdx];
+    // 車ルートのみ・時間窓内の距離を時間比例で合算
     const distanceSince = routes
-      .filter(r => (r.tags ?? []).some(t => tagIds.has(t)) && r.endTime > prevFull!.timestamp && r.startTime < log.timestamp)
+      .filter(r => (r.mode ?? 'car') === 'car' && (r.tags ?? []).some(t => tagIds.has(t)) && r.endTime > prevFull.timestamp && r.startTime < log.timestamp)
       .reduce((s, r) => {
-        const effStart = Math.max(r.startTime, prevFull!.timestamp);
+        const effStart = Math.max(r.startTime, prevFull.timestamp);
         const effEnd = Math.min(r.endTime, log.timestamp);
         const dur = r.endTime - r.startTime;
         if (dur <= 0 || effEnd <= effStart) return s;
         return s + r.totalDistance * ((effEnd - effStart) / dur);
       }, 0);
-    const efficiency = distanceSince > 0 && log.liters > 0 ? distanceSince / log.liters : undefined;
-    return { ...log, distanceSince, efficiency };
+    // 前回満タンの次〜今回満タンまでの全給油量（継ぎ足し含む）
+    const litersSince = asc.slice(prevFullIdx + 1, i + 1).reduce((s, l) => s + l.liters, 0);
+    const efficiency = distanceSince > 0 && litersSince > 0 ? distanceSince / litersSince : undefined;
+    return { ...log, distanceSince, litersSince, efficiency };
   }).reverse();
 }
 
@@ -149,15 +154,20 @@ export default function CarsScreen() {
   const [bicycleExpanded, setBicycleExpanded] = useState(false);
   const [showSummary,     setShowSummary]     = useState(false);
 
-  // マンスリーレポート
-  const [allFuelLogs, setAllFuelLogs] = useState<FuelLog[]>([]);
+  // マンスリーレポート用に全車の給油ログを読み込む（未取得の車だけ）。
+  // 表示は fuelLogs マップから導出するので、追加/削除も即反映される。
   useEffect(() => {
     if (cars.length === 0) return;
     let mounted = true;
-    Promise.all(cars.map(c => getFuelLogs(c.id!).catch(() => [] as FuelLog[])))
-      .then(arr => { if (mounted) setAllFuelLogs(arr.flat()); });
+    cars.forEach(c => {
+      if (fuelLogs[c.id!]) return;
+      getFuelLogs(c.id!).then(logs => {
+        if (mounted) setFuelLogs(prev => prev[c.id!] ? prev : { ...prev, [c.id!]: logs });
+      }).catch(() => {});
+    });
     return () => { mounted = false; };
-  }, [cars.length]);
+  }, [cars.map(c => c.id).join(',')]);
+  const allFuelLogs = Object.values(fuelLogs).flat();
 
   const now = new Date();
   const todayStart     = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -252,23 +262,46 @@ export default function CarsScreen() {
   }, [user?.uid]);
 
 
-  // タブフォーカス時にサーバーから強制再フェッチ（30秒クールダウン）
+  // odometerSetAt 以降の走行距離を allRoutes からローカル計算（追加フェッチ不要）
+  const carDistanceAfter = useCallback((car: Car): number => {
+    if (car.odometerSetAt == null) return 0;
+    const ids = carTagIdSet(userTags, car.tagId);
+    if (ids.size === 0) return 0;
+    return allRoutes
+      .filter(r => (r.tags ?? []).some(t => ids.has(t)) && r.startTime >= car.odometerSetAt!)
+      .reduce((s, r) => s + r.totalDistance, 0);
+  }, [allRoutes, userTags]);
+
+  // タブフォーカス時にサーバーから強制再フェッチ（30秒クールダウン）: 車 + ルート
   const lastFocusFetchRef = useRef(0);
   useFocusEffect(useCallback(() => {
     if (!user) return;
-    const now = Date.now();
-    if (now - lastFocusFetchRef.current < 30000) return;
-    lastFocusFetchRef.current = now;
+    const t = Date.now();
+    if (t - lastFocusFetchRef.current < 30000) return;
+    lastFocusFetchRef.current = t;
     getUserCarsFromServer(user.uid).then(c => setCars(c)).catch(() => {});
+    // ルートも最新化（記録直後やインポート・編集を反映）
+    getUserRoutesMetadata(user.uid).then(r => {
+      setAllRoutes(r);
+      saveRoutesCache(user.uid, r, Date.now()).catch(() => {});
+    }).catch(() => {});
   }, [user?.uid]));
+
+  // 全車の整備ログを読み込む（バッジ警告は展開前でも正しく出す必要があるため）
+  useEffect(() => {
+    cars.forEach(c => {
+      if (maintLogs[c.id!]) return;
+      getMaintenanceLogs(c.id!).then(logs => {
+        setMaintLogs(prev => prev[c.id!] ? prev : { ...prev, [c.id!]: logs });
+      }).catch(() => {});
+    });
+  }, [cars.map(c => c.id).join(',')]);
 
   // 整備警告をグローバルストアに同期（タブアイコンバッジ用）
   useEffect(() => {
     const anyWarning = cars.some(car => {
       const mLogs = maintLogs[car.id!] || [];
-      const stats = routeStats[car.id!] as (RouteStats & { distanceAfter?: number }) | undefined;
-      const distAfter = stats?.distanceAfter ?? 0;
-      const kmDriven = car.odometerKm != null ? car.odometerKm + distAfter : 0;
+      const kmDriven = car.odometerKm != null ? car.odometerKm + carDistanceAfter(car) : 0;
       return mLogs.some(log => {
         const monthsElapsed = Math.floor((Date.now() - log.timestamp) / 2592000000);
         if (log.nextDueMonths && monthsElapsed >= log.nextDueMonths - 1) return true;
@@ -279,7 +312,7 @@ export default function CarsScreen() {
       });
     });
     setMaintenanceWarning(anyWarning);
-  }, [cars, maintLogs, setMaintenanceWarning]);
+  }, [cars, maintLogs, carDistanceAfter, setMaintenanceWarning]);
 
   const loadFuel = async (carId: string, force = false) => {
     if (fuelLogs[carId] && !force) return;
@@ -304,6 +337,8 @@ export default function CarsScreen() {
         ? await getRouteStatsByTag(user.uid, car.tagId, car.odometerSetAt)
         : null;
       setRouteStats(prev => ({ ...prev, [car.id!]: { ...stats, distanceAfter: afterStats?.totalDistance } as RouteStats & { distanceAfter?: number } }));
+    } catch {
+      showToast('統計の取得に失敗しました');
     } finally {
       setStatsLoading(prev => ({ ...prev, [car.id!]: false }));
     }
@@ -502,16 +537,20 @@ export default function CarsScreen() {
     ]);
   };
 
+  const savingOdometerRef = useRef(false);
   const handleSaveCarOdometer = async (car: Car) => {
+    if (savingOdometerRef.current) return; // onBlur と onSubmitEditing の二重発火を防ぐ
+    savingOdometerRef.current = true;
     const val = parseFloat(editOdometerValue);
     setEditOdometerCarId(null);
-    if (isNaN(val) || val < 0) return;
+    if (isNaN(val) || val < 0) { savingOdometerRef.current = false; return; }
     const setAt = Date.now();
     await updateCar(car.id!, { odometerKm: val, odometerSetAt: setAt });
     const updatedCar = { ...car, odometerKm: val, odometerSetAt: setAt };
     setCars(prev => prev.map(c => c.id === car.id ? updatedCar : c));
     await loadStats(updatedCar, true); // odometerSetAt変更後に distanceAfter を再計算
     showToast('走行距離を保存しました');
+    savingOdometerRef.current = false;
   };
 
   const handleChangeCarTag = async (car: Car, newTagId: string) => {
@@ -669,8 +708,11 @@ export default function CarsScreen() {
           // 満タン法で給油ごとの燃費を算出し、その平均を表示
           const tagIdSet = carTagIdSet(userTags, car.tagId);
           const enrichedFuel = enrichFuelLogs(fLogs, allRoutes, tagIdSet);
-          const effList = enrichedFuel.filter(l => l.efficiency != null).map(l => l.efficiency!);
-          const avgEff = effList.length > 0 ? effList.reduce((a, b) => a + b, 0) / effList.length : null;
+          const effIntervals = enrichedFuel.filter(l => l.efficiency != null);
+          // 距離加重平均: Σ距離 / Σ給油量（単純平均より正確）
+          const sumDist = effIntervals.reduce((s, l) => s + (l.distanceSince ?? 0), 0);
+          const sumLit = effIntervals.reduce((s, l) => s + (l.litersSince ?? 0), 0);
+          const avgEff = sumLit > 0 ? sumDist / sumLit : null;
 
           // 警告チェック: 期限1ヶ月前 or 300km前から警告
           const hasWarning = mLogs.some(log => {
@@ -852,7 +894,7 @@ export default function CarsScreen() {
                             <View style={styles.statCell}>
                               <Text style={styles.statValue}>{avgEff ? avgEff.toFixed(1) : '—'}</Text>
                               <Text style={styles.statLabel}>
-                                平均燃費 km/L{avgEff ? `\n(${effList.length}回分)` : ''}
+                                平均燃費 km/L{avgEff ? `\n(${effIntervals.length}回分)` : ''}
                               </Text>
                             </View>
                           </View>

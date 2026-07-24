@@ -29,12 +29,16 @@ export default function RoutesScreen() {
   const [syncing, setSyncing] = useState(false);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'routes';
-  const initialLoadDone = useRef(false);
+  const loadedUidRef = useRef<string | null>(null);
 
-  // 起動時: キャッシュを即表示 → 差分フェッチ
+  // 起動時 / アカウント切替時: キャッシュを即表示 → 差分フェッチ
   useEffect(() => {
-    if (!user || initialLoadDone.current) return;
-    initialLoadDone.current = true;
+    if (!user) return;
+    if (loadedUidRef.current === user.uid) return; // 同一ユーザーは再ロードしない
+    // アカウントが変わったら前ユーザーのデータをクリア
+    loadedUidRef.current = user.uid;
+    setRoutes([]);
+    setLoading(true);
 
     (async () => {
       const cached = await loadCachedRoutes(user.uid);
@@ -75,12 +79,12 @@ export default function RoutesScreen() {
         }
       }
     })();
-  }, [user]);
+  }, [user?.uid]);
 
-  // プルダウン更新: フルフェッチでキャッシュ再構築
+  // プルダウン更新: フルフェッチでキャッシュ再構築（リストは表示したまま）
   const loadRoutes = async () => {
     if (!user) return;
-    setLoading(true);
+    setSyncing(true);
     try {
       const data = await getUserRoutesMetadata(user.uid);
       setRoutes(data);
@@ -88,7 +92,7 @@ export default function RoutesScreen() {
     } catch {
       Alert.alert('エラー', 'データの読み込みに失敗しました');
     } finally {
-      setLoading(false);
+      setSyncing(false);
     }
   };
 
@@ -161,7 +165,7 @@ export default function RoutesScreen() {
           keyExtractor={item => item.id!}
           contentContainerStyle={{ padding: 16 }}
           onRefresh={loadRoutes}
-          refreshing={loading}
+          refreshing={syncing}
           ListEmptyComponent={
             <Text style={styles.empty}>ルートがありません{'\n'}記録タブから記録を開始してください</Text>
           }

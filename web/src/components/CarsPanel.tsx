@@ -116,17 +116,20 @@ function calcReport(routes: Route[], fuel: FuelLog[], from: number, to: number):
   };
 }
 
-type FuelLogEnriched = FuelLog & { distanceSince?: number; efficiency?: number };
+type FuelLogEnriched = FuelLog & { distanceSince?: number; litersSince?: number; efficiency?: number };
 
 function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], carTagId?: string): FuelLogEnriched[] {
   const asc = [...logs].sort((a, b) => a.timestamp - b.timestamp);
   return asc.map((log, i) => {
     if (i === 0 || !log.isFull || !carTagId) return log;
-    const prevFull = asc.slice(0, i).reverse().find(l => l.isFull);
-    if (!prevFull) return log;
-    // GPS点の実座標で時間窓内の距離を計算（時間比例の誤差を排除）
+    let prevFullIdx = -1;
+    for (let j = i - 1; j >= 0; j--) { if (asc[j].isFull) { prevFullIdx = j; break; } }
+    if (prevFullIdx < 0) return log;
+    const prevFull = asc[prevFullIdx];
+    // GPS点の実座標で時間窓内の距離を計算（時間比例の誤差を排除）。車ルートのみ。
     const distanceSince = routes
-      .filter(r => routeMatchesCarTag(r.tags, allTags, carTagId)
+      .filter(r => (r.mode ?? 'car') === 'car'
+        && routeMatchesCarTag(r.tags, allTags, carTagId)
         && r.endTime > prevFull.timestamp
         && r.startTime < log.timestamp)
       .reduce((s, r) => {
@@ -140,8 +143,10 @@ function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], car
         if (dur <= 0 || effEnd <= effStart) return s;
         return s + r.totalDistance * ((effEnd - effStart) / dur);
       }, 0);
-    const efficiency = distanceSince > 0 ? distanceSince / log.liters : undefined;
-    return { ...log, distanceSince, efficiency };
+    // 前回満タンの次〜今回満タンまでの全給油量（継ぎ足し含む）が正しい分母
+    const litersSince = asc.slice(prevFullIdx + 1, i + 1).reduce((s, l) => s + l.liters, 0);
+    const efficiency = distanceSince > 0 && litersSince > 0 ? distanceSince / litersSince : undefined;
+    return { ...log, distanceSince, litersSince, efficiency };
   }).reverse();
 }
 
@@ -796,8 +801,11 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
             const tag = tags.find(t => t.id === car.tagId);
             const fLogs = fuelLogs[car.id!] || [];
             const enriched = enrichFuelLogs(fLogs, routes, tags, car.tagId);
-            const avgEfficiency = enriched.filter(l => l.efficiency != null).map(l => l.efficiency!);
-            const avgEff = avgEfficiency.length > 0 ? avgEfficiency.reduce((a, b) => a + b) / avgEfficiency.length : null;
+            const effIntervals = enriched.filter(l => l.efficiency != null);
+            // 距離加重平均: Σ距離 / Σ給油量（単純平均より正確）
+            const sumDist = effIntervals.reduce((s, l) => s + (l.distanceSince ?? 0), 0);
+            const sumLit = effIntervals.reduce((s, l) => s + (l.litersSince ?? 0), 0);
+            const avgEff = sumLit > 0 ? sumDist / sumLit : null;
             const mLogs = maintLogs[car.id!] || [];
             const hasWarning = mLogs.some(log => {
               const km = kmSinceMaint(log.odometerKm, displayOdometer, log.timestamp, routes, tags, car.tagId);
@@ -989,7 +997,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                             { label: '最高速度', value: `${stats.maxSpeed.toFixed(0)} km/h` },
                             { label: '平均速度', value: `${stats.avgSpeed.toFixed(0)} km/h` },
                             { label: '走行記録', value: `${stats.routeCount} 件` },
-                            { label: '平均燃費', value: avgEff ? `${avgEff.toFixed(1)} km/L` : '—', sub: avgEff ? `${avgEfficiency.length}回分` : '燃費タブで記録' },
+                            { label: '平均燃費', value: avgEff ? `${avgEff.toFixed(1)} km/L` : '—', sub: avgEff ? `${effIntervals.length}回分` : '燃費タブで記録' },
                           ].map(item => (
                             <div key={item.label} style={{ background: '#fff', borderRadius: 10, padding: '12px 14px', border: '1px solid #e8eaed' }}>
                               <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>{item.label}</div>
