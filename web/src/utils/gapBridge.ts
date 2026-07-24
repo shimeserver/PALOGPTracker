@@ -8,7 +8,7 @@ import type { TrackPoint } from '../firebase/data';
 const OSRM = 'https://router.project-osrm.org/route/v1/';
 const GAP_MIN_DIST_KM = 0.2;
 const GAP_MIN_DT_S = 15;
-const MAX_GAP_KMH = 120; // これ超の離れ=GPSワープなので補間しない（往復ループ・異常速度防止）
+const MAX_GAP_KMH = 150; // これ超の離れ=GPSワープなので補間しない（往復ループ・異常速度防止）
 const MAX_GAPS = 20;
 const CALL_TIMEOUT_MS = 6000;
 const TOTAL_BUDGET_MS = 20000;
@@ -23,19 +23,6 @@ function haversineKm(a: LL, b: LL): number {
   const x = Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-}
-
-// 点pから線分ab への概算垂直距離(km)
-function perpKm(p: LL, a: LL, b: LL): number {
-  const kx = 111.32 * Math.cos((a.lat * Math.PI) / 180);
-  const ky = 110.57;
-  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky;
-  const px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
-  const len2 = bx * bx + by * by;
-  if (len2 === 0) return Math.hypot(px, py);
-  let t = (px * bx + py * by) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - t * bx, py - t * by);
 }
 
 async function osrmRoute(profile: string, a: TrackPoint, b: TrackPoint): Promise<[number, number][] | null> {
@@ -115,15 +102,12 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
         const segDist: number[] = [];
         let total = 0;
         for (let k = 1; k < path.length; k++) { const d = haversineKm(path[k - 1], path[k]); segDist.push(d); total += d; }
-        let maxDev = 0;
-        for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
         const detourRatio = distKm > 0 ? total / distKm : 1;
-        // 地下高速トンネル対策: 「回りくどい迂回」は経路長が直線より大幅に長い（比率大）。
-        // トンネル/高速はコリドーが湾曲しても経路自体は直線的（比率≈1.1）なので、横ずれではなく比率で判定。
-        // 比率1.4超（40%以上遠回り）＝地上迂回とみなし不採用。maxDevは極端時のみの保険。
-        const surfaceDetour = profile === 'driving' && (detourRatio > 1.4 || maxDev > 2.0);
-        if (surfaceDetour) rejectedDetour++;
-        if (total >= distKm * 0.9 && !surfaceDetour) {
+        // 明らかに壊れた経路（直線の2.5倍超＝直通路が無い/誤ルーティング）だけ除外し、それ以外は補間する。
+        // 短いギャップは道路をたどると比率が上がるのが普通なので許容する。
+        const implausible = detourRatio > 2.5;
+        if (implausible) rejectedDetour++;
+        if (total >= distKm * 0.9 && !implausible) {
           bridged++;
           const gapSpeed = dtS > 0 ? Math.min(MAX_GAP_KMH, Math.round((total / (dtS / 3600)) * 10) / 10) : 0;
           let cum = 0;

@@ -9,7 +9,7 @@ import { TrackPoint } from '../types';
 const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
 const GAP_MIN_DIST_KM = 0.2;  // これ未満の離れなら停止/渋滞とみなし補間しない
 const GAP_MIN_DT_S = 15;      // これ未満で大きく離れる=GPSワープ（誤データ）とみなし対象外
-const MAX_GAP_KMH = 120;      // 想定走行速度の上限。これ超の離れ=ワープなので補間しない（往復ループ防止）
+const MAX_GAP_KMH = 150;      // 想定走行速度の上限。これ超の離れ=ワープなので補間しない（往復ループ防止）
 const MAX_GAPS = 12;          // 1ルートで補間するギャップ数の上限（時間/負荷の保険）
 const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
 const TOTAL_BUDGET_MS = 15000; // 補間全体の時間予算（保存がハングしないよう）
@@ -22,21 +22,6 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   const x = Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-}
-
-type LL = { lat: number; lng: number };
-
-// 点pから線分ab への概算垂直距離(km)。正距円筒近似。
-function perpKm(p: LL, a: LL, b: LL): number {
-  const kx = 111.32 * Math.cos((a.lat * Math.PI) / 180); // km/度(経度)
-  const ky = 110.57; // km/度(緯度)
-  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky;
-  const px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
-  const len2 = bx * bx + by * by;
-  if (len2 === 0) return Math.hypot(px, py);
-  let t = (px * bx + py * by) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - t * bx, py - t * by);
 }
 
 // OSRM で2点間の道路経路の座標列 [lng,lat][] を返す。失敗時 null。
@@ -89,16 +74,10 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
           segDist.push(d);
           total += d;
         }
-        // 直線からの最大膨らみ（横ずれ）と、経路長/直線長の比（回りくどさ）
-        let maxDev = 0;
-        for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
+        // 明らかに壊れた経路（直線の2.5倍超＝直通路が無い/誤ルーティング）だけ除外し、
+        // それ以外は補間する。短いギャップは道路をたどると比率が上がるのが普通なので許容する。
         const detourRatio = distKm > 0 ? total / distKm : 1;
-        // 地下高速トンネル（山手トンネル等）対策:
-        // 「回りくどい迂回」は経路長が直線より大幅に長い（比率が大きい）。トンネル/高速はコリドーが
-        // 大きく湾曲しても経路自体は直線的（比率≈1.1）。よって横ずれではなく比率で判定する。
-        // 比率1.4超（40%以上遠回り）＝地上迂回とみなし不採用。maxDevは極端時のみの保険。
-        const surfaceDetour = detourRatio > 1.4 || maxDev > 2.0;
-        if (!surfaceDetour && total >= distKm * 0.9) {
+        if (detourRatio <= 2.5 && total >= distKm * 0.9) {
           bridged++;
           // このギャップの平均速度（補間点に付与）。異常値にならないよう上限で丸める。
           const gapSpeed = dtS > 0 ? Math.min(MAX_GAP_KMH, Math.round((total / (dtS / 3600)) * 10) / 10) : 0;

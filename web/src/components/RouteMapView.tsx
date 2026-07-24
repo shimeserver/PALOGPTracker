@@ -446,7 +446,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           } else {
             const parts: string[] = [];
             if (r.failed > 0) parts.push(`OSRM取得失敗 ${r.failed}件（オフライン等）`);
-            if (r.rejectedDetour > 0) parts.push(`地上迂回として除外 ${r.rejectedDetour}件`);
+            if (r.rejectedDetour > 0) parts.push(`妥当な道路経路なし（直線の2.5倍超）${r.rejectedDetour}件`);
             alert(`ギャップを ${r.detected}か所検出しましたが補間できませんでした。\n${parts.join(' / ') || '道路経路が得られませんでした'}`);
           }
           return;
@@ -456,7 +456,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const msgs: string[] = [];
         if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
         if (r.bridged > 0) msgs.push(`ギャップ ${r.bridged}か所を道なりに補間`);
-        if (r.rejectedDetour > 0) msgs.push(`地上迂回として除外 ${r.rejectedDetour}か所`);
+        if (r.rejectedDetour > 0) msgs.push(`妥当な経路なしで除外 ${r.rejectedDetour}か所`);
         alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
