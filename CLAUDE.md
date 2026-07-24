@@ -25,6 +25,22 @@ adb -s 2A151FDH3000Z7 shell monkey -p com.palow.palogptracker -c android.intent.
 
 パッケージ名: `com.palow.palogptracker`
 
+### リリースビルド（推奨・通常はこちら）
+
+release は Gradle が JS を自動バンドル（Hermes 最適化）するので**手動バンドル不要**。
+debug より高速・省電力・低発熱。署名は debug.keystore と同一なので相互に上書きインストール可。
+
+```bash
+cd mobile/android
+KEY=$(grep '^GOOGLE_MAPS_API_KEY=' local.properties | cut -d= -f2)
+./gradlew assembleRelease -PGOOGLE_MAPS_API_KEY="$KEY"
+adb -s 2A151FDH3000Z7 install -r app/build/outputs/apk/release/app-release.apk
+adb -s 2A151FDH3000Z7 shell am force-stop com.palow.palogptracker
+adb -s 2A151FDH3000Z7 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
+```
+
+※ Maps キーは現状未使用（地図は WebView+Leaflet）だが CI と揃えて渡しておく。
+
 ## gh CLI
 
 ```bash

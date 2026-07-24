@@ -45,6 +45,10 @@ const LOCATION_OPTIONS: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.BestForNavigation,
   timeInterval: 3000,
   distanceInterval: 5,
+  // バックグラウンド時はアプリへの配信を30秒ごとにまとめる（測位自体は3秒間隔のまま）。
+  // アプリの起床回数が減り、電池消費・発熱を抑える。フォアグラウンドはリアルタイムのまま。
+  deferredUpdatesInterval: 30000,
+  deferredUpdatesDistance: 0,
   foregroundService: {
     notificationTitle: 'PALOGPTracker 記録中',
     notificationBody: 'GPSルートを記録しています',
