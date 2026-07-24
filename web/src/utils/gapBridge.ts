@@ -88,11 +88,12 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
         for (let k = 1; k < path.length; k++) { const d = haversineKm(path[k - 1], path[k]); segDist.push(d); total += d; }
         let maxDev = 0;
         for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
-        const impliedKmh = dtS > 0 ? distKm / (dtS / 3600) : 0;
-        // 地下高速トンネル対策: 高速走行(≥50km/h)なのに直線から400m超膨らむ=地上大迂回とみなし不採用
-        const surfaceDetour = profile === 'driving' && impliedKmh >= 50 && maxDev > 0.4;
+        const detourRatio = distKm > 0 ? total / distKm : 1;
+        // 地下高速トンネル対策: OSRM経路が直線の1.3倍超 or 横ずれ350m超=地上を回りくどく迂回した誤経路とみなし不採用。
+        // 地下トンネル/高速はほぼ直線なので、直線的な経路だけを補間として採用する。
+        const surfaceDetour = profile === 'driving' && (detourRatio > 1.3 || maxDev > 0.35);
         if (surfaceDetour) rejectedDetour++;
-        if (total >= distKm * 0.9 && total <= distKm * 3 && !surfaceDetour) {
+        if (total >= distKm * 0.9 && !surfaceDetour) {
           bridged++;
           const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
           let cum = 0;

@@ -86,16 +86,15 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
           segDist.push(d);
           total += d;
         }
-        // 直線からの最大膨らみ（横ずれ）と平均速度
+        // 直線からの最大膨らみ（横ずれ）と、経路長/直線長の比（回りくどさ）
         let maxDev = 0;
         for (const pt of path) { const d = perpKm(pt, prev, cur); if (d > maxDev) maxDev = d; }
-        const impliedKmh = distKm / (dtS / 3600);
+        const detourRatio = distKm > 0 ? total / distKm : 1;
         // 地下高速トンネル（山手トンネル等）対策:
-        // 高速走行（≥50km/h）なのにOSRM経路が直線から400m超膨らむ = 地上の一般道に大迂回した誤経路。
-        // その場合のみ採用せず直線のまま（地下トンネルはほぼ直線）。通常の曲がった道は補間を許可。
-        const surfaceDetour = impliedKmh >= 50 && maxDev > 0.4;
-        // サニティ: 道路経路は直線より長いはずだが3倍超は誤ルーティング。地上迂回も除外。
-        if (total >= distKm * 0.9 && total <= distKm * 3 && !surfaceDetour) {
+        // OSRM経路が直線の1.3倍より長い or 横ずれ350m超 = 地上を回りくどく迂回した誤経路とみなし不採用。
+        // 地下トンネル/高速はほぼ直線（比率≈1.0）なので、直線的な経路だけを補間として採用する。
+        const surfaceDetour = detourRatio > 1.3 || maxDev > 0.35;
+        if (!surfaceDetour && total >= distKm * 0.9) {
           bridged++;
           // このギャップの平均速度（補間点に付与）
           const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
