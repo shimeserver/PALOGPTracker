@@ -5,7 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
-import { bridgeGaps } from '../utils/gapBridge';
+import { bridgeGaps, removeSpeedWarps } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -437,10 +437,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        const r = await bridgeGaps(editPoints, routeModeRef.current);
-        if (r.bridged === 0) {
+        // 1) GPSワープ（一瞬で飛んで戻る誤点）を除去 2) ギャップを道なりに補間 3) 速度を再計算・外れ値除去
+        const cleaned = removeSpeedWarps(editPoints);
+        const r = await bridgeGaps(cleaned.points, routeModeRef.current);
+        if (r.bridged === 0 && cleaned.removed === 0) {
           if (r.detected === 0) {
-            alert('補間が必要なギャップは見つかりませんでした。\n（点が離れた区間がない＝すでに連続したGPS記録）');
+            alert('補正が必要な区間は見つかりませんでした。\n（GPSの飛びや、点が離れたギャップがない＝すでに連続した記録）');
           } else {
             const parts: string[] = [];
             if (r.failed > 0) parts.push(`OSRM取得失敗 ${r.failed}件（オフライン等）`);
@@ -450,9 +452,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           return;
         }
         saveUndo(editPoints);
-        setEditPoints(calcSpeedsForSegment(r.points));
-        const extra = r.rejectedDetour > 0 ? `（地上迂回として除外: ${r.rejectedDetour}か所）` : '';
-        alert(`${r.bridged}か所のギャップを道なりに補間しました${extra}。内容を確認して「保存」してください。`);
+        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(r.points)));
+        const msgs: string[] = [];
+        if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
+        if (r.bridged > 0) msgs.push(`ギャップ ${r.bridged}か所を道なりに補間`);
+        if (r.rejectedDetour > 0) msgs.push(`地上迂回として除外 ${r.rejectedDetour}か所`);
+        alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {

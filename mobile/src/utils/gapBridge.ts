@@ -8,7 +8,8 @@ import { TrackPoint } from '../types';
 
 const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
 const GAP_MIN_DIST_KM = 0.2;  // これ未満の離れなら停止/渋滞とみなし補間しない
-const GAP_MIN_DT_S = 4;       // これ未満はGPS瞬間ワープ（誤データ）とみなし対象外
+const GAP_MIN_DT_S = 15;      // これ未満で大きく離れる=GPSワープ（誤データ）とみなし対象外
+const MAX_GAP_KMH = 120;      // 想定走行速度の上限。これ超の離れ=ワープなので補間しない（往復ループ防止）
 const MAX_GAPS = 12;          // 1ルートで補間するギャップ数の上限（時間/負荷の保険）
 const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
 const TOTAL_BUDGET_MS = 15000; // 補間全体の時間予算（保存がハングしないよう）
@@ -68,7 +69,9 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
     const cur = points[i];
     const dtS = (cur.timestamp - prev.timestamp) / 1000;
     const distKm = haversineKm(prev, cur);
-    const isGap = dtS >= GAP_MIN_DT_S && distKm >= GAP_MIN_DIST_KM;
+    const impliedKmh = dtS > 0 ? distKm / (dtS / 3600) : Infinity;
+    // ギャップ = 距離が離れ、時間も空き、かつ実速度が現実的（ワープでない）区間のみ
+    const isGap = distKm >= GAP_MIN_DIST_KM && dtS >= GAP_MIN_DT_S && impliedKmh <= MAX_GAP_KMH;
 
     // 予算超過・連続失敗（オフライン想定）なら以降は補間せず直線のまま
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
@@ -97,8 +100,8 @@ export async function bridgeGaps(points: TrackPoint[]): Promise<TrackPoint[]> {
         const surfaceDetour = detourRatio > 1.4 || maxDev > 2.0;
         if (!surfaceDetour && total >= distKm * 0.9) {
           bridged++;
-          // このギャップの平均速度（補間点に付与）
-          const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
+          // このギャップの平均速度（補間点に付与）。異常値にならないよう上限で丸める。
+          const gapSpeed = dtS > 0 ? Math.min(MAX_GAP_KMH, Math.round((total / (dtS / 3600)) * 10) / 10) : 0;
           // 端点(prev/cur)を除く中間点を時間比例で挿入
           let cum = 0;
           for (let k = 1; k < path.length - 1; k++) {

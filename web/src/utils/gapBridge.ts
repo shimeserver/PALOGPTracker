@@ -7,7 +7,8 @@ import type { TrackPoint } from '../firebase/data';
 
 const OSRM = 'https://router.project-osrm.org/route/v1/';
 const GAP_MIN_DIST_KM = 0.2;
-const GAP_MIN_DT_S = 4;
+const GAP_MIN_DT_S = 15;
+const MAX_GAP_KMH = 120; // これ超の離れ=GPSワープなので補間しない（往復ループ・異常速度防止）
 const MAX_GAPS = 20;
 const CALL_TIMEOUT_MS = 6000;
 const TOTAL_BUDGET_MS = 20000;
@@ -55,6 +56,32 @@ async function osrmRoute(profile: string, a: TrackPoint, b: TrackPoint): Promise
   }
 }
 
+function speedKmh(a: TrackPoint, b: TrackPoint): number {
+  const dt = (b.timestamp - a.timestamp) / 3600000;
+  if (dt <= 0) return Infinity;
+  return haversineKm(a, b) / dt;
+}
+
+// GPSワープ（一瞬で遠くへ飛んで戻る孤立点）を除去する。
+// 前後どちらの区間も非現実的な高速（maxKmh超）なら、その点は飛びとみなして削除。
+export function removeSpeedWarps(points: TrackPoint[], maxKmh = 150): { points: TrackPoint[]; removed: number } {
+  if (points.length < 3) return { points, removed: 0 };
+  const out: TrackPoint[] = [points[0]];
+  let removed = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = out[out.length - 1];
+    const cur = points[i];
+    const next = points[i + 1];
+    if (speedKmh(prev, cur) > maxKmh && speedKmh(cur, next) > maxKmh) { removed++; continue; }
+    out.push(cur);
+  }
+  out.push(points[points.length - 1]);
+  // 3割超を飛びと判定した場合はタイムスタンプ自体が壊れている可能性が高い。
+  // ルートを破壊しないよう、その場合は除去せず元に戻す。
+  if (removed > points.length * 0.3) return { points, removed: 0 };
+  return { points: out, removed };
+}
+
 export interface BridgeResult {
   points: TrackPoint[];
   bridged: number;      // 実際に補間したギャップ数
@@ -74,7 +101,9 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
     const cur = points[i];
     const dtS = (cur.timestamp - prev.timestamp) / 1000;
     const distKm = haversineKm(prev, cur);
-    const isGap = dtS >= GAP_MIN_DT_S && distKm >= GAP_MIN_DIST_KM;
+    const impliedKmh = dtS > 0 ? distKm / (dtS / 3600) : Infinity;
+    // ギャップ = 距離が離れ・時間も空き・実速度が現実的（ワープでない）区間のみ
+    const isGap = distKm >= GAP_MIN_DIST_KM && dtS >= GAP_MIN_DT_S && impliedKmh <= MAX_GAP_KMH;
     if (isGap) detected++;
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {
@@ -96,7 +125,7 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
         if (surfaceDetour) rejectedDetour++;
         if (total >= distKm * 0.9 && !surfaceDetour) {
           bridged++;
-          const gapSpeed = dtS > 0 ? Math.round((total / (dtS / 3600)) * 10) / 10 : 0;
+          const gapSpeed = dtS > 0 ? Math.min(MAX_GAP_KMH, Math.round((total / (dtS / 3600)) * 10) / 10) : 0;
           let cum = 0;
           for (let k = 1; k < path.length - 1; k++) {
             cum += segDist[k - 1];
