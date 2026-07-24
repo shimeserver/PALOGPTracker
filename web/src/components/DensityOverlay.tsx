@@ -1,92 +1,147 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Route } from '../firebase/data';
 
 // 全ルートの「通過回数」密度オーバーレイ。
-// 約40mグリッドで各セルを通った別ルート数を数え、1回=青 → 回数が増えるほど色相を赤へ。
-// 描画は google.maps.OverlayView のペイン内 canvas — ペインはマップと一緒に
-// 平行移動されるため、パン中も完全に追随する（ズーム/アイドルで再描画）。
+// - ルートごとの前処理（間引き・メルカトル座標化・セルマーク）は一度だけ実行し、
+//   モジュールレベルのキャッシュに蓄積。新しいルートは差分だけ処理される。
+// - 描画はワールド座標の純計算（LatLngオブジェクト生成なし）で高速。
+// - canvasは OverlayView のペイン内にあり、パン中はマップと一緒に動く。
 
-const CELL_LAT = 0.00036; // ≈40m
-const CELL_LNG = 0.00045;
-const COUNT_SAMPLE = 300;   // 回数集計用の間引き
-const DRAW_MAX_PTS = 1000;  // 描画用の間引き（高解像度＝滑らか）
+const CELL = 0.00040; // ≈45m相当（メルカトルy側もこのスケール感で十分）
+const COUNT_SAMPLE = 300;
+const DRAW_MAX_PTS = 1000;
 
 function countColor(n: number): string {
   const hue = Math.max(0, 220 - (n - 1) * 40); // 1:220(青) → 7+:0(赤)
   return `hsl(${hue}, 85%, 50%)`;
 }
 
-interface Run { color: string; pts: { lat: number; lng: number }[]; minLat: number; maxLat: number; minLng: number; maxLng: number; }
-
-function buildRuns(routes: Route[]): Run[] {
-  const valid = routes.filter(r => r.points?.length > 1);
-
-  // --- 回数集計（40mグリッド、同一ルートはSetで1回だけ） ---
-  const cellRoutes = new Map<string, Set<number>>();
-  const mark = (lat: number, lng: number, ri: number) => {
-    const key = `${Math.round(lat / CELL_LAT)}_${Math.round(lng / CELL_LNG)}`;
-    let s = cellRoutes.get(key);
-    if (!s) { s = new Set(); cellRoutes.set(key, s); }
-    s.add(ri);
+// Webメルカトル: latLng → ワールド座標(zoom0で256px)
+function project(lat: number, lng: number): { x: number; y: number } {
+  const sin = Math.min(Math.max(Math.sin((lat * Math.PI) / 180), -0.9999), 0.9999);
+  return {
+    x: 256 * (0.5 + lng / 360),
+    y: 256 * (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)),
   };
-  valid.forEach((r, ri) => {
-    const step = Math.max(1, Math.floor(r.points.length / COUNT_SAMPLE));
-    let prev: { lat: number; lng: number } | null = null;
-    for (let i = 0; i < r.points.length; i += step) {
-      const p = r.points[i];
-      mark(p.lat, p.lng, ri);
-      if (prev) {
-        const dLat = Math.abs(p.lat - prev.lat) / CELL_LAT;
-        const dLng = Math.abs(p.lng - prev.lng) / CELL_LNG;
-        const steps = Math.min(20, Math.floor(Math.max(dLat, dLng)));
-        for (let k = 1; k < steps; k++) {
-          const f = k / steps;
-          mark(prev.lat + (p.lat - prev.lat) * f, prev.lng + (p.lng - prev.lng) * f, ri);
-        }
-      }
-      prev = p;
-    }
-  });
-  const countAt = (lat: number, lng: number): number =>
-    cellRoutes.get(`${Math.round(lat / CELL_LAT)}_${Math.round(lng / CELL_LNG)}`)?.size ?? 1;
+}
 
-  // --- 描画ラン（同色の連続区間ごとに1本のポリライン） ---
+interface WPt { x: number; y: number; lat: number; lng: number }
+interface RouteCache {
+  drawPts: WPt[];          // 描画用（高解像度間引き済み・ワールド座標）
+  cellKeys: string[];      // このルートが通ったセル
+}
+interface Run { color: string; pts: WPt[]; minX: number; maxX: number; minY: number; maxY: number }
+
+// ルートごとの前処理キャッシュ（セッション中は蓄積され、再オープンでも再計算しない）
+const routeCache = new Map<string, RouteCache>();
+const cellRoutes = new Map<string, Set<string>>(); // cellKey -> 通ったルートkeyの集合
+
+function cellKeyOf(lat: number, lng: number): string {
+  return `${Math.round(lat / CELL)}_${Math.round(lng / CELL)}`;
+}
+
+function processRoute(key: string, r: Route): RouteCache {
+  const pts = r.points;
+  // 回数集計用マーク（補間つき）
+  const cells = new Set<string>();
+  const cStep = Math.max(1, Math.floor(pts.length / COUNT_SAMPLE));
+  let prev: { lat: number; lng: number } | null = null;
+  for (let i = 0; i < pts.length; i += cStep) {
+    const p = pts[i];
+    cells.add(cellKeyOf(p.lat, p.lng));
+    if (prev) {
+      const steps = Math.min(20, Math.floor(Math.max(
+        Math.abs(p.lat - prev.lat) / CELL, Math.abs(p.lng - prev.lng) / CELL)));
+      for (let k = 1; k < steps; k++) {
+        const f = k / steps;
+        cells.add(cellKeyOf(prev.lat + (p.lat - prev.lat) * f, prev.lng + (p.lng - prev.lng) * f));
+      }
+    }
+    prev = p;
+  }
+  // 描画用の高解像度点列（ワールド座標を先に計算しておく）
+  const dStep = Math.max(1, Math.floor(pts.length / DRAW_MAX_PTS));
+  const drawPts: WPt[] = [];
+  for (let i = 0; i < pts.length; i += dStep) {
+    const p = pts[i];
+    const w = project(p.lat, p.lng);
+    drawPts.push({ x: w.x, y: w.y, lat: p.lat, lng: p.lng });
+  }
+  const last = pts[pts.length - 1];
+  if (drawPts[drawPts.length - 1]?.lat !== last.lat) {
+    const w = project(last.lat, last.lng);
+    drawPts.push({ x: w.x, y: w.y, lat: last.lat, lng: last.lng });
+  }
+  const cache: RouteCache = { drawPts, cellKeys: [...cells] };
+  routeCache.set(key, cache);
+  for (const ck of cache.cellKeys) {
+    let s = cellRoutes.get(ck);
+    if (!s) { s = new Set(); cellRoutes.set(ck, s); }
+    s.add(key);
+  }
+  return cache;
+}
+
+// 現在のルート集合からランを構築（前処理はキャッシュ利用、色付けと連結のみ実施）
+function buildRuns(routes: Route[]): Run[] {
+  const active = routes.filter(r => r.id && r.points?.length > 1);
+  const activeKeys = new Set(active.map(r => `${r.id}_${r.points.length}`));
+
+  // 新規ルートだけ前処理（蓄積）
+  for (const r of active) {
+    const key = `${r.id}_${r.points.length}`;
+    if (!routeCache.has(key)) processRoute(key, r);
+  }
+
+  const countAt = (lat: number, lng: number): number => {
+    const s = cellRoutes.get(cellKeyOf(lat, lng));
+    if (!s) return 1;
+    // 削除済みルートが混ざらないよう、現在表示中のルートに限定して数える
+    let n = 0;
+    for (const k of s) if (activeKeys.has(k)) n++;
+    return Math.max(1, n);
+  };
+
   const runs: Run[] = [];
-  for (const r of valid) {
-    const step = Math.max(1, Math.floor(r.points.length / DRAW_MAX_PTS));
-    const pts = r.points.filter((_, i) => i % step === 0 || i === r.points.length - 1);
+  for (const r of active) {
+    const cache = routeCache.get(`${r.id}_${r.points.length}`)!;
     let cur: Run | null = null;
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i];
+    for (const p of cache.drawPts) {
       const color = countColor(countAt(p.lat, p.lng));
       if (!cur || cur.color !== color) {
-        // 前のランの終点と繋げる（色替わり目の隙間を防ぐ）
-        const prevRun: Run | null = cur;
-        const startPts: { lat: number; lng: number }[] = prevRun ? [prevRun.pts[prevRun.pts.length - 1]] : [];
-        if (prevRun && prevRun.pts.length > 1) runs.push(prevRun);
-        cur = { color, pts: [...startPts, { lat: p.lat, lng: p.lng }], minLat: p.lat, maxLat: p.lat, minLng: p.lng, maxLng: p.lng };
-        for (const sp of startPts) {
-          cur.minLat = Math.min(cur.minLat, sp.lat); cur.maxLat = Math.max(cur.maxLat, sp.lat);
-          cur.minLng = Math.min(cur.minLng, sp.lng); cur.maxLng = Math.max(cur.maxLng, sp.lng);
+        const bridge: WPt[] = cur ? [cur.pts[cur.pts.length - 1]] : [];
+        if (cur && cur.pts.length > 1) runs.push(cur);
+        cur = { color, pts: [...bridge, p], minX: p.x, maxX: p.x, minY: p.y, maxY: p.y };
+        for (const b of bridge) {
+          cur.minX = Math.min(cur.minX, b.x); cur.maxX = Math.max(cur.maxX, b.x);
+          cur.minY = Math.min(cur.minY, b.y); cur.maxY = Math.max(cur.maxY, b.y);
         }
       } else {
-        cur.pts.push({ lat: p.lat, lng: p.lng });
-        cur.minLat = Math.min(cur.minLat, p.lat); cur.maxLat = Math.max(cur.maxLat, p.lat);
-        cur.minLng = Math.min(cur.minLng, p.lng); cur.maxLng = Math.max(cur.maxLng, p.lng);
+        cur.pts.push(p);
+        cur.minX = Math.min(cur.minX, p.x); cur.maxX = Math.max(cur.maxX, p.x);
+        cur.minY = Math.min(cur.minY, p.y); cur.maxY = Math.max(cur.maxY, p.y);
       }
     }
     if (cur && cur.pts.length > 1) runs.push(cur);
   }
-  // 回数の少ない色を先に描く（ホットな道が上）— 色相が小さいほど回数多
   const hueOf = (c: string) => parseInt(c.slice(4), 10);
-  runs.sort((a, b) => hueOf(b.color) - hueOf(a.color));
+  runs.sort((a, b) => hueOf(b.color) - hueOf(a.color)); // 回数の多い色を後（上）に
   return runs;
 }
 
 interface Props { map: google.maps.Map | null; routes: Route[]; }
 
 export default function DensityOverlay({ map, routes }: Props) {
-  const runs = useMemo(() => buildRuns(routes), [routes]);
+  // ハイドレーション中の連続更新でも再構築が1回で済むようデバウンス
+  const [debounced, setDebounced] = useState<Route[]>(routes);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setDebounced(routes), 250);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [routes]);
+
+  const runs = useMemo(() => buildRuns(debounced), [debounced]);
 
   useEffect(() => {
     if (!map || runs.length === 0) return;
@@ -99,10 +154,7 @@ export default function DensityOverlay({ map, routes }: Props) {
         this.canvas.style.pointerEvents = 'none';
         this.getPanes()!.overlayLayer.appendChild(this.canvas);
       }
-      onRemove() {
-        this.canvas?.remove();
-        this.canvas = null;
-      }
+      onRemove() { this.canvas?.remove(); this.canvas = null; }
       draw() {
         const proj = this.getProjection();
         const canvas = this.canvas;
@@ -110,13 +162,16 @@ export default function DensityOverlay({ map, routes }: Props) {
         const div = map!.getDiv() as HTMLElement;
         const w = div.clientWidth, h = div.clientHeight;
         const bounds = map!.getBounds();
-        if (!bounds || w === 0) return;
+        const zoom = map!.getZoom();
+        if (!bounds || w === 0 || zoom == null) return;
 
-        // ビューポート左上（NW）をアンカーにキャンバスを配置
         const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-        const nwPx = proj.fromLatLngToDivPixel(new google.maps.LatLng(ne.lat(), sw.lng()))!;
-        // パン余白: 周囲に半画面ぶん広く描いておく（パン中も切れない）
-        const M = Math.round(Math.max(w, h) / 2);
+        const nwLatLng = new google.maps.LatLng(ne.lat(), sw.lng());
+        const nwPx = proj.fromLatLngToDivPixel(nwLatLng)!; // ペイン座標のアンカー
+        const nwW = project(ne.lat(), sw.lng());            // 同地点のワールド座標
+        const scale = Math.pow(2, zoom);
+
+        const M = Math.round(Math.max(w, h) / 2); // パン余白
         canvas.style.left = `${nwPx.x - M}px`;
         canvas.style.top = `${nwPx.y - M}px`;
         const cw = w + M * 2, ch = h + M * 2;
@@ -127,13 +182,10 @@ export default function DensityOverlay({ map, routes }: Props) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, cw, ch);
 
-        // 可視範囲（余白込み）でランをカリング
-        const latPad = (ne.lat() - sw.lat()) * (M / h);
-        const lngPad = (ne.lng() - sw.lng()) * (M / w);
-        const latMin = sw.lat() - latPad, latMax = ne.lat() + latPad;
-        const lngMin = sw.lng() - lngPad, lngMax = ne.lng() + lngPad;
+        // ワールド座標での可視範囲（余白込み）— ランのbboxカリング用
+        const wxMin = nwW.x - M / scale, wxMax = nwW.x + (w + M) / scale;
+        const wyMin = nwW.y - M / scale, wyMax = nwW.y + (h + M) / scale;
 
-        const zoom = map!.getZoom() ?? 12;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.lineWidth = zoom >= 14 ? 5 : zoom >= 12 ? 4 : 3;
@@ -141,13 +193,13 @@ export default function DensityOverlay({ map, routes }: Props) {
 
         let lastColor = '';
         for (const run of runs) {
-          if (run.maxLat < latMin || run.minLat > latMax || run.maxLng < lngMin || run.minLng > lngMax) continue;
+          if (run.maxX < wxMin || run.minX > wxMax || run.maxY < wyMin || run.minY > wyMax) continue;
           if (run.color !== lastColor) { ctx.strokeStyle = run.color; lastColor = run.color; }
           ctx.beginPath();
-          for (let i = 0; i < run.pts.length; i++) {
-            const px = proj.fromLatLngToDivPixel(new google.maps.LatLng(run.pts[i].lat, run.pts[i].lng))!;
-            const x = px.x - nwPx.x + M, y = px.y - nwPx.y + M;
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          const pts = run.pts;
+          ctx.moveTo((pts[0].x - nwW.x) * scale + M, (pts[0].y - nwW.y) * scale + M);
+          for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo((pts[i].x - nwW.x) * scale + M, (pts[i].y - nwW.y) * scale + M);
           }
           ctx.stroke();
         }
@@ -156,7 +208,6 @@ export default function DensityOverlay({ map, routes }: Props) {
 
     const overlay = new DensityView();
     overlay.setMap(map);
-    // コンテナリサイズにも追随
     const ro = new ResizeObserver(() => overlay.draw());
     ro.observe(map.getDiv());
 
