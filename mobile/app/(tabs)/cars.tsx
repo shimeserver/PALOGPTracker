@@ -147,10 +147,9 @@ export default function CarsScreen() {
   const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
   const [walkExpanded,    setWalkExpanded]    = useState(false);
   const [bicycleExpanded, setBicycleExpanded] = useState(false);
-  const [carExpanded,     setCarExpanded]     = useState(false);
+  const [showSummary,     setShowSummary]     = useState(false);
 
   // マンスリーレポート
-  const [reportExpanded, setReportExpanded] = useState(false);
   const [allFuelLogs, setAllFuelLogs] = useState<FuelLog[]>([]);
   useEffect(() => {
     if (cars.length === 0) return;
@@ -163,7 +162,6 @@ export default function CarsScreen() {
   const now = new Date();
   const todayStart     = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const monthStart     = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
   const yearStart      = new Date(now.getFullYear(), 0, 1).getTime();
 
   // 車の累計統計（mode未設定は車とみなす）
@@ -179,7 +177,6 @@ export default function CarsScreen() {
     total: { km: carRoutes.reduce((s, r) => s + r.totalDistance, 0), routes: carRoutes.length },
   };
   const thisMonth = calcReport(allRoutes, allFuelLogs, monthStart, Date.now());
-  const lastMonth = calcReport(allRoutes, allFuelLogs, lastMonthStart, monthStart);
   const thisYear  = calcReport(allRoutes, allFuelLogs, yearStart, Date.now());
   // 月ごと（直近6ヶ月）
   const monthlyReports = Array.from({ length: 6 }, (_, i) => {
@@ -530,97 +527,18 @@ export default function CarsScreen() {
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="愛車画面の使い方" items={CARS_HELP} />
       <ScrollView style={styles.list}>
-        {/* 車の累計カード */}
-        <TouchableOpacity
-          style={[styles.actCard, { borderLeftColor: '#2563eb' }]}
-          onPress={() => setCarExpanded(e => !e)}
-          activeOpacity={0.85}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: carExpanded ? 12 : 0 }}>
-            <Text style={styles.actCardTitle}>🚗 車（全体）</Text>
-            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{carExpanded ? '▲' : '▼ 詳細'}</Text>
+        {/* 走行サマリー（コンパクト1行 + 詳細モーダル） */}
+        <View style={styles.summaryStrip}>
+          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <Text style={styles.summaryText}>🚗 今月 <Text style={styles.summaryStrong}>{carStats.month.km.toFixed(0)}</Text> km</Text>
+            <Text style={styles.summaryTextDim}>  今年 <Text style={styles.summaryStrong}>{carStats.year.km.toFixed(0)}</Text></Text>
+            <Text style={styles.summaryTextDim}>  累計 <Text style={styles.summaryStrong}>{carStats.total.km.toFixed(0)}</Text> km</Text>
+            {thisMonth.fuelCost > 0 && <Text style={styles.summaryTextDim}>  ⛽ ¥{Math.round(thisMonth.fuelCost).toLocaleString()}</Text>}
           </View>
-          {!carExpanded ? (
-            <View style={styles.actGrid}>
-              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.today.km.toFixed(1)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.year.km.toFixed(0)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.total.km.toFixed(0)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
-              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.total.routes}</Text><Text style={styles.actLbl}>累計 回</Text></View>
-            </View>
-          ) : (
-            <View>
-              {([
-                { label: '今日', p: carStats.today },
-                { label: '今月', p: carStats.month },
-                { label: '今年', p: carStats.year },
-                { label: '累計', p: carStats.total },
-              ] as const).map(({ label, p }) => (
-                <View key={label} style={styles.actDetailRow}>
-                  <Text style={styles.actDetailPeriod}>{label}</Text>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(1)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-                </View>
-              ))}
-            </View>
-          )}
-        </TouchableOpacity>
-
-        {/* マンスリーレポート */}
-        <TouchableOpacity
-          style={[styles.actCard, { borderLeftColor: '#8b5cf6' }]}
-          onPress={() => setReportExpanded(e => !e)}
-          activeOpacity={0.85}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={styles.actCardTitle}>📊 {now.getMonth() + 1}月のレポート</Text>
-            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{reportExpanded ? '▲' : '▼ 先月・年間'}</Text>
-          </View>
-          <View style={styles.actGrid}>
-            <View style={styles.actCell}>
-              <Text style={styles.actVal}>{thisMonth.km.toFixed(0)}</Text>
-              <Text style={styles.actLbl}>走行 km</Text>
-              {lastMonth.km > 0 && (
-                <Text style={[styles.reportDiff, { color: thisMonth.km >= lastMonth.km ? '#22c55e' : '#ef4444' }]}>
-                  {thisMonth.km >= lastMonth.km ? '+' : ''}{(thisMonth.km - lastMonth.km).toFixed(0)}
-                </Text>
-              )}
-            </View>
-            <View style={styles.actCell}>
-              <Text style={styles.actVal}>{thisMonth.routes}</Text>
-              <Text style={styles.actLbl}>ドライブ</Text>
-            </View>
-            <View style={styles.actCell}>
-              <Text style={styles.actVal}>{thisMonth.fuelCost > 0 ? `¥${Math.round(thisMonth.fuelCost).toLocaleString()}` : '—'}</Text>
-              <Text style={styles.actLbl}>燃料費</Text>
-            </View>
-            <View style={styles.actCell}>
-              <Text style={styles.actVal}>{thisMonth.liters > 0 ? thisMonth.liters.toFixed(1) : '—'}</Text>
-              <Text style={styles.actLbl}>給油 L</Text>
-            </View>
-          </View>
-          {reportExpanded && (
-            <View style={{ marginTop: 10 }}>
-              <Text style={styles.reportSectionLabel}>月ごとの走行</Text>
-              {monthlyReports.map(p => (
-                <View key={p.label} style={styles.actDetailRow}>
-                  <Text style={styles.actDetailPeriod}>{p.label}</Text>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
-                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
-                </View>
-              ))}
-              <View style={[styles.actDetailRow, { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 8 }]}>
-                <Text style={[styles.actDetailPeriod, { fontWeight: '700' }]}>{now.getFullYear()}年累計</Text>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.fuelCost > 0 ? `¥${Math.round(thisYear.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.liters > 0 ? thisYear.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
-              </View>
-            </View>
-          )}
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.summaryBtn} onPress={() => setShowSummary(true)}>
+            <Text style={styles.summaryBtnText}>📊 詳細</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* 歩行統計カード */}
         <TouchableOpacity
@@ -1020,6 +938,51 @@ export default function CarsScreen() {
         </View>
       )}
 
+      {/* 走行サマリー詳細モーダル */}
+      <Modal visible={showSummary} transparent animationType="fade" onRequestClose={() => setShowSummary(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>📊 走行サマリー</Text>
+
+            <Text style={styles.summarySection}>🚗 車の走行距離</Text>
+            {([
+              { label: '今日', p: carStats.today },
+              { label: '今月', p: carStats.month },
+              { label: '今年', p: carStats.year },
+              { label: '累計', p: carStats.total },
+            ] as const).map(({ label, p }) => (
+              <View key={label} style={styles.actDetailRow}>
+                <Text style={styles.actDetailPeriod}>{label}</Text>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(1)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+              </View>
+            ))}
+
+            <Text style={styles.summarySection}>月ごとの走行・燃料</Text>
+            {monthlyReports.map(p => (
+              <View key={p.label} style={styles.actDetailRow}>
+                <Text style={[styles.actDetailPeriod, { minWidth: 56 }]}>{p.label}</Text>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+              </View>
+            ))}
+            <View style={[styles.actDetailRow, { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 8 }]}>
+              <Text style={[styles.actDetailPeriod, { minWidth: 56, fontWeight: '700' }]}>{now.getFullYear()}年累計</Text>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.fuelCost > 0 ? `¥${Math.round(thisYear.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.liters > 0 ? thisYear.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+            </View>
+
+            <TouchableOpacity style={[styles.modalButton, { marginTop: 16 }]} onPress={() => setShowSummary(false)}>
+              <Text style={styles.modalButtonText}>閉じる</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* 愛車追加モーダル */}
       <Modal visible={showAddCar} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -1223,10 +1186,14 @@ const styles = StyleSheet.create({
   actDetailCell: { flex: 1, alignItems: 'center' },
   actDetailVal: { fontSize: 15, fontWeight: '800', color: '#1f2937' },
   actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
-  reportDiff: { fontSize: 10, fontWeight: '700', marginTop: 2 },
-  reportNote: { fontSize: 12, color: '#8b5cf6', fontWeight: '600', marginTop: 8, textAlign: 'center' },
   effText: { color: '#2563eb', fontWeight: '700', fontSize: 13 },
-  reportSectionLabel: { fontSize: 11, color: '#6b7280', fontWeight: '700', marginBottom: 6 },
+  summaryStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12, borderWidth: 1, borderColor: '#eef0f2' },
+  summaryText: { fontSize: 13, color: '#374151' },
+  summaryTextDim: { fontSize: 13, color: '#9ca3af' },
+  summaryStrong: { fontWeight: '700', color: '#1f2937' },
+  summaryBtn: { backgroundColor: '#eff6ff', borderRadius: 6, paddingVertical: 5, paddingHorizontal: 10 },
+  summaryBtnText: { color: '#2563eb', fontSize: 12, fontWeight: '700' },
+  summarySection: { fontSize: 11, color: '#6b7280', fontWeight: '700', marginTop: 14, marginBottom: 6 },
   // Vehicle type selector
   vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
   vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
