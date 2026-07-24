@@ -65,6 +65,79 @@ async function osrmRoute(profile: string, a: TrackPoint, b: TrackPoint): Promise
   }
 }
 
+// 距離間隔でwaypointを間引く（滑らかに追従しつつOSRMの点数制限に収める）
+function sampleByDistance(points: TrackPoint[], stepKm: number): TrackPoint[] {
+  if (points.length < 2) return points;
+  const out: TrackPoint[] = [points[0]];
+  let acc = 0;
+  for (let i = 1; i < points.length; i++) {
+    acc += haversineKm(points[i - 1], points[i]);
+    if (acc >= stepKm) { out.push(points[i]); acc = 0; }
+  }
+  if (out[out.length - 1] !== points[points.length - 1]) out.push(points[points.length - 1]);
+  return out;
+}
+
+async function osrmRouteChunk(profile: string, chunk: TrackPoint[]): Promise<[number, number][] | null> {
+  const coords = chunk.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM}${profile}/${coords}?overview=full&geometries=geojson`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const coordsOut = json?.routes?.[0]?.geometry?.coordinates;
+    if (!Array.isArray(coordsOut) || coordsOut.length < 2) return null;
+    return coordsOut as [number, number][];
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export interface SnapResult { points: TrackPoint[]; ok: boolean; failedChunks: number; }
+
+// ルート全体を道路にスナップする。~120m間隔でwaypointを取り、90点ずつOSRM route し連結。
+// 失敗チャンクは元の点を使う。タイムスタンプは距離比例で再配分（速度は後段で再計算）。
+export async function snapWholeRoute(points: TrackPoint[], mode?: string): Promise<SnapResult> {
+  if (points.length < 2) return { points, ok: false, failedChunks: 0 };
+  const profile = mode === 'walk' ? 'foot' : mode === 'bicycle' ? 'cycling' : 'driving';
+  const wps = sampleByDistance(points, 0.12);
+  const CHUNK = 90;
+  const snapped: LL[] = [];
+  let failedChunks = 0;
+  for (let start = 0; start < wps.length - 1; start += CHUNK - 1) {
+    const chunk = wps.slice(start, start + CHUNK);
+    if (chunk.length < 2) break;
+    const geom = await osrmRouteChunk(profile, chunk);
+    let seg: LL[];
+    if (geom) {
+      seg = geom.map(([lng, lat]) => ({ lat, lng }));
+    } else {
+      failedChunks++;
+      seg = chunk.map(p => ({ lat: p.lat, lng: p.lng })); // 失敗時は元waypoint
+    }
+    if (snapped.length > 0) seg.shift(); // チャンク境界の重複を除去
+    snapped.push(...seg);
+  }
+  if (snapped.length < 2) return { points, ok: false, failedChunks };
+  // タイムスタンプを距離比例で再配分
+  const t0 = points[0].timestamp;
+  const t1 = points[points.length - 1].timestamp;
+  const segDist: number[] = [];
+  let total = 0;
+  for (let i = 1; i < snapped.length; i++) { const d = haversineKm(snapped[i - 1], snapped[i]); segDist.push(d); total += d; }
+  let cum = 0;
+  const result: TrackPoint[] = snapped.map((p, i) => {
+    if (i > 0) cum += segDist[i - 1];
+    const frac = total > 0 ? cum / total : 0;
+    return { lat: p.lat, lng: p.lng, timestamp: Math.round(t0 + frac * (t1 - t0)), speed: 0 };
+  });
+  return { points: result, ok: true, failedChunks };
+}
+
 export interface BridgeResult {
   points: TrackPoint[];
   bridged: number;      // 実際に補間したギャップ数

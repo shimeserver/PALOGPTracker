@@ -5,7 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
-import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
+import { snapWholeRoute, removeGeoWarps } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -430,33 +430,24 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(reset)));
     };
 
-    // ルート自動補正 = GPSギャップ（トンネル/電波切れ）だけを道なりに補間（モバイル記録時と同じ仕様）。
-    // ルート全体をスナップすると地下高速トンネルが地上に引っ張られるため、
-    // 記録済みの正確なGPS点はそのまま残し、離れたギャップだけを OSRM で埋める（地上迂回はガードで除外）。
+    // ルート自動補正 = ルート全体を道路にスナップ。
+    // 1) GPSワープ（飛んで戻る誤点）を位置ベースで除去 → 2) OSRMで全区間を道路に沿わせる → 3) 速度再計算・外れ値除去。
+    // 注: 地下高速トンネルは地上の道に寄る場合あり（その区間はundoで戻すか、手動編集で対応）。
     const snapToRoads = async () => {
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        // 1) GPSワープ（飛んで戻る誤点）を位置ベースで除去 2) 離れたギャップを道なりに補間 3) 速度を再計算・外れ値除去
         const cleaned = removeGeoWarps(editPoints);
-        const r = await bridgeGaps(cleaned.points, routeModeRef.current);
-        if (r.bridged === 0 && cleaned.removed === 0) {
-          if (r.detected === 0) {
-            alert('補正が必要な区間は見つかりませんでした。\n（GPSの飛びや、点が離れたギャップがない＝すでに連続した記録）');
-          } else {
-            const parts: string[] = [];
-            if (r.failed > 0) parts.push(`OSRM取得失敗 ${r.failed}件（オフライン等）`);
-            if (r.rejectedDetour > 0) parts.push(`妥当な道路経路なし（直線の2.5倍超）${r.rejectedDetour}件`);
-            alert(`ギャップを ${r.detected}か所検出しましたが補間できませんでした。\n${parts.join(' / ') || '道路経路が得られませんでした'}`);
-          }
+        const snap = await snapWholeRoute(cleaned.points, routeModeRef.current);
+        if (!snap.ok) {
+          alert('道路スナップに失敗しました（OSRMに接続できない可能性）。時間をおいて再度お試しください。');
           return;
         }
         saveUndo(editPoints);
-        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(r.points)));
-        const msgs: string[] = [];
+        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(snap.points)));
+        const msgs: string[] = ['ルート全体を道路にスナップしました'];
         if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
-        if (r.bridged > 0) msgs.push(`ギャップ ${r.bridged}か所を道なりに補間`);
-        if (r.rejectedDetour > 0) msgs.push(`妥当な経路なしで除外 ${r.rejectedDetour}か所`);
+        if (snap.failedChunks > 0) msgs.push(`一部区間(${snap.failedChunks})はスナップできず元のまま`);
         alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
