@@ -11,7 +11,7 @@ const MAX_GAPS = 30;
 const CALL_TIMEOUT_MS = 6000;
 const TOTAL_BUDGET_MS = 25000;
 const MAX_FAILS = 3;
-const MAX_DETOUR_RATIO = 2.5; // OSRM経路が直線のこれ倍超＝直通路なし/誤ルーティングとして不採用
+const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
 
 type LL = { lat: number; lng: number };
 

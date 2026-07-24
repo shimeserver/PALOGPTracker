@@ -12,7 +12,7 @@ const MAX_GAPS = 15;          // 1ルートで補間するギャップ数の上�
 const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
 const TOTAL_BUDGET_MS = 15000; // 補間全体の時間予算（保存がハングしないよう）
 const MAX_FAILS = 2;          // 連続失敗（=オフライン想定）でそれ以降の補間を諦める
-const MAX_DETOUR_RATIO = 2.5; // OSRM経路が直線のこれ倍超＝直通路なし/誤ルーティングとして不採用
+const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
 
 function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6371;

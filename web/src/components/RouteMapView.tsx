@@ -5,7 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
-import { snapWholeRoute, removeGeoWarps } from '../utils/gapBridge';
+import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -435,24 +435,28 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(reset)));
     };
 
-    // ルート自動補正 = ルート全体を道路にスナップ。
-    // 1) GPSワープ（飛んで戻る誤点）を位置ベースで除去 → 2) OSRMで全区間を道路に沿わせる → 3) 速度再計算・外れ値除去。
-    // 注: 地下高速トンネルは地上の道に寄る場合あり（その区間はundoで戻すか、手動編集で対応）。
+    // ルート自動補正 = 記録の「おかしい所」だけ直すクリーンアップ。
+    // 実測GPS点はそのまま残す（トンネルと地上道の重なりは距離がほぼ同じなので触らない）。
+    // 1) 短距離ワープ（飛んで戻る誤点）を位置ベースで除去
+    // 2) 離れたギャップ（GPS喪失区間）だけをOSRMの直進的な経路で補間（回り道になる経路は不採用＝直線のまま）
+    // 3) 速度を再計算し外れ値を除去
     const snapToRoads = async () => {
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
         const cleaned = removeGeoWarps(editPoints);
-        const snap = await snapWholeRoute(cleaned.points, routeModeRef.current);
-        if (!snap.ok) {
-          alert('道路スナップに失敗しました（OSRMに接続できない可能性）。時間をおいて再度お試しください。');
+        const r = await bridgeGaps(cleaned.points, routeModeRef.current);
+        if (r.bridged === 0 && cleaned.removed === 0) {
+          alert('補正が必要な区間は見つかりませんでした。\n（短距離ワープや、GPS喪失によるギャップなし）');
           return;
         }
         saveUndo(editPoints);
-        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(snap.points)));
-        const msgs: string[] = ['ルート全体を道路にスナップしました'];
+        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(r.points)));
+        const msgs: string[] = [];
         if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
-        if (snap.failedChunks > 0) msgs.push(`一部区間(${snap.failedChunks})はスナップできず元のまま`);
+        if (r.bridged > 0) msgs.push(`GPS喪失区間 ${r.bridged}か所を道なりに補間`);
+        if (r.rejectedDetour > 0) msgs.push(`回り道になる補間は不採用（直線のまま）${r.rejectedDetour}か所`);
+        if (r.failed > 0) msgs.push(`経路取得失敗 ${r.failed}か所`);
         alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
@@ -920,9 +924,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 onClick={snapToRoads}
                 disabled={savingEdit || isDragging}
                 style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor: savingEdit || isDragging ? 'default' : 'pointer', fontWeight:600 }}
-                title="OSRMで全ポイントを道路に自動修正"
+                title="GPSの飛び（ワープ）を除去し、GPS喪失区間だけ道なりに補間します。実測点はそのまま残します"
               >
-                🛣️ ルート自動修正
+                🛣️ 記録クリーンアップ
               </button>
               <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
                 style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
