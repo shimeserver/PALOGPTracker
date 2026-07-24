@@ -527,18 +527,52 @@ export default function CarsScreen() {
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="愛車画面の使い方" items={CARS_HELP} />
       <ScrollView style={styles.list}>
-        {/* 走行サマリー（コンパクト1行 + 詳細モーダル） */}
-        <View style={styles.summaryStrip}>
+        {/* 走行サマリー（コンパクト1行 → タップでプルダウン） */}
+        <TouchableOpacity style={styles.summaryStrip} activeOpacity={0.8} onPress={() => setShowSummary(o => !o)}>
           <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <Text style={styles.summaryText}>🚗 今月 <Text style={styles.summaryStrong}>{carStats.month.km.toFixed(0)}</Text> km</Text>
             <Text style={styles.summaryTextDim}>  今年 <Text style={styles.summaryStrong}>{carStats.year.km.toFixed(0)}</Text></Text>
             <Text style={styles.summaryTextDim}>  累計 <Text style={styles.summaryStrong}>{carStats.total.km.toFixed(0)}</Text> km</Text>
             {thisMonth.fuelCost > 0 && <Text style={styles.summaryTextDim}>  ⛽ ¥{Math.round(thisMonth.fuelCost).toLocaleString()}</Text>}
           </View>
-          <TouchableOpacity style={styles.summaryBtn} onPress={() => setShowSummary(true)}>
-            <Text style={styles.summaryBtnText}>📊 詳細</Text>
-          </TouchableOpacity>
-        </View>
+          <Text style={styles.summaryBtnText}>📊 {showSummary ? '▲' : '詳細 ▼'}</Text>
+        </TouchableOpacity>
+
+        {/* プルダウン詳細 */}
+        {showSummary && (
+          <View style={styles.summaryDropdown}>
+            <Text style={styles.summarySection}>🚗 車の走行距離</Text>
+            {([
+              { label: '今日', p: carStats.today },
+              { label: '今月', p: carStats.month },
+              { label: '今年', p: carStats.year },
+              { label: '累計', p: carStats.total },
+            ] as const).map(({ label, p }) => (
+              <View key={label} style={styles.actDetailRow}>
+                <Text style={styles.actDetailPeriod}>{label}</Text>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(1)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+              </View>
+            ))}
+            <Text style={styles.summarySection}>月ごとの走行・燃料</Text>
+            {monthlyReports.map(p => (
+              <View key={p.label} style={styles.actDetailRow}>
+                <Text style={[styles.actDetailPeriod, { minWidth: 56 }]}>{p.label}</Text>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+              </View>
+            ))}
+            <View style={[styles.actDetailRow, { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 8 }]}>
+              <Text style={[styles.actDetailPeriod, { minWidth: 56, fontWeight: '700' }]}>{now.getFullYear()}年累計</Text>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.fuelCost > 0 ? `¥${Math.round(thisYear.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.liters > 0 ? thisYear.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+            </View>
+          </View>
+        )}
 
         {/* 歩行統計カード */}
         <TouchableOpacity
@@ -938,51 +972,6 @@ export default function CarsScreen() {
         </View>
       )}
 
-      {/* 走行サマリー詳細モーダル */}
-      <Modal visible={showSummary} transparent animationType="fade" onRequestClose={() => setShowSummary(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>📊 走行サマリー</Text>
-
-            <Text style={styles.summarySection}>🚗 車の走行距離</Text>
-            {([
-              { label: '今日', p: carStats.today },
-              { label: '今月', p: carStats.month },
-              { label: '今年', p: carStats.year },
-              { label: '累計', p: carStats.total },
-            ] as const).map(({ label, p }) => (
-              <View key={label} style={styles.actDetailRow}>
-                <Text style={styles.actDetailPeriod}>{label}</Text>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(1)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-              </View>
-            ))}
-
-            <Text style={styles.summarySection}>月ごとの走行・燃料</Text>
-            {monthlyReports.map(p => (
-              <View key={p.label} style={styles.actDetailRow}>
-                <Text style={[styles.actDetailPeriod, { minWidth: 56 }]}>{p.label}</Text>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
-                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
-              </View>
-            ))}
-            <View style={[styles.actDetailRow, { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 8 }]}>
-              <Text style={[styles.actDetailPeriod, { minWidth: 56, fontWeight: '700' }]}>{now.getFullYear()}年累計</Text>
-              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
-              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
-              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.fuelCost > 0 ? `¥${Math.round(thisYear.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
-              <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.liters > 0 ? thisYear.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
-            </View>
-
-            <TouchableOpacity style={[styles.modalButton, { marginTop: 16 }]} onPress={() => setShowSummary(false)}>
-              <Text style={styles.modalButtonText}>閉じる</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {/* 愛車追加モーダル */}
       <Modal visible={showAddCar} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -1187,13 +1176,13 @@ const styles = StyleSheet.create({
   actDetailVal: { fontSize: 15, fontWeight: '800', color: '#1f2937' },
   actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
   effText: { color: '#2563eb', fontWeight: '700', fontSize: 13 },
-  summaryStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12, borderWidth: 1, borderColor: '#eef0f2' },
+  summaryStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 8, borderWidth: 1, borderColor: '#eef0f2' },
   summaryText: { fontSize: 13, color: '#374151' },
   summaryTextDim: { fontSize: 13, color: '#9ca3af' },
   summaryStrong: { fontWeight: '700', color: '#1f2937' },
-  summaryBtn: { backgroundColor: '#eff6ff', borderRadius: 6, paddingVertical: 5, paddingHorizontal: 10 },
   summaryBtnText: { color: '#2563eb', fontSize: 12, fontWeight: '700' },
-  summarySection: { fontSize: 11, color: '#6b7280', fontWeight: '700', marginTop: 14, marginBottom: 6 },
+  summaryDropdown: { backgroundColor: '#fff', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e8eaed' },
+  summarySection: { fontSize: 11, color: '#6b7280', fontWeight: '700', marginTop: 6, marginBottom: 6 },
   // Vehicle type selector
   vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
   vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },

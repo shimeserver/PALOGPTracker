@@ -728,14 +728,50 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
           {loading && <p style={{ color: '#9ca3af', textAlign: 'center', marginTop: 32, fontSize: 14 }}>読み込み中...</p>}
 
           {routes.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 18px', borderBottom: '1px solid #eef0f2', flexWrap: 'wrap', background: '#fafbfc' }}>
-              <span style={{ fontSize: 13, color: '#374151', display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                <span>🚗 今月 <b style={{ color: '#1f2937' }}>{carStats.month.km.toFixed(0)}</b> km</span>
-                <span style={{ color: '#9ca3af' }}>今年 <b style={{ color: '#1f2937' }}>{carStats.year.km.toFixed(0)}</b></span>
-                <span style={{ color: '#9ca3af' }}>累計 <b style={{ color: '#1f2937' }}>{carStats.total.km.toFixed(0)}</b> km</span>
-                {monthlyReports[0].fuelCost > 0 && <span style={{ color: '#9ca3af' }}>⛽ ¥{Math.round(monthlyReports[0].fuelCost).toLocaleString()}</span>}
-              </span>
-              <button onClick={() => setShowSummary(true)} style={{ marginLeft: 'auto', background: '#fff', border: '1px solid #d1d5db', borderRadius: 6, padding: '3px 10px', fontSize: 12, color: '#2563eb', cursor: 'pointer', whiteSpace: 'nowrap' }}>📊 詳細</button>
+            <div style={{ position: 'relative', borderBottom: '1px solid #eef0f2' }}>
+              <div onClick={() => setShowSummary(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 18px', flexWrap: 'wrap', background: showSummary ? '#f2f6ff' : '#fafbfc', cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ fontSize: 13, color: '#374151', display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  <span>🚗 今月 <b style={{ color: '#1f2937' }}>{carStats.month.km.toFixed(0)}</b> km</span>
+                  <span style={{ color: '#9ca3af' }}>今年 <b style={{ color: '#1f2937' }}>{carStats.year.km.toFixed(0)}</b></span>
+                  <span style={{ color: '#9ca3af' }}>累計 <b style={{ color: '#1f2937' }}>{carStats.total.km.toFixed(0)}</b> km</span>
+                  {monthlyReports[0].fuelCost > 0 && <span style={{ color: '#9ca3af' }}>⛽ ¥{Math.round(monthlyReports[0].fuelCost).toLocaleString()}</span>}
+                </span>
+                <span style={{ marginLeft: 'auto', fontSize: 12, color: '#2563eb', whiteSpace: 'nowrap' }}>📊 {showSummary ? '閉じる ▲' : '詳細 ▼'}</span>
+              </div>
+
+              {/* プルダウン（重ねて表示・レイアウトはずれない） */}
+              {showSummary && (
+                <>
+                  <div onClick={() => setShowSummary(false)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 11, background: '#fff', borderBottom: '1px solid #e8eaed', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', padding: '14px 18px', maxHeight: '60vh', overflowY: 'auto' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, marginBottom: 6 }}>🚗 車の走行距離</div>
+                    {([['今日', carStats.today], ['今月', carStats.month], ['今年', carStats.year], ['累計', carStats.total]] as const).map(([label, p]) => (
+                      <div key={label} style={sumRow}>
+                        <span style={sumRowLbl}>{label}</span>
+                        <span style={sumRowVal}>{p.km.toFixed(1)} km</span>
+                        <span style={sumRowSub}>{p.routes} 回</span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, margin: '14px 0 6px' }}>月ごとの走行・燃料</div>
+                    {monthlyReports.map(p => (
+                      <div key={p.label} style={sumRow}>
+                        <span style={{ ...sumRowLbl, minWidth: 60 }}>{p.label}</span>
+                        <span style={sumRowVal}>{p.km.toFixed(0)} km</span>
+                        <span style={sumRowSub}>{p.routes}回</span>
+                        <span style={sumRowSub}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</span>
+                        <span style={sumRowSub}>{p.liters > 0 ? `${p.liters.toFixed(1)}L` : '—'}</span>
+                      </div>
+                    ))}
+                    <div style={{ ...sumRow, borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 8, fontWeight: 700 }}>
+                      <span style={{ ...sumRowLbl, minWidth: 60 }}>{nowD.getFullYear()}年累計</span>
+                      <span style={sumRowVal}>{thisYearReport.km.toFixed(0)} km</span>
+                      <span style={sumRowSub}>{thisYearReport.routes}回</span>
+                      <span style={sumRowSub}>{thisYearReport.fuelCost > 0 ? `¥${Math.round(thisYearReport.fuelCost).toLocaleString()}` : '—'}</span>
+                      <span style={sumRowSub}>{thisYearReport.liters > 0 ? `${thisYearReport.liters.toFixed(1)}L` : '—'}</span>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1216,43 +1252,6 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         </div>
       )}
 
-      {/* 走行サマリー詳細モーダル */}
-      {showSummary && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowSummary(false)}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 420, maxWidth: '90vw', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ color: '#1f2937', fontSize: 16, fontWeight: 700, marginBottom: 14 }}>📊 走行サマリー</h3>
-
-            <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, marginBottom: 6 }}>🚗 車の走行距離</div>
-            {([['今日', carStats.today], ['今月', carStats.month], ['今年', carStats.year], ['累計', carStats.total]] as const).map(([label, p]) => (
-              <div key={label} style={sumRow}>
-                <span style={sumRowLbl}>{label}</span>
-                <span style={sumRowVal}>{p.km.toFixed(1)} km</span>
-                <span style={sumRowSub}>{p.routes} 回</span>
-              </div>
-            ))}
-
-            <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, margin: '14px 0 6px' }}>月ごとの走行・燃料</div>
-            {monthlyReports.map(p => (
-              <div key={p.label} style={sumRow}>
-                <span style={{ ...sumRowLbl, minWidth: 60 }}>{p.label}</span>
-                <span style={sumRowVal}>{p.km.toFixed(0)} km</span>
-                <span style={sumRowSub}>{p.routes}回</span>
-                <span style={sumRowSub}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</span>
-                <span style={sumRowSub}>{p.liters > 0 ? `${p.liters.toFixed(1)}L` : '—'}</span>
-              </div>
-            ))}
-            <div style={{ ...sumRow, borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 8, fontWeight: 700 }}>
-              <span style={{ ...sumRowLbl, minWidth: 60 }}>{nowD.getFullYear()}年累計</span>
-              <span style={sumRowVal}>{thisYearReport.km.toFixed(0)} km</span>
-              <span style={sumRowSub}>{thisYearReport.routes}回</span>
-              <span style={sumRowSub}>{thisYearReport.fuelCost > 0 ? `¥${Math.round(thisYearReport.fuelCost).toLocaleString()}` : '—'}</span>
-              <span style={sumRowSub}>{thisYearReport.liters > 0 ? `${thisYearReport.liters.toFixed(1)}L` : '—'}</span>
-            </div>
-
-            <button onClick={() => setShowSummary(false)} style={{ width: '100%', marginTop: 16, background: '#f8f9fa', color: '#374151', border: '1px solid #e8eaed', borderRadius: 8, padding: '10px', cursor: 'pointer', fontSize: 14 }}>閉じる</button>
-          </div>
-        </div>
-      )}
 
       {showAddFuel && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowAddFuel(null)}>
