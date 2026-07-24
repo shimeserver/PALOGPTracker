@@ -122,6 +122,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // 標高プロファイル
     const [showElev, setShowElev] = useState(false);
     const [elevIdx, setElevIdx] = useState<number | null>(null);
+    // 全ルート表示モード: heat=密度（重なりで濃くなる） / tags=タグ色分け
+    const [allMode, setAllMode] = useState<'heat' | 'tags'>('heat');
     const sectionModeRef = useRef(false);
     const sectionStartRef = useRef<number | null>(null);
     const editPointsRef = useRef<TrackPoint[]>([]);
@@ -556,8 +558,18 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             }
           }}
         >
-          {/* 全ルート表示（タグ色対応） */}
-          {isAllMode && allRoutes.map((r, i) =>
+          {/* 全ルート表示: 密度モード=半透明の同色を重ねる（よく通る道ほど濃く見えるヒートマップ効果） */}
+          {isAllMode && allMode === 'heat' && allRoutes.map(r =>
+            r.points.length > 1 && (
+              <Polyline
+                key={r.id}
+                path={r.points.map(p => ({ lat: p.lat, lng: p.lng }))}
+                options={{ strokeColor: '#1d4ed8', strokeWeight: 3.5, strokeOpacity: 0.18 }}
+              />
+            )
+          )}
+          {/* 全ルート表示: タグ色分けモード */}
+          {isAllMode && allMode === 'tags' && allRoutes.map((r, i) =>
             r.points.length > 1 && (
               <Polyline
                 key={r.id}
@@ -965,7 +977,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         {isAllMode && (
           <div style={ui.allModeBadge}>
-            🌐 全ルート表示中（{allRoutes.length}件）— 左でルートを選択すると個別表示
+            🌐 全ルート表示中（{allRoutes.length}件）
+            <button
+              onClick={() => setAllMode(m => m === 'heat' ? 'tags' : 'heat')}
+              style={{ marginLeft: 10, background: 'rgba(255,255,255,0.9)', border: 'none', borderRadius: 12, padding: '3px 12px', fontSize: 12, fontWeight: 700, color: '#1d4ed8', cursor: 'pointer' }}
+            >
+              {allMode === 'heat' ? '🔥 密度表示' : '🎨 タグ色分け'}
+            </button>
           </div>
         )}
 
