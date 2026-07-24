@@ -61,6 +61,39 @@ function calcReport(routes: RouteMetadata[], fuel: FuelLog[], from: number, to: 
   };
 }
 
+// 車のタグ（同名タグを含む）のID集合を返す
+function carTagIdSet(userTags: TagDef[], carTagId?: string): Set<string> {
+  if (!carTagId) return new Set();
+  const t = userTags.find(x => x.id === carTagId);
+  if (!t) return new Set([carTagId]);
+  return new Set(userTags.filter(x => x.name === t.name).map(x => x.id!).filter(Boolean));
+}
+
+type FuelLogEnriched = FuelLog & { distanceSince?: number; efficiency?: number };
+
+// 満タン法: 満タン給油ごとに「前回満タンからの走行距離 ÷ 給油量」で燃費を算出。
+// ルートはメタデータのみ（GPS点なし）のため時間比例で距離を按分する。
+function enrichFuelLogs(logs: FuelLog[], routes: RouteMetadata[], tagIds: Set<string>): FuelLogEnriched[] {
+  const asc = [...logs].sort((a, b) => a.timestamp - b.timestamp);
+  return asc.map((log, i) => {
+    if (i === 0 || !log.isFull || tagIds.size === 0) return log;
+    let prevFull: FuelLog | undefined;
+    for (let j = i - 1; j >= 0; j--) { if (asc[j].isFull) { prevFull = asc[j]; break; } }
+    if (!prevFull) return log;
+    const distanceSince = routes
+      .filter(r => (r.tags ?? []).some(t => tagIds.has(t)) && r.endTime > prevFull!.timestamp && r.startTime < log.timestamp)
+      .reduce((s, r) => {
+        const effStart = Math.max(r.startTime, prevFull!.timestamp);
+        const effEnd = Math.min(r.endTime, log.timestamp);
+        const dur = r.endTime - r.startTime;
+        if (dur <= 0 || effEnd <= effStart) return s;
+        return s + r.totalDistance * ((effEnd - effStart) / dur);
+      }, 0);
+    const efficiency = distanceSince > 0 && log.liters > 0 ? distanceSince / log.liters : undefined;
+    return { ...log, distanceSince, efficiency };
+  }).reverse();
+}
+
 const CARS_HELP = [
   { q: '愛車の追加方法は？', a: '「＋ 愛車を追加」ボタンから車名・メーカー・タグカラーなどを入力して登録できます。' },
   { q: 'アクティブ車とは？', a: '現在記録中のルートに紐づく車です。タップで切り替えられます。' },
@@ -133,6 +166,13 @@ export default function CarsScreen() {
   const thisMonth = calcReport(allRoutes, allFuelLogs, monthStart, Date.now());
   const lastMonth = calcReport(allRoutes, allFuelLogs, lastMonthStart, monthStart);
   const thisYear  = calcReport(allRoutes, allFuelLogs, yearStart, Date.now());
+  // 月ごと（直近6ヶ月）
+  const monthlyReports = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const start = d.getTime();
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1).getTime();
+    return { label: `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}`, ...calcReport(allRoutes, allFuelLogs, start, end) };
+  });
 
   // Add car modal
   const [showAddCar, setShowAddCar] = useState(false);
@@ -510,21 +550,23 @@ export default function CarsScreen() {
           </View>
           {reportExpanded && (
             <View style={{ marginTop: 10 }}>
-              {([
-                { label: '先月', p: lastMonth },
-                { label: `${now.getFullYear()}年累計`, p: thisYear },
-              ] as const).map(({ label, p }) => (
-                <View key={label} style={styles.actDetailRow}>
-                  <Text style={styles.actDetailPeriod}>{label}</Text>
+              <Text style={styles.reportSectionLabel}>月ごとの走行</Text>
+              {monthlyReports.map(p => (
+                <View key={p.label} style={styles.actDetailRow}>
+                  <Text style={styles.actDetailPeriod}>{p.label}</Text>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
                   <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
                 </View>
               ))}
-              {thisMonth.liters > 0 && thisMonth.km > 0 && (
-                <Text style={styles.reportNote}>今月の実燃費目安: {(thisMonth.km / thisMonth.liters).toFixed(1)} km/L</Text>
-              )}
+              <View style={[styles.actDetailRow, { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 8 }]}>
+                <Text style={[styles.actDetailPeriod, { fontWeight: '700' }]}>{now.getFullYear()}年累計</Text>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.fuelCost > 0 ? `¥${Math.round(thisYear.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+                <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{thisYear.liters > 0 ? thisYear.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+              </View>
             </View>
           )}
         </TouchableOpacity>
@@ -620,6 +662,12 @@ export default function CarsScreen() {
           const kmDriven = car.odometerKm != null
             ? car.odometerKm + distanceAfter
             : (stats?.totalDistance ?? 0);
+
+          // 満タン法で給油ごとの燃費を算出し、その平均を表示
+          const tagIdSet = carTagIdSet(userTags, car.tagId);
+          const enrichedFuel = enrichFuelLogs(fLogs, allRoutes, tagIdSet);
+          const effList = enrichedFuel.filter(l => l.efficiency != null).map(l => l.efficiency!);
+          const avgEff = effList.length > 0 ? effList.reduce((a, b) => a + b, 0) / effList.length : null;
 
           // 警告チェック: 期限1ヶ月前 or 300km前から警告
           const hasWarning = mLogs.some(log => {
@@ -799,17 +847,10 @@ export default function CarsScreen() {
                               <Text style={styles.statLabel}>平均速度 km/h</Text>
                             </View>
                             <View style={styles.statCell}>
-                              {(() => {
-                                const fullLogs = fLogs.filter(l => l.isFull);
-                                const totalLiters = fLogs.reduce((s, l) => s + l.liters, 0);
-                                const eff = totalLiters > 0 && kmDriven > 0 ? kmDriven / totalLiters : null;
-                                return (
-                                  <>
-                                    <Text style={styles.statValue}>{eff ? eff.toFixed(1) : '—'}</Text>
-                                    <Text style={styles.statLabel}>平均燃費 km/L</Text>
-                                  </>
-                                );
-                              })()}
+                              <Text style={styles.statValue}>{avgEff ? avgEff.toFixed(1) : '—'}</Text>
+                              <Text style={styles.statLabel}>
+                                平均燃費 km/L{avgEff ? `\n(${effList.length}回分)` : ''}
+                              </Text>
                             </View>
                           </View>
                           <TouchableOpacity
@@ -842,14 +883,18 @@ export default function CarsScreen() {
                       <TouchableOpacity style={styles.addLogBtn} onPress={() => setShowAddFuel(car.id!)}>
                         <Text style={styles.addLogBtnText}>+ 給油を記録</Text>
                       </TouchableOpacity>
-                      {fLogs.length === 0 && <Text style={styles.empty}>給油記録がありません</Text>}
-                      {fLogs.map(log => (
+                      {enrichedFuel.length === 0 && <Text style={styles.empty}>給油記録がありません</Text>}
+                      {enrichedFuel.map(log => (
                         <TouchableOpacity key={log.id} style={styles.logItem} onLongPress={() => handleDeleteFuel(car.id!, log)}>
                           <View style={{ flex: 1 }}>
                             <Text style={styles.logDate}>{new Date(log.timestamp).toLocaleDateString('ja-JP')}</Text>
-                            <Text style={styles.logMain}>{log.liters.toFixed(2)} L{log.totalCost ? `  ¥${log.totalCost.toLocaleString()}` : ''}</Text>
+                            <Text style={styles.logMain}>
+                              {log.liters.toFixed(2)} L{log.totalCost ? `  ¥${log.totalCost.toLocaleString()}` : ''}
+                              {log.efficiency != null && <Text style={styles.effText}>  → {log.efficiency.toFixed(1)} km/L</Text>}
+                            </Text>
                             {log.pricePerLiter && <Text style={styles.logSub}>{log.pricePerLiter.toFixed(0)}円/L</Text>}
-                            {!log.isFull && <Text style={styles.notFull}>非満タン</Text>}
+                            {log.distanceSince != null && log.distanceSince > 0 && <Text style={styles.logSub}>前回満タンから {log.distanceSince.toFixed(1)} km</Text>}
+                            {!log.isFull && <Text style={styles.notFull}>非満タン（燃費計算対象外）</Text>}
                           </View>
                           <Text style={styles.logDelete}>長押し削除</Text>
                         </TouchableOpacity>
@@ -1129,6 +1174,8 @@ const styles = StyleSheet.create({
   actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
   reportDiff: { fontSize: 10, fontWeight: '700', marginTop: 2 },
   reportNote: { fontSize: 12, color: '#8b5cf6', fontWeight: '600', marginTop: 8, textAlign: 'center' },
+  effText: { color: '#2563eb', fontWeight: '700', fontSize: 13 },
+  reportSectionLabel: { fontSize: 11, color: '#6b7280', fontWeight: '700', marginBottom: 6 },
   // Vehicle type selector
   vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
   vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
