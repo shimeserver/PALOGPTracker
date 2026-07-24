@@ -5,6 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
+import { bridgeGaps } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -429,75 +430,23 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(reset)));
     };
 
+    // ルート自動補正 = GPSギャップ（トンネル/電波切れ）だけを道なりに補間（モバイル記録時と同じ仕様）。
+    // ルート全体をスナップすると地下高速トンネルが地上に引っ張られるため、
+    // 記録済みの正確なGPS点はそのまま残し、離れたギャップだけを OSRM で埋める（地上迂回はガードで除外）。
     const snapToRoads = async () => {
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        const profile = routeModeRef.current === 'walk' ? 'foot' : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
-
-        // 最大25 waypoint を等間隔でサンプリング
-        const N = Math.min(25, editPoints.length);
-        const step = (editPoints.length - 1) / (N - 1);
-        const sampled = Array.from({ length: N }, (_, i) =>
-          editPoints[Math.round(i * step)]
-        );
-        // ワープ点を除去（前点から400km/h超の点をスキップ）
-        const waypoints: TrackPoint[] = [sampled[0]];
-        for (let i = 1; i < sampled.length - 1; i++) {
-          const prev = waypoints[waypoints.length - 1];
-          const dt = (sampled[i].timestamp - prev.timestamp) / 3600000;
-          if (dt > 0 && haversineKm(prev, sampled[i]) / dt > 400) continue;
-          waypoints.push(sampled[i]);
-        }
-        waypoints.push(sampled[sampled.length - 1]);
-        const coords = waypoints.map(p => `${p.lng},${p.lat}`).join(';');
-
-        // annotations=duration,distance で道路種別ごとの速度推定を取得
-        const res = await fetch(
-          `https://router.project-osrm.org/route/v1/${profile}/${coords}` +
-          `?overview=full&geometries=geojson&annotations=duration,distance`
-        );
-        const data = await res.json();
-        if (data.code !== 'Ok' || !data.routes?.[0]) {
-          alert(`道路スナップ失敗: ${data.code ?? 'エラー'}`);
+        const { points: bridged, bridged: n } = await bridgeGaps(editPoints, routeModeRef.current);
+        if (n === 0) {
+          alert('補間が必要なギャップは見つかりませんでした。\n（トンネル/電波切れによる離れた区間なし、地上迂回として除外、またはオフライン）');
           return;
         }
-
-        const routeCoords: [number, number][] = data.routes[0].geometry.coordinates;
-        const t0 = editPoints[0].timestamp;
-        const t1 = editPoints[editPoints.length - 1].timestamp;
-
-        // 各レグのannotationを結合（レグ間はノード共有なので末尾重複なし）
-        const annDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
-        const hasAnnotations = annDur.length === routeCoords.length - 1;
-
-        // タイムスタンプ: annotationがあればOSRM所要時間比例、なければ距離比例
-        const cumTime: number[] = [0];
-        if (hasAnnotations) {
-          for (const d of annDur) cumTime.push(cumTime[cumTime.length-1] + d);
-        } else {
-          for (let i = 1; i < routeCoords.length; i++) {
-            const a = { lat: routeCoords[i-1][1], lng: routeCoords[i-1][0], timestamp: 0, speed: 0 };
-            const b = { lat: routeCoords[i][1], lng: routeCoords[i][0], timestamp: 0, speed: 0 };
-            cumTime.push(cumTime[i-1] + haversineKm(a, b));
-          }
-        }
-        const totalT = cumTime[cumTime.length - 1];
-
-        // 元のGPS点から速度を補間して保持（OSRM補正後も実測速度を維持）
-        const originals = editPoints; // capture before state update
-        const snapped: TrackPoint[] = routeCoords.map((c, i) => ({
-          lng: c[0], lat: c[1],
-          timestamp: totalT > 0 ? t0 + (t1 - t0) * (cumTime[i] / totalT) : t0,
-          speed: interpolateSpeedFromOriginals(c[1], c[0], originals),
-        }));
-        // speed=0が残った点だけ距離/時間で補完し、外れ値フィルタをかける
-        const snappedFixed = calcSpeedsForSegment(snapped);
-
         saveUndo(editPoints);
-        setEditPoints(snappedFixed);
+        setEditPoints(calcSpeedsForSegment(bridged));
+        alert(`${n}か所のギャップを道なりに補間しました。内容を確認して「保存」してください。`);
       } catch (e) {
-        alert(`道路スナップ失敗: ${e instanceof Error ? e.message : String(e)}`);
+        alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setSavingEdit(false);
       }
