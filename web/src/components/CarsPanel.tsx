@@ -98,6 +98,24 @@ function calcCarStats(routes: Route[], allTags: TagDef[], carTagId?: string) {
   };
 }
 
+// 車全体の期間集計（mode未設定は車とみなす）
+function carSumInWindow(routes: Route[], from: number, to: number) {
+  const rs = routes.filter(r => (r.mode ?? 'car') === 'car' && r.startTime >= from && r.startTime < to);
+  return { km: rs.reduce((s, r) => s + r.totalDistance, 0), routes: rs.length };
+}
+
+interface ReportPeriod { km: number; routes: number; fuelCost: number; liters: number; }
+function calcReport(routes: Route[], fuel: FuelLog[], from: number, to: number): ReportPeriod {
+  const rs = routes.filter(r => (r.mode ?? 'car') === 'car' && r.startTime >= from && r.startTime < to);
+  const fs = fuel.filter(f => f.timestamp >= from && f.timestamp < to);
+  return {
+    km: rs.reduce((s, r) => s + r.totalDistance, 0),
+    routes: rs.length,
+    fuelCost: fs.reduce((s, f) => s + (f.totalCost ?? (f.pricePerLiter ? f.pricePerLiter * f.liters : 0)), 0),
+    liters: fs.reduce((s, f) => s + f.liters, 0),
+  };
+}
+
 type FuelLogEnriched = FuelLog & { distanceSince?: number; efficiency?: number };
 
 function enrichFuelLogs(logs: FuelLog[], routes: Route[], allTags: TagDef[], carTagId?: string): FuelLogEnriched[] {
@@ -160,6 +178,18 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const [maintLogs, setMaintLogs] = useState<Record<string, MaintenanceLog[]>>({});
   const [loadedFuel, setLoadedFuel] = useState<Set<string>>(new Set());
   const [loadedMaint, setLoadedMaint] = useState<Set<string>>(new Set());
+
+  // サマリーカード（車累計 / 月ごとレポート）
+  const [carExpanded, setCarExpanded] = useState(false);
+  const [reportExpanded, setReportExpanded] = useState(false);
+  const [allFuelLogs, setAllFuelLogs] = useState<FuelLog[]>([]);
+  useEffect(() => {
+    if (cars.length === 0) { setAllFuelLogs([]); return; }
+    let mounted = true;
+    Promise.all(cars.map(c => getFuelLogs(c.id!).catch(() => [] as FuelLog[])))
+      .then(arr => { if (mounted) setAllFuelLogs(arr.flat()); });
+    return () => { mounted = false; };
+  }, [cars.map(c => c.id).join(',')]);
 
   // Toast
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
@@ -639,6 +669,25 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   if (!open) return null;
 
+  // サマリー集計
+  const nowD = new Date();
+  const todayStart     = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate()).getTime();
+  const monthStart     = new Date(nowD.getFullYear(), nowD.getMonth(), 1).getTime();
+  const yearStart      = new Date(nowD.getFullYear(), 0, 1).getTime();
+  const carStats = {
+    today: carSumInWindow(routes, todayStart, Date.now()),
+    month: carSumInWindow(routes, monthStart, Date.now()),
+    year:  carSumInWindow(routes, yearStart, Date.now()),
+    total: carSumInWindow(routes, 0, Date.now()),
+  };
+  const thisYearReport = calcReport(routes, allFuelLogs, yearStart, Date.now());
+  const monthlyReports = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(nowD.getFullYear(), nowD.getMonth() - i, 1);
+    const start = d.getTime();
+    const end = new Date(nowD.getFullYear(), nowD.getMonth() - i + 1, 1).getTime();
+    return { label: `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}`, ...calcReport(routes, allFuelLogs, start, end) };
+  });
+
   return (
     <>
       <div style={s.overlay} onClick={e => { if (e.clientX < 360) onClose(); }} />
@@ -678,6 +727,71 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
         {/* 愛車一覧 */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {loading && <p style={{ color: '#9ca3af', textAlign: 'center', marginTop: 32, fontSize: 14 }}>読み込み中...</p>}
+
+          {routes.length > 0 && (
+            <div style={{ padding: '12px 18px 0' }}>
+              {/* 車の累計カード */}
+              <div style={{ ...sumCard, borderLeft: '4px solid #2563eb', cursor: 'pointer' }} onClick={() => setCarExpanded(e => !e)}>
+                <div style={sumHead}>
+                  <span style={sumTitle}>🚗 車（全体）</span>
+                  <span style={sumToggle}>{carExpanded ? '▲' : '▼ 詳細'}</span>
+                </div>
+                <div style={sumGrid}>
+                  <div style={sumCell}><div style={sumVal}>{carStats.today.km.toFixed(1)}</div><div style={sumLbl}>今日 km</div></div>
+                  <div style={sumCell}><div style={sumVal}>{carStats.month.km.toFixed(1)}</div><div style={sumLbl}>今月 km</div></div>
+                  <div style={sumCell}><div style={sumVal}>{carStats.year.km.toFixed(0)}</div><div style={sumLbl}>今年 km</div></div>
+                  <div style={sumCell}><div style={sumVal}>{carStats.total.km.toFixed(0)}</div><div style={sumLbl}>累計 km</div></div>
+                  <div style={sumCell}><div style={sumVal}>{carStats.total.routes}</div><div style={sumLbl}>累計 回</div></div>
+                </div>
+                {carExpanded && (
+                  <div style={{ marginTop: 8 }}>
+                    {([['今日', carStats.today], ['今月', carStats.month], ['今年', carStats.year], ['累計', carStats.total]] as const).map(([label, p]) => (
+                      <div key={label} style={sumRow}>
+                        <span style={sumRowLbl}>{label}</span>
+                        <span style={sumRowVal}>{p.km.toFixed(1)} km</span>
+                        <span style={sumRowSub}>{p.routes} 回</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 月ごとレポート */}
+              <div style={{ ...sumCard, borderLeft: '4px solid #8b5cf6', cursor: 'pointer' }} onClick={() => setReportExpanded(e => !e)}>
+                <div style={sumHead}>
+                  <span style={sumTitle}>📊 {nowD.getMonth() + 1}月のレポート</span>
+                  <span style={sumToggle}>{reportExpanded ? '▲' : '▼ 月ごと'}</span>
+                </div>
+                <div style={sumGrid}>
+                  <div style={sumCell}><div style={sumVal}>{monthlyReports[0].km.toFixed(0)}</div><div style={sumLbl}>走行 km</div></div>
+                  <div style={sumCell}><div style={sumVal}>{monthlyReports[0].routes}</div><div style={sumLbl}>ドライブ</div></div>
+                  <div style={sumCell}><div style={sumVal}>{monthlyReports[0].fuelCost > 0 ? `¥${Math.round(monthlyReports[0].fuelCost).toLocaleString()}` : '—'}</div><div style={sumLbl}>燃料費</div></div>
+                  <div style={sumCell}><div style={sumVal}>{monthlyReports[0].liters > 0 ? monthlyReports[0].liters.toFixed(1) : '—'}</div><div style={sumLbl}>給油 L</div></div>
+                </div>
+                {reportExpanded && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 700, marginBottom: 4 }}>月ごとの走行</div>
+                    {monthlyReports.map(p => (
+                      <div key={p.label} style={sumRow}>
+                        <span style={{ ...sumRowLbl, minWidth: 56 }}>{p.label}</span>
+                        <span style={sumRowVal}>{p.km.toFixed(0)} km</span>
+                        <span style={sumRowSub}>{p.routes}回</span>
+                        <span style={sumRowSub}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</span>
+                        <span style={sumRowSub}>{p.liters > 0 ? `${p.liters.toFixed(1)}L` : '—'}</span>
+                      </div>
+                    ))}
+                    <div style={{ ...sumRow, borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 8, fontWeight: 700 }}>
+                      <span style={{ ...sumRowLbl, minWidth: 56 }}>{nowD.getFullYear()}年累計</span>
+                      <span style={sumRowVal}>{thisYearReport.km.toFixed(0)} km</span>
+                      <span style={sumRowSub}>{thisYearReport.routes}回</span>
+                      <span style={sumRowSub}>{thisYearReport.fuelCost > 0 ? `¥${Math.round(thisYearReport.fuelCost).toLocaleString()}` : '—'}</span>
+                      <span style={sumRowSub}>{thisYearReport.liters > 0 ? `${thisYearReport.liters.toFixed(1)}L` : '—'}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {!loading && cars.length === 0 && !showAddCar && (
             <p style={{ color: '#9ca3af', textAlign: 'center', marginTop: 40, fontSize: 14, lineHeight: 1.8 }}>
@@ -1214,6 +1328,19 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     </>
   );
 }
+
+const sumCard: React.CSSProperties = { background: '#fff', borderRadius: 12, padding: '12px 14px', marginBottom: 12, border: '1px solid #e8eaed', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' };
+const sumHead: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 10 };
+const sumTitle: React.CSSProperties = { fontSize: 14, fontWeight: 700, color: '#1f2937' };
+const sumToggle: React.CSSProperties = { marginLeft: 'auto', color: '#9ca3af', fontSize: 12 };
+const sumGrid: React.CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap' };
+const sumCell: React.CSSProperties = { flex: '1 1 0', minWidth: 56, textAlign: 'center' };
+const sumVal: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: '#1f2937' };
+const sumLbl: React.CSSProperties = { fontSize: 10, color: '#9ca3af', marginTop: 2 };
+const sumRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13 };
+const sumRowLbl: React.CSSProperties = { minWidth: 40, color: '#6b7280', fontWeight: 600 };
+const sumRowVal: React.CSSProperties = { fontWeight: 700, color: '#1f2937', minWidth: 60 };
+const sumRowSub: React.CSSProperties = { color: '#9ca3af', fontSize: 12 };
 
 const s: Record<string, React.CSSProperties> = {
   overlay:      { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000 },
