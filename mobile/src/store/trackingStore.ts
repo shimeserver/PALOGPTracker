@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackPoint, Route, TrackingMode } from '../types';
 import { saveRoute } from '../firebase/routes';
 import { enqueuePendingRoute } from '../utils/uploadQueue';
+import { bridgeGaps } from '../utils/gapBridge';
 
 const RECOVERY_KEY = 'route_recovery';
 
@@ -162,19 +163,22 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (isRunning) await Location.stopLocationUpdatesAsync(LOCATION_TASK);
     set({ isTracking: false, isPaused: false });
 
-    const { currentPoints, startTime } = get();
+    const { currentPoints, startTime, trackingMode } = get();
     if (currentPoints.length < 2) return null;
 
+    // トンネル/電波切れのギャップを道なりに補間（車のみ・オンライン時のみ有効、失敗時は直線のまま）
+    const points = trackingMode === 'car'
+      ? await bridgeGaps(currentPoints).catch(() => currentPoints)
+      : currentPoints;
+
     let totalDist = 0;
-    for (let i = 1; i < currentPoints.length; i++) {
-      totalDist += haversine(currentPoints[i - 1], currentPoints[i]);
+    for (let i = 1; i < points.length; i++) {
+      totalDist += haversine(points[i - 1], points[i]);
     }
-    const speeds = currentPoints.map(p => p.speed).filter(s => s > 0);
+    const speeds = points.map(p => p.speed).filter(s => s > 0);
     const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
     const maxSpeed = speeds.length > 0 ? speeds.reduce((m, s) => s > m ? s : m, 0) : 0;
-    const endTime = currentPoints[currentPoints.length - 1].timestamp;
-
-    const { trackingMode } = get();
+    const endTime = points[points.length - 1].timestamp;
     const route: Omit<Route, 'id'> = {
       userId,
       name: name || `ルート ${new Date(startTime!).toLocaleDateString('ja-JP')}`,
@@ -184,7 +188,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       totalDistance: totalDist,
       avgSpeed,
       maxSpeed,
-      points: currentPoints,
+      points,
       source: 'recorded',
       mode: trackingMode,
       createdAt: Date.now(),

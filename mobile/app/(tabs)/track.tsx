@@ -9,6 +9,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { saveRoute } from '../../src/firebase/routes';
 import { flushPendingRoutes, getPendingRoutes, enqueuePendingRoute } from '../../src/utils/uploadQueue';
+import { bridgeGaps } from '../../src/utils/gapBridge';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { recordVisit } from '../../src/firebase/landmarks';
 import { detectStops, matchStopsToLandmarks } from '../../src/utils/visitDetection';
@@ -165,7 +166,9 @@ export default function TrackScreen() {
   const handleSaveRecovery = async () => {
     if (!user || !recovery) return;
     try {
-      const { points, startTime: recStart, mode } = recovery;
+      const { points: rawPoints, startTime: recStart, mode } = recovery;
+      // トンネル/電波切れギャップを補間（車のみ・失敗時は直線のまま）
+      const points = mode === 'car' ? await bridgeGaps(rawPoints).catch(() => rawPoints) : rawPoints;
       const dt = new Date(recStart);
       const name = `ルート ${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
       let totalDist = 0;
