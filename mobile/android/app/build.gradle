@@ -94,8 +94,8 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         manifestPlaceholders = [GOOGLE_MAPS_API_KEY: project.findProperty("GOOGLE_MAPS_API_KEY") ?: ""]
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "0.0.9"
+        versionCode 10
+        versionName "1.2.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
