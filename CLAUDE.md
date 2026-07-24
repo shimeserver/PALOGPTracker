@@ -2,14 +2,28 @@
 
 ## ビルド・デプロイ
 
-```bash
-# ビルド
-export JAVA_HOME="C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot"
-cd mobile/android && ./gradlew assembleDebug
+⚠️ **重要**: debug ビルドは JS を自動バンドルしない。`app/src/main/assets/index.android.bundle`
+に置かれた静的バンドルをそのまま同梱するため、**JS を変更したら必ず先にバンドルを再生成すること**。
+これを忘れると JS 変更が端末に一切反映されない（ネイティブ変更のみ反映される）。
 
-# インストール
-adb -s 2A151FDH3000Z7 install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```bash
+export JAVA_HOME="C:/Program Files/Microsoft/jdk-17.0.18.8-hotspot"
+
+# 1. JS バンドル再生成（JS を変更した場合は必須）
+cd mobile && npx expo export:embed --platform android --dev false \
+  --bundle-output android/app/src/main/assets/index.android.bundle \
+  --assets-dest /tmp/rnassets
+
+# 2. ビルド
+cd android && ./gradlew assembleDebug
+
+# 3. インストール＋再起動（実行中だと古い画面が残るため force-stop する）
+adb -s 2A151FDH3000Z7 install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s 2A151FDH3000Z7 shell am force-stop com.palow.palogptracker
+adb -s 2A151FDH3000Z7 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
 ```
+
+パッケージ名: `com.palow.palogptracker`
 
 ## gh CLI
 
