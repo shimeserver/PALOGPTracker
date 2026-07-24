@@ -147,6 +147,7 @@ export default function CarsScreen() {
   const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
   const [walkExpanded,    setWalkExpanded]    = useState(false);
   const [bicycleExpanded, setBicycleExpanded] = useState(false);
+  const [carExpanded,     setCarExpanded]     = useState(false);
 
   // マンスリーレポート
   const [reportExpanded, setReportExpanded] = useState(false);
@@ -160,9 +161,23 @@ export default function CarsScreen() {
   }, [cars.length]);
 
   const now = new Date();
+  const todayStart     = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const monthStart     = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
   const yearStart      = new Date(now.getFullYear(), 0, 1).getTime();
+
+  // 車の累計統計（mode未設定は車とみなす）
+  const carRoutes = allRoutes.filter(r => (r.mode ?? 'car') === 'car');
+  const carSum = (from: number) => {
+    const rs = carRoutes.filter(r => r.startTime >= from);
+    return { km: rs.reduce((s, r) => s + r.totalDistance, 0), routes: rs.length };
+  };
+  const carStats = {
+    today: carSum(todayStart),
+    month: carSum(monthStart),
+    year:  carSum(yearStart),
+    total: { km: carRoutes.reduce((s, r) => s + r.totalDistance, 0), routes: carRoutes.length },
+  };
   const thisMonth = calcReport(allRoutes, allFuelLogs, monthStart, Date.now());
   const lastMonth = calcReport(allRoutes, allFuelLogs, lastMonthStart, monthStart);
   const thisYear  = calcReport(allRoutes, allFuelLogs, yearStart, Date.now());
@@ -515,6 +530,42 @@ export default function CarsScreen() {
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="愛車画面の使い方" items={CARS_HELP} />
       <ScrollView style={styles.list}>
+        {/* 車の累計カード */}
+        <TouchableOpacity
+          style={[styles.actCard, { borderLeftColor: '#2563eb' }]}
+          onPress={() => setCarExpanded(e => !e)}
+          activeOpacity={0.85}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: carExpanded ? 12 : 0 }}>
+            <Text style={styles.actCardTitle}>🚗 車（全体）</Text>
+            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{carExpanded ? '▲' : '▼ 詳細'}</Text>
+          </View>
+          {!carExpanded ? (
+            <View style={styles.actGrid}>
+              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.today.km.toFixed(1)}</Text><Text style={styles.actLbl}>今日 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.month.km.toFixed(1)}</Text><Text style={styles.actLbl}>今月 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.year.km.toFixed(0)}</Text><Text style={styles.actLbl}>今年 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.total.km.toFixed(0)}</Text><Text style={styles.actLbl}>累計 km</Text></View>
+              <View style={styles.actCell}><Text style={styles.actVal}>{carStats.total.routes}</Text><Text style={styles.actLbl}>累計 回</Text></View>
+            </View>
+          ) : (
+            <View>
+              {([
+                { label: '今日', p: carStats.today },
+                { label: '今月', p: carStats.month },
+                { label: '今年', p: carStats.year },
+                { label: '累計', p: carStats.total },
+              ] as const).map(({ label, p }) => (
+                <View key={label} style={styles.actDetailRow}>
+                  <Text style={styles.actDetailPeriod}>{label}</Text>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(1)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+                </View>
+              ))}
+            </View>
+          )}
+        </TouchableOpacity>
+
         {/* マンスリーレポート */}
         <TouchableOpacity
           style={[styles.actCard, { borderLeftColor: '#8b5cf6' }]}
