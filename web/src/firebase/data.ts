@@ -144,9 +144,10 @@ function haversineKm(p1: TrackPoint, p2: TrackPoint): number {
 export async function updateRoutePoints(routeId: string, points: TrackPoint[]): Promise<void> {
   let totalDistance = 0;
   for (let i = 1; i < points.length; i++) totalDistance += haversineKm(points[i - 1], points[i]);
-  const speeds = points.map(p => p.speed).filter(s => s > 0);
+  // 300km/h超は異常値として集計から除外（高度混入や微小dt由来のスパイク対策）
+  const speeds = points.map(p => p.speed).filter(s => s > 0 && s <= 300);
   const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
-  const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+  const maxSpeed = speeds.reduce((m, s) => s > m ? s : m, 0);
   const endTime = points[points.length - 1].timestamp;
   await updateDoc(doc(db, 'routes', routeId), {
     points, totalDistance, avgSpeed, maxSpeed,

@@ -31,13 +31,13 @@ export function parseRouteHistoryCsv(csvText: string): ParsedLog[] {
     } else if (line.startsWith('tp,')) {
       if (current) {
         const parts = line.split(',');
-        // tp,lat,lng,timestamp,speed
+        // tp,lat,lng,timestamp,altitude  ← 5列目は「高度(m)」であり速度ではない
         const lat = parseFloat(parts[1]);
         const lng = parseFloat(parts[2]);
         const timestamp = new Date(parts[3]).getTime();
-        const speed = parseFloat(parts[4]) || 0;
         if (!isNaN(lat) && !isNaN(lng) && !isNaN(timestamp)) {
-          current.points.push({ lat, lng, timestamp, speed });
+          // 速度は座標と時刻から後で再計算する（高度を速度として取り込まない）
+          current.points.push({ lat, lng, timestamp, speed: 0 });
         }
       }
     } else if (line === 'LogEnd') {
@@ -88,6 +88,15 @@ function haversine(p1: TrackPoint, p2: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// 座標と時刻から速度(km/h)を計算。300km/h超は異常値として0に。
+function calcSpeed(p1: TrackPoint, p2: TrackPoint): number {
+  const distKm = haversine(p1, p2);
+  const dtHours = (p2.timestamp - p1.timestamp) / 3_600_000;
+  if (dtHours <= 0) return 0;
+  const speed = distKm / dtHours;
+  return speed > 300 ? 0 : speed;
+}
+
 // パースしたログをFirebaseに保存
 export async function importRouteHistoryCsv(
   csvText: string,
@@ -106,10 +115,11 @@ export async function importRouteHistoryCsv(
       let totalDist = 0;
       for (let j = 1; j < pts.length; j++) {
         totalDist += haversine(pts[j - 1], pts[j]);
+        pts[j].speed = calcSpeed(pts[j - 1], pts[j]); // 座標と時刻から速度を再計算（高度混入を防ぐ）
       }
       const speeds = pts.map(p => p.speed).filter(s => s > 0);
       const avgSpeed = speeds.length ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
-      const maxSpeed = speeds.length ? Math.max(...speeds) : 0;
+      const maxSpeed = speeds.reduce((m, s) => s > m ? s : m, 0);
 
       const route: Omit<Route, 'id'> = {
         userId,

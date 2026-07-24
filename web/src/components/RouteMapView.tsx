@@ -15,13 +15,17 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
 }
 
+const MAX_REALISTIC_KMH = 300; // これ超は物理的にありえない＝異常値としてクリップ
+
 // 前後1点と比較して3倍超なら外れ値（例: 40→300→40はNG、40→100→180はOK）
+// 加えて、絶対値300km/h超はすべて0に落とす（連続スパイクや端点も救済）。
 function filterSpeedOutliers(points: TrackPoint[]): TrackPoint[] {
   if (points.length < 3) return points;
   const result = points.map(p => ({ ...p }));
   const s = points.map(p => p.speed);
-  for (let i = 1; i < s.length - 1; i++) {
-    if (s[i] <= 0) continue;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] > MAX_REALISTIC_KMH) { result[i].speed = 0; continue; } // 絶対上限
+    if (i === 0 || i === s.length - 1 || s[i] <= 0) continue;
     const neighborMax = Math.max(s[i-1], s[i+1]);
     if (neighborMax > 0 && s[i] > neighborMax * 3) {
       result[i].speed = (s[i-1] + s[i+1]) / 2;
@@ -51,7 +55,8 @@ function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   for (let i = 0; i < result.length - 1; i++) {
     if (result[i].speed === 0) {
       const dt = (result[i+1].timestamp - result[i].timestamp) / 3600000;
-      result[i].speed = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+      const v = dt > 0 ? haversineKm(result[i], result[i+1]) / dt : 0;
+      result[i].speed = v > MAX_REALISTIC_KMH ? 0 : v; // 微小dtによる異常値をクリップ
     }
   }
   if (result[result.length - 1].speed === 0)
@@ -471,7 +476,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           ...route, points: fixed,
           totalDistance: totalDist,
           avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
-          maxSpeed: speeds.length > 0 ? Math.max(...speeds) : 0,
+          maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
         };
         onUpdateRoute?.(updatedRoute);
         setEditMode(false);
