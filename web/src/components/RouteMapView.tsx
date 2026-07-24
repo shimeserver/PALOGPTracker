@@ -34,20 +34,6 @@ function filterSpeedOutliers(points: TrackPoint[]): TrackPoint[] {
   return result;
 }
 
-// OSRM補正後の新座標に対し、元のGPS点から最近傍2点の速度を距離加重補間
-function interpolateSpeedFromOriginals(lat: number, lng: number, originals: TrackPoint[]): number {
-  const valid = originals.filter(p => p.speed > 0);
-  if (valid.length === 0) return 0;
-  const withDist = valid
-    .map(p => ({ speed: p.speed, d2: (p.lat - lat) ** 2 + (p.lng - lng) ** 2 }))
-    .sort((a, b) => a.d2 - b.d2);
-  if (withDist[0].d2 === 0) return withDist[0].speed;
-  const top = withDist.slice(0, 2);
-  const w0 = 1 / Math.sqrt(top[0].d2);
-  const w1 = top[1] ? 1 / Math.sqrt(top[1].d2) : 0;
-  return (top[0].speed * w0 + (top[1]?.speed ?? 0) * w1) / (w0 + w1);
-}
-
 // OSRM出力（speed=0）の点にタイムスタンプから速度を計算して付与
 function calcSpeedsForSegment(seg: TrackPoint[]): TrackPoint[] {
   if (seg.length < 2) return seg;
@@ -127,9 +113,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [editPoints, setEditPoints] = useState<TrackPoint[]>([]);
     const [savingEdit, setSavingEdit] = useState(false);
     const [hasUndo, setHasUndo] = useState(false);
-    const [isDragging, setIsDragging] = useState(false);
-    const [dragPos, setDragPos] = useState<{lat:number;lng:number}|null>(null);
-    const [dragAnchor, setDragAnchor] = useState<{before:number;after:number}|null>(null);
     // 区間修正モード: ルート上の2点をクリック→間をOSRMの道なり経路で置き換え
     const [sectionMode, setSectionMode] = useState(false);
     const [sectionStart, setSectionStart] = useState<number | null>(null);
@@ -138,11 +121,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const editPointsRef = useRef<TrackPoint[]>([]);
     const routeModeRef = useRef<string | undefined>(undefined);
     const prevEditPointsRef = useRef<TrackPoint[]>([]);
-    const dragPosRef = useRef<{lat:number;lng:number}|null>(null);
-    const dragAnchorRef = useRef<{before:number;after:number}|null>(null);
     const savingEditRef = useRef(false);
-    const hasDraggedRef = useRef(false);
-    const mouseDownPosRef = useRef<{lat:number;lng:number}|null>(null);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
@@ -168,7 +147,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => {
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]);
-      setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
+      setHasUndo(false); setSectionMode(false); setSectionStart(null);
       prevEditPointsRef.current = [];
     }, [route?.id]);
 
@@ -180,96 +159,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => { sectionModeRef.current = sectionMode; }, [sectionMode]);
     useEffect(() => { sectionStartRef.current = sectionStart; }, [sectionStart]);
     useEffect(() => { routeModeRef.current = route?.mode; }, [route?.mode]);
-    useEffect(() => { dragPosRef.current = dragPos; }, [dragPos]);
     useEffect(() => { savingEditRef.current = savingEdit; }, [savingEdit]);
-
-    // ドラッグ中のマウス追跡・mouseup処理
-    useEffect(() => {
-      if (!mapRef.current || !editMode || !isDragging) return;
-      const map = mapRef.current;
-      map.setOptions({ draggable: false });
-      map.getDiv().style.cursor = 'grabbing';
-
-      const DRAG_THRESHOLD = 0.00015; // 約15m
-      const onMove = map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
-        if (!e.latLng) return;
-        const lat = e.latLng.lat(), lng = e.latLng.lng();
-        // 閾値を超えるまでプレビューを表示しない
-        if (!hasDraggedRef.current) {
-          const md = mouseDownPosRef.current;
-          if (!md) return;
-          const dist = Math.sqrt((lat - md.lat) ** 2 + (lng - md.lng) ** 2);
-          if (dist < DRAG_THRESHOLD) return;
-          hasDraggedRef.current = true;
-        }
-        setDragPos({ lat, lng });
-      });
-
-      const onUp = map.addListener('mouseup', async () => {
-        setIsDragging(false);
-        const didDrag = hasDraggedRef.current;
-        const anchor = dragAnchorRef.current;
-        const pos = dragPosRef.current;
-        const pts = editPointsRef.current;
-        setDragPos(null); setDragAnchor(null);
-        hasDraggedRef.current = false;
-        mouseDownPosRef.current = null;
-        // 実際にドラッグしていない場合はクリック扱い（OSRM不要）
-        if (!didDrag || !anchor || !pos || pts.length < 2 || savingEditRef.current) return;
-
-        setSavingEdit(true);
-        try {
-          const profile = routeModeRef.current === 'walk' ? 'foot'
-            : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
-          const p1 = pts[anchor.before], p2 = pts[anchor.after];
-          const coords = `${p1.lng},${p1.lat};${pos.lng},${pos.lat};${p2.lng},${p2.lat}`;
-          const res = await fetch(
-            `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson`
-          );
-          const data = await res.json();
-          const t0 = p1.timestamp, t1 = p2.timestamp;
-          let newSeg: TrackPoint[];
-          if (data.code === 'Ok' && data.routes?.[0]) {
-            const rc: [number, number][] = data.routes[0].geometry.coordinates;
-            const aDur: number[] = data.routes[0].legs.flatMap((l: any) => l.annotation?.duration ?? []);
-            const hasAnn = aDur.length === rc.length - 1;
-            const ct: number[] = [0];
-            if (hasAnn) {
-              for (const d of aDur) ct.push(ct[ct.length-1] + d);
-            } else {
-              for (let i = 1; i < rc.length; i++) {
-                const a = { lat: rc[i-1][1], lng: rc[i-1][0], timestamp: 0, speed: 0 };
-                const b = { lat: rc[i][1], lng: rc[i][0], timestamp: 0, speed: 0 };
-                ct.push(ct[i-1] + haversineKm(a, b));
-              }
-            }
-            const tt = ct[ct.length-1];
-            newSeg = rc.map((c, i) => ({
-              lng: c[0], lat: c[1],
-              timestamp: tt > 0 ? t0 + (t1 - t0) * (ct[i] / tt) : t0,
-              speed: interpolateSpeedFromOriginals(c[1], c[0], pts),
-            }));
-          } else {
-            newSeg = [p1, { lat: pos.lat, lng: pos.lng, timestamp: (t0+t1)/2, speed: interpolateSpeedFromOriginals(pos.lat, pos.lng, pts) }, p2];
-          }
-          prevEditPointsRef.current = pts;
-          setHasUndo(true);
-          setEditPoints([...pts.slice(0, anchor.before), ...calcSpeedsForSegment(newSeg), ...pts.slice(anchor.after + 1)]);
-        } catch (e) {
-          alert(`ルート更新失敗: ${e instanceof Error ? e.message : String(e)}`);
-        } finally {
-          setSavingEdit(false);
-          dragAnchorRef.current = null;
-        }
-      });
-
-      return () => {
-        google.maps.event.removeListener(onMove);
-        google.maps.event.removeListener(onUp);
-        map.setOptions({ draggable: true });
-        map.getDiv().style.cursor = '';
-      };
-    }, [editMode, isDragging]);
 
     // 停車候補を計算（route変化またはlandmarks変化時）
     useEffect(() => {
@@ -399,7 +289,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
     const cancelEditMode = () => {
       setEditMode(false); setEditPoints([]);
-      setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
+      setHasUndo(false);
       setSectionMode(false); setSectionStart(null);
       prevEditPointsRef.current = [];
     };
@@ -466,18 +356,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           setSectionMode(false);
           void repairSection(start, ni);
         }
-        return;
       }
-
-      // ドラッグ範囲: ルート長の5%または最低30点
-      const pad = Math.max(30, Math.floor(pts.length * 0.05));
-      const before = Math.max(0, ni - pad);
-      const after = Math.min(pts.length - 1, ni + pad);
-      dragAnchorRef.current = { before, after };
-      hasDraggedRef.current = false;
-      mouseDownPosRef.current = { lat, lng };
-      setDragAnchor({ before, after });
-      setIsDragging(true);
     }, []);
 
     const saveUndo = (pts: TrackPoint[]) => {
@@ -739,30 +618,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             />
           ))}
 
-          {/* 編集モード：ドラッグ可能なグレーPolyline */}
+          {/* 編集モード：グレーPolyline（区間修正のクリック対象） */}
           {editMode && editPoints.length > 1 && (
             <Polyline
               path={editPath}
-              options={{ strokeColor: isDragging ? '#9ca3af' : '#374151', strokeWeight: 5, strokeOpacity: isDragging ? 0.4 : 0.8 }}
+              options={{ strokeColor: '#374151', strokeWeight: 5, strokeOpacity: 0.8 }}
               onMouseDown={handleEditPolylineMouseDown}
             />
-          )}
-          {/* ドラッグ中プレビュー: anchor-before → dragPos → anchor-after */}
-          {editMode && dragPos && dragAnchor && editPoints[dragAnchor.before] && editPoints[dragAnchor.after] && (
-            <>
-              <Polyline
-                path={[
-                  { lat: editPoints[dragAnchor.before].lat, lng: editPoints[dragAnchor.before].lng },
-                  dragPos,
-                  { lat: editPoints[dragAnchor.after].lat, lng: editPoints[dragAnchor.after].lng },
-                ]}
-                options={{ strokeColor: '#22c55e', strokeWeight: 4, strokeOpacity: 0.9, zIndex: 10 }}
-              />
-              <Marker
-                position={dragPos}
-                icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#22c55e', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
-              />
-            </>
           )}
 
           {/* 区間修正: 選択済み始点マーカー */}
@@ -933,11 +795,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         {/* 編集モードバナー */}
         {editMode && (
-          <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: isDragging ? 'rgba(34,197,94,0.95)' : 'rgba(37,99,235,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
-            {isDragging && !dragPos ? '🟢 ドラッグ開始 — 離すと道路に自動スナップ'
-            : isDragging ? '🟢 ドラッグ中 — 離すと道路に自動スナップ'
-            : savingEdit ? '🔄 ルート計算中...'
-            : '✏️ ルートをドラッグして形を変える'}
+          <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: sectionMode ? 'rgba(245,158,11,0.95)' : 'rgba(37,99,235,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
+            {savingEdit ? '🔄 ルート計算中...'
+            : sectionMode && sectionStart == null ? '✂️ おかしい区間の【始点】をルート上でクリック'
+            : sectionMode ? '✂️ 続けて【終点】をクリック — 間が道なりに置き換わります'
+            : '✏️ 編集モード — ✂️区間修正で形を直せます'}
           </div>
         )}
 
@@ -987,7 +849,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               )}
               <button
                 onClick={forceRecalcSpeeds}
-                disabled={savingEdit || isDragging}
+                disabled={savingEdit}
                 style={{ padding:'7px 14px', fontSize:13, background:'#7c3aed', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
                 title="座標+タイムスタンプから全速度を強制再計算（速度データが壊れた場合に使用）"
               >
@@ -995,15 +857,15 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               </button>
               <button
                 onClick={snapToRoads}
-                disabled={savingEdit || isDragging}
-                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor: savingEdit || isDragging ? 'default' : 'pointer', fontWeight:600 }}
+                disabled={savingEdit}
+                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor: savingEdit ? 'default' : 'pointer', fontWeight:600 }}
                 title="GPSの飛び（ワープ）を除去し、GPS喪失区間だけ道なりに補間します。実測点はそのまま残します"
               >
                 🛣️ 記録クリーンアップ
               </button>
               <button
                 onClick={() => { setSectionMode(m => !m); setSectionStart(null); }}
-                disabled={savingEdit || isDragging}
+                disabled={savingEdit}
                 style={{ padding:'7px 14px', fontSize:13, background: sectionMode ? '#d97706' : '#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
                 title="おかしい区間の始点と終点をルート上でクリックすると、その間を道なりの経路に置き換えます"
               >
