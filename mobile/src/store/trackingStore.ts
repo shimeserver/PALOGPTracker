@@ -4,6 +4,7 @@ import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackPoint, Route, TrackingMode } from '../types';
 import { saveRoute } from '../firebase/routes';
+import { enqueuePendingRoute } from '../utils/uploadQueue';
 
 const RECOVERY_KEY = 'route_recovery';
 
@@ -60,7 +61,7 @@ interface TrackingState {
   startTracking: () => Promise<void>;
   pauseTracking: () => void;
   resumeTracking: () => void;
-  stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | null>;
+  stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | 'queued' | null>;
   clearTrack: () => void;
 }
 
@@ -172,9 +173,16 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       createdAt: Date.now(),
     };
 
-    const id = await saveRoute(route);
-    await clearRecovery(); // 保存完了後にバックアップを削除
-    return id;
+    try {
+      const id = await saveRoute(route);
+      await clearRecovery(); // 保存完了後にバックアップを削除
+      return id;
+    } catch {
+      // オフライン等で保存失敗 → ローカルキューに退避（次回オンライン時に自動送信）
+      await enqueuePendingRoute(route);
+      await clearRecovery();
+      return 'queued';
+    }
   },
 
   clearTrack: () => set({ currentPoints: [], startTime: null }),

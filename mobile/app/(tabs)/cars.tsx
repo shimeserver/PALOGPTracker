@@ -48,6 +48,19 @@ function calcActivityStats(routes: RouteMetadata[], mode: 'walk' | 'bicycle', kc
   };
 }
 
+interface ReportPeriod { km: number; routes: number; fuelCost: number; liters: number; }
+
+function calcReport(routes: RouteMetadata[], fuel: FuelLog[], from: number, to: number): ReportPeriod {
+  const rs = routes.filter(r => (r.mode ?? 'car') === 'car' && r.startTime >= from && r.startTime < to);
+  const fs = fuel.filter(f => f.timestamp >= from && f.timestamp < to);
+  return {
+    km: rs.reduce((s, r) => s + r.totalDistance, 0),
+    routes: rs.length,
+    fuelCost: fs.reduce((s, f) => s + (f.totalCost ?? (f.pricePerLiter ? f.pricePerLiter * f.liters : 0)), 0),
+    liters: fs.reduce((s, f) => s + f.liters, 0),
+  };
+}
+
 const CARS_HELP = [
   { q: '愛車の追加方法は？', a: '「＋ 愛車を追加」ボタンから車名・メーカー・タグカラーなどを入力して登録できます。' },
   { q: 'アクティブ車とは？', a: '現在記録中のルートに紐づく車です。タップで切り替えられます。' },
@@ -101,6 +114,25 @@ export default function CarsScreen() {
   const bicycleStats = calcActivityStats(allRoutes, 'bicycle', 40);
   const [walkExpanded,    setWalkExpanded]    = useState(false);
   const [bicycleExpanded, setBicycleExpanded] = useState(false);
+
+  // マンスリーレポート
+  const [reportExpanded, setReportExpanded] = useState(false);
+  const [allFuelLogs, setAllFuelLogs] = useState<FuelLog[]>([]);
+  useEffect(() => {
+    if (cars.length === 0) return;
+    let mounted = true;
+    Promise.all(cars.map(c => getFuelLogs(c.id!).catch(() => [] as FuelLog[])))
+      .then(arr => { if (mounted) setAllFuelLogs(arr.flat()); });
+    return () => { mounted = false; };
+  }, [cars.length]);
+
+  const now = new Date();
+  const monthStart     = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+  const yearStart      = new Date(now.getFullYear(), 0, 1).getTime();
+  const thisMonth = calcReport(allRoutes, allFuelLogs, monthStart, Date.now());
+  const lastMonth = calcReport(allRoutes, allFuelLogs, lastMonthStart, monthStart);
+  const thisYear  = calcReport(allRoutes, allFuelLogs, yearStart, Date.now());
 
   // Add car modal
   const [showAddCar, setShowAddCar] = useState(false);
@@ -443,6 +475,60 @@ export default function CarsScreen() {
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="愛車画面の使い方" items={CARS_HELP} />
       <ScrollView style={styles.list}>
+        {/* マンスリーレポート */}
+        <TouchableOpacity
+          style={[styles.actCard, { borderLeftColor: '#8b5cf6' }]}
+          onPress={() => setReportExpanded(e => !e)}
+          activeOpacity={0.85}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={styles.actCardTitle}>📊 {now.getMonth() + 1}月のレポート</Text>
+            <Text style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: 12 }}>{reportExpanded ? '▲' : '▼ 先月・年間'}</Text>
+          </View>
+          <View style={styles.actGrid}>
+            <View style={styles.actCell}>
+              <Text style={styles.actVal}>{thisMonth.km.toFixed(0)}</Text>
+              <Text style={styles.actLbl}>走行 km</Text>
+              {lastMonth.km > 0 && (
+                <Text style={[styles.reportDiff, { color: thisMonth.km >= lastMonth.km ? '#22c55e' : '#ef4444' }]}>
+                  {thisMonth.km >= lastMonth.km ? '+' : ''}{(thisMonth.km - lastMonth.km).toFixed(0)}
+                </Text>
+              )}
+            </View>
+            <View style={styles.actCell}>
+              <Text style={styles.actVal}>{thisMonth.routes}</Text>
+              <Text style={styles.actLbl}>ドライブ</Text>
+            </View>
+            <View style={styles.actCell}>
+              <Text style={styles.actVal}>{thisMonth.fuelCost > 0 ? `¥${Math.round(thisMonth.fuelCost).toLocaleString()}` : '—'}</Text>
+              <Text style={styles.actLbl}>燃料費</Text>
+            </View>
+            <View style={styles.actCell}>
+              <Text style={styles.actVal}>{thisMonth.liters > 0 ? thisMonth.liters.toFixed(1) : '—'}</Text>
+              <Text style={styles.actLbl}>給油 L</Text>
+            </View>
+          </View>
+          {reportExpanded && (
+            <View style={{ marginTop: 10 }}>
+              {([
+                { label: '先月', p: lastMonth },
+                { label: `${now.getFullYear()}年累計`, p: thisYear },
+              ] as const).map(({ label, p }) => (
+                <View key={label} style={styles.actDetailRow}>
+                  <Text style={styles.actDetailPeriod}>{label}</Text>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.km.toFixed(0)}</Text><Text style={styles.actDetailLbl}>km</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.routes}</Text><Text style={styles.actDetailLbl}>回</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.fuelCost > 0 ? `¥${Math.round(p.fuelCost).toLocaleString()}` : '—'}</Text><Text style={styles.actDetailLbl}>燃料</Text></View>
+                  <View style={styles.actDetailCell}><Text style={styles.actDetailVal}>{p.liters > 0 ? p.liters.toFixed(1) : '—'}</Text><Text style={styles.actDetailLbl}>L</Text></View>
+                </View>
+              ))}
+              {thisMonth.liters > 0 && thisMonth.km > 0 && (
+                <Text style={styles.reportNote}>今月の実燃費目安: {(thisMonth.km / thisMonth.liters).toFixed(1)} km/L</Text>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+
         {/* 歩行統計カード */}
         <TouchableOpacity
           style={[styles.actCard, { borderLeftColor: '#22c55e' }]}
@@ -1041,6 +1127,8 @@ const styles = StyleSheet.create({
   actDetailCell: { flex: 1, alignItems: 'center' },
   actDetailVal: { fontSize: 15, fontWeight: '800', color: '#1f2937' },
   actDetailLbl: { fontSize: 9, color: '#9ca3af', marginTop: 1 },
+  reportDiff: { fontSize: 10, fontWeight: '700', marginTop: 2 },
+  reportNote: { fontSize: 12, color: '#8b5cf6', fontWeight: '600', marginTop: 8, textAlign: 'center' },
   // Vehicle type selector
   vtBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderColor: '#e8eaed', borderRadius: 10, paddingVertical: 10, backgroundColor: '#f8f9fa' },
   vtBtnActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },

@@ -8,6 +8,7 @@ import { useTrackingStore, loadRecovery, clearRecovery, RecoveryData } from '../
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { saveRoute } from '../../src/firebase/routes';
+import { flushPendingRoutes, getPendingRoutes, enqueuePendingRoute } from '../../src/utils/uploadQueue';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { recordVisit } from '../../src/firebase/landmarks';
 import { detectStops, matchStopsToLandmarks } from '../../src/utils/visitDetection';
@@ -94,6 +95,8 @@ export default function TrackScreen() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [routeName, setRouteName] = useState('');
   const [recovery, setRecovery] = useState<RecoveryData | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [flushing, setFlushing] = useState(false);
   const miniMapRef = useRef<WebView>(null);
   const miniMapReady = useRef(false);
   const prevMiniMapLen = useRef(0);
@@ -112,7 +115,27 @@ export default function TrackScreen() {
     loadRecovery().then(data => {
       if (data && data.points.length >= 2) setRecovery(data);
     });
+    // 未送信キューがあれば自動再送
+    (async () => {
+      const pending = await getPendingRoutes();
+      if (pending.length === 0) return;
+      setPendingCount(pending.length);
+      const { uploaded, remaining } = await flushPendingRoutes();
+      setPendingCount(remaining);
+      if (uploaded > 0) Alert.alert('自動送信完了', `未送信だった ${uploaded} 件のルートを保存しました`);
+    })();
   }, []);
+
+  const handleFlushPending = async () => {
+    if (flushing) return;
+    setFlushing(true);
+    try {
+      const { uploaded, remaining } = await flushPendingRoutes();
+      setPendingCount(remaining);
+      if (uploaded > 0) Alert.alert('送信完了', `${uploaded} 件のルートを保存しました`);
+      else Alert.alert('送信失敗', '通信環境を確認してもう一度お試しください');
+    } finally { setFlushing(false); }
+  };
 
   const handleMiniMapLoad = () => {
     miniMapReady.current = true;
@@ -150,15 +173,23 @@ export default function TrackScreen() {
       const speeds = points.map(p => p.speed).filter(s => s > 0);
       const avgSpeed = speeds.length > 0 ? speeds.reduce((a,b)=>a+b)/speeds.length : 0;
       const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
-      await saveRoute({
+      const routeData = {
         userId: user.uid, name, tags: [], mode,
         startTime: recStart, endTime: points[points.length-1].timestamp,
         totalDistance: totalDist, avgSpeed, maxSpeed,
-        points, source: 'recorded', createdAt: Date.now(),
-      });
+        points, source: 'recorded' as const, createdAt: Date.now(),
+      };
+      try {
+        await saveRoute(routeData);
+        Alert.alert('復元完了', `「${name}」として保存しました`);
+      } catch {
+        // オフライン時はキューに退避
+        await enqueuePendingRoute(routeData);
+        setPendingCount(c => c + 1);
+        Alert.alert('オフライン保存', '通信できないため端末に保存しました。オンライン時に自動送信されます。');
+      }
       await clearRecovery();
       setRecovery(null);
-      Alert.alert('復元完了', `「${name}」として保存しました`);
     } catch {
       Alert.alert('エラー', '復元に失敗しました');
     }
@@ -189,7 +220,10 @@ export default function TrackScreen() {
       const tagIds = trackingMode === 'car' && activeCar?.tagId ? [activeCar.tagId] : undefined;
       const savedPoints = currentPoints;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
-      if (id) {
+      if (id === 'queued') {
+        setPendingCount(c => c + 1);
+        Alert.alert('オフライン保存', `通信できないため端末に保存しました（${savedPoints.length}ポイント）。\nオンライン時に自動送信されます。`);
+      } else if (id) {
         // 来訪自動判定（API不使用）
         if (user) {
           const stops = detectStops(savedPoints);
@@ -235,6 +269,16 @@ export default function TrackScreen() {
               <Text style={styles.recoveryDiscardBtnText}>破棄</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      )}
+
+      {/* 未送信キューバナー */}
+      {pendingCount > 0 && !isTracking && (
+        <View style={styles.pendingBanner}>
+          <Text style={styles.pendingText}>📡 未送信ルート {pendingCount} 件</Text>
+          <TouchableOpacity style={styles.pendingBtn} onPress={handleFlushPending} disabled={flushing}>
+            <Text style={styles.pendingBtnText}>{flushing ? '送信中…' : '今すぐ送信'}</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -409,6 +453,10 @@ const styles = StyleSheet.create({
   modalButton: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 12 },
   modalButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   modalCancel: { color: '#9ca3af', textAlign: 'center', fontSize: 14 },
+  pendingBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e0f2fe', borderRadius: 12, padding: 12, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#0284c7' },
+  pendingText: { color: '#075985', fontWeight: '600', fontSize: 13, flex: 1 },
+  pendingBtn: { backgroundColor: '#0284c7', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
+  pendingBtnText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   recoveryBanner: { backgroundColor: '#fef3c7', borderRadius: 12, padding: 14, marginBottom: 12, borderLeftWidth: 4, borderLeftColor: '#f59e0b' },
   recoveryTitle: { color: '#92400e', fontWeight: '700', fontSize: 14, marginBottom: 2 },
   recoveryDesc: { color: '#78350f', fontSize: 12, marginBottom: 10 },
