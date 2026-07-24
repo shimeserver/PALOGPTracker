@@ -7,6 +7,7 @@ import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
 import ElevationProfile, { hasElevationData } from './ElevationProfile';
+import DensityOverlay from './DensityOverlay';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -62,7 +63,6 @@ export interface RouteMapViewHandle {
   revertLandmarkPosition: (id: string, lat: number, lng: number) => void;
 }
 
-const ROUTE_COLORS = ['#2563eb','#ef4444','#22c55e','#f59e0b','#8b5cf6','#06b6d4','#ec4899','#84cc16'];
 const DEFAULT_CENTER = { lat: 35.681236, lng: 139.767125 };
 
 const MAP_TYPE_BTNS: { key: MapTypeId; label: string }[] = [
@@ -95,7 +95,7 @@ interface Props {
 }
 
 const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
-  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, tags, onMapRightClick, pinDragMode, onUpdateRoute, cars = [] }, ref) {
+  function RouteMapView({ route, allRoutes, userId, mapSettings, onMapSettings, onMapRightClick, pinDragMode, onUpdateRoute, cars = [] }, ref) {
     const [landmarks, setLandmarks]   = useState<Landmark[]>([]);
     const [playback, setPlayback]     = useState(false);
     const [playIndex, setPlayIndex]   = useState(0);
@@ -122,8 +122,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // 標高プロファイル
     const [showElev, setShowElev] = useState(false);
     const [elevIdx, setElevIdx] = useState<number | null>(null);
-    // 全ルート表示モード: heat=密度（重なりで濃くなる） / tags=タグ色分け
-    const [allMode, setAllMode] = useState<'heat' | 'tags'>('heat');
+    // 密度オーバーレイに渡すためのリアクティブなmap参照
+    const [mapObj, setMapObj] = useState<google.maps.Map | null>(null);
     const sectionModeRef = useRef(false);
     const sectionStartRef = useRef<number | null>(null);
     const editPointsRef = useRef<TrackPoint[]>([]);
@@ -481,6 +481,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
     const onLoad = useCallback((map: google.maps.Map) => {
       mapRef.current = map;
+      setMapObj(map); // DensityOverlay等にリアクティブに渡すため
     }, []);
 
     useEffect(() => {
@@ -522,15 +523,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       zoomControlOptions: { position: google.maps.ControlPosition.LEFT_TOP },
     }), []);
 
-    // タグIDから色を取得
-    const getRouteColor = (r: Route, fallbackIndex: number): string => {
-      if (r.tags?.length > 0) {
-        const tag = tags.find(t => t.id === r.tags[0]);
-        if (tag) return tag.color;
-      }
-      return ROUTE_COLORS[fallbackIndex % ROUTE_COLORS.length];
-    };
-
     return (
       <div style={{ position: 'relative', height: '100%' }}>
         {onMapRightClick && (
@@ -558,26 +550,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             }
           }}
         >
-          {/* 全ルート表示: 密度モード=半透明の同色を重ねる（よく通る道ほど濃く見えるヒートマップ効果） */}
-          {isAllMode && allMode === 'heat' && allRoutes.map(r =>
-            r.points.length > 1 && (
-              <Polyline
-                key={r.id}
-                path={r.points.map(p => ({ lat: p.lat, lng: p.lng }))}
-                options={{ strokeColor: '#1d4ed8', strokeWeight: 3.5, strokeOpacity: 0.18 }}
-              />
-            )
-          )}
-          {/* 全ルート表示: タグ色分けモード */}
-          {isAllMode && allMode === 'tags' && allRoutes.map((r, i) =>
-            r.points.length > 1 && (
-              <Polyline
-                key={r.id}
-                path={r.points.map(p => ({ lat: p.lat, lng: p.lng }))}
-                options={{ strokeColor: getRouteColor(r, i), strokeWeight: 2, strokeOpacity: 0.75 }}
-              />
-            )
-          )}
+          {/* 全ルート表示: 通過回数の密度オーバーレイ（1回=青 → 回数が増えるほど赤へ） */}
+          {isAllMode && <DensityOverlay map={mapObj} routes={allRoutes} />}
 
           {/* 単一ルート：単色（編集モード中は非表示） */}
           {!isAllMode && !editMode && colorMode === 'solid' && displayed.length > 1 && (
@@ -977,13 +951,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
         {isAllMode && (
           <div style={ui.allModeBadge}>
-            🌐 全ルート表示中（{allRoutes.length}件）
-            <button
-              onClick={() => setAllMode(m => m === 'heat' ? 'tags' : 'heat')}
-              style={{ marginLeft: 10, background: 'rgba(255,255,255,0.9)', border: 'none', borderRadius: 12, padding: '3px 12px', fontSize: 12, fontWeight: 700, color: '#1d4ed8', cursor: 'pointer' }}
-            >
-              {allMode === 'heat' ? '🔥 密度表示' : '🎨 タグ色分け'}
-            </button>
+            🌐 全ルート（{allRoutes.length}件）— 通過回数:
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+              <span style={{ fontSize: 11 }}>1回</span>
+              <span style={{ width: 90, height: 8, borderRadius: 4, background: 'linear-gradient(90deg, hsl(220,85%,50%), hsl(180,85%,45%), hsl(120,80%,42%), hsl(60,90%,48%), hsl(30,90%,50%), hsl(0,85%,50%))' }} />
+              <span style={{ fontSize: 11 }}>多数</span>
+            </span>
           </div>
         )}
 
