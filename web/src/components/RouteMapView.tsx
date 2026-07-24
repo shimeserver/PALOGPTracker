@@ -130,6 +130,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [isDragging, setIsDragging] = useState(false);
     const [dragPos, setDragPos] = useState<{lat:number;lng:number}|null>(null);
     const [dragAnchor, setDragAnchor] = useState<{before:number;after:number}|null>(null);
+    // 区間修正モード: ルート上の2点をクリック→間をOSRMの道なり経路で置き換え
+    const [sectionMode, setSectionMode] = useState(false);
+    const [sectionStart, setSectionStart] = useState<number | null>(null);
+    const sectionModeRef = useRef(false);
+    const sectionStartRef = useRef<number | null>(null);
     const editPointsRef = useRef<TrackPoint[]>([]);
     const routeModeRef = useRef<string | undefined>(undefined);
     const prevEditPointsRef = useRef<TrackPoint[]>([]);
@@ -172,6 +177,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
 
     // stale closure 防止用 ref の同期
     useEffect(() => { editPointsRef.current = editPoints; }, [editPoints]);
+    useEffect(() => { sectionModeRef.current = sectionMode; }, [sectionMode]);
+    useEffect(() => { sectionStartRef.current = sectionStart; }, [sectionStart]);
     useEffect(() => { routeModeRef.current = route?.mode; }, [route?.mode]);
     useEffect(() => { dragPosRef.current = dragPos; }, [dragPos]);
     useEffect(() => { savingEditRef.current = savingEdit; }, [savingEdit]);
@@ -393,7 +400,50 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const cancelEditMode = () => {
       setEditMode(false); setEditPoints([]);
       setHasUndo(false); setIsDragging(false); setDragPos(null); setDragAnchor(null);
+      setSectionMode(false); setSectionStart(null);
       prevEditPointsRef.current = [];
+    };
+
+    // 選択した2点の間をOSRMの道なり経路で置き換える（区間修正）
+    const repairSection = async (i0: number, i1: number) => {
+      const a = Math.min(i0, i1), b = Math.max(i0, i1);
+      const pts = editPointsRef.current;
+      if (b - a < 1 || pts.length < 2) return;
+      setSavingEdit(true);
+      try {
+        const profile = routeModeRef.current === 'walk' ? 'foot'
+          : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
+        const p1 = pts[a], p2 = pts[b];
+        const res = await fetch(
+          `https://router.project-osrm.org/route/v1/${profile}/${p1.lng},${p1.lat};${p2.lng},${p2.lat}?overview=full&geometries=geojson`
+        );
+        const data = await res.json();
+        if (data.code !== 'Ok' || !data.routes?.[0]) {
+          alert(`道路経路を取得できませんでした: ${data.code ?? 'エラー'}`);
+          return;
+        }
+        const rc: [number, number][] = data.routes[0].geometry.coordinates;
+        // タイムスタンプは経路上の距離比例で t0..t1 に配分
+        const t0 = p1.timestamp, t1 = p2.timestamp;
+        const cum: number[] = [0];
+        for (let i = 1; i < rc.length; i++) {
+          const pa = { lat: rc[i-1][1], lng: rc[i-1][0] };
+          const pb = { lat: rc[i][1], lng: rc[i][0] };
+          cum.push(cum[i-1] + haversineKm(pa as TrackPoint, pb as TrackPoint));
+        }
+        const total = cum[cum.length - 1];
+        const newSeg: TrackPoint[] = rc.map((c, i) => ({
+          lng: c[0], lat: c[1],
+          timestamp: total > 0 ? Math.round(t0 + (t1 - t0) * (cum[i] / total)) : t0,
+          speed: 0,
+        }));
+        saveUndo(pts);
+        setEditPoints([...pts.slice(0, a), ...calcSpeedsForSegment(newSeg), ...pts.slice(b + 1)]);
+      } catch (e) {
+        alert(`区間修正失敗: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSavingEdit(false);
+      }
     };
 
     const handleEditPolylineMouseDown = useCallback((e: google.maps.MapMouseEvent) => {
@@ -405,6 +455,20 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2;
         if (d < minD) { minD = d; ni = i; }
       });
+
+      // 区間修正モード: クリックで始点→終点を選び、間を道なりに置き換え
+      if (sectionModeRef.current) {
+        const start = sectionStartRef.current;
+        if (start == null) {
+          setSectionStart(ni);
+        } else {
+          setSectionStart(null);
+          setSectionMode(false);
+          void repairSection(start, ni);
+        }
+        return;
+      }
+
       // ドラッグ範囲: ルート長の5%または最低30点
       const pad = Math.max(30, Math.floor(pts.length * 0.05));
       const before = Math.max(0, ni - pad);
@@ -700,6 +764,15 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               />
             </>
           )}
+
+          {/* 区間修正: 選択済み始点マーカー */}
+          {editMode && sectionMode && sectionStart != null && editPoints[sectionStart] && (
+            <Marker
+              position={{ lat: editPoints[sectionStart].lat, lng: editPoints[sectionStart].lng }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#f59e0b', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3 }}
+              zIndex={20}
+            />
+          )}
         </GoogleMap>
 
         {/* 青ピン：スポット登録モーダル */}
@@ -927,6 +1000,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 title="GPSの飛び（ワープ）を除去し、GPS喪失区間だけ道なりに補間します。実測点はそのまま残します"
               >
                 🛣️ 記録クリーンアップ
+              </button>
+              <button
+                onClick={() => { setSectionMode(m => !m); setSectionStart(null); }}
+                disabled={savingEdit || isDragging}
+                style={{ padding:'7px 14px', fontSize:13, background: sectionMode ? '#d97706' : '#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="おかしい区間の始点と終点をルート上でクリックすると、その間を道なりの経路に置き換えます"
+              >
+                {sectionMode
+                  ? (sectionStart == null ? '✂️ 始点をクリック…' : '✂️ 終点をクリック…')
+                  : '✂️ 区間修正'}
               </button>
               <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
                 style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
