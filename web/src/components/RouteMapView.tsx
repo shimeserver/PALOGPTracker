@@ -6,6 +6,7 @@ import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
+import ElevationProfile, { hasElevationData } from './ElevationProfile';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -118,6 +119,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [sectionStart, setSectionStart] = useState<number | null>(null);
     // 複数の経路候補（高速/下道など）からクリックで選ばせる
     const [sectionCandidates, setSectionCandidates] = useState<{ a: number; b: number; routes: [number, number][][] } | null>(null);
+    // 標高プロファイル
+    const [showElev, setShowElev] = useState(false);
+    const [elevIdx, setElevIdx] = useState<number | null>(null);
     const sectionModeRef = useRef(false);
     const sectionStartRef = useRef<number | null>(null);
     const editPointsRef = useRef<TrackPoint[]>([]);
@@ -150,6 +154,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]);
       setHasUndo(false); setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
+      setShowElev(false); setElevIdx(null);
       prevEditPointsRef.current = [];
     }, [route?.id]);
 
@@ -674,6 +679,15 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             />
           )}
 
+          {/* 標高プロファイルのホバー位置を地図に表示 */}
+          {!isAllMode && route && elevIdx != null && route.points[elevIdx] && (
+            <Marker
+              position={{ lat: route.points[elevIdx].lat, lng: route.points[elevIdx].lng }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#2563eb', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
+              zIndex={25}
+            />
+          )}
+
           {/* 区間修正: 経路候補（クリックで選択、高速/下道の選び分け） */}
           {editMode && sectionCandidates && sectionCandidates.routes.map((rc, i) => (
             <Polyline
@@ -858,6 +872,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           </div>
         )}
 
+        {/* 標高プロファイル（下部パネルの上に重ねる） */}
+        {!isAllMode && route && !editMode && showElev && hasElevationData(route.points) && (
+          <div style={{ position: 'absolute', bottom: 88, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, width: 'min(600px, 92%)', boxShadow: '0 4px 20px rgba(0,0,0,0.15)', borderRadius: 10 }}>
+            <ElevationProfile points={route.points} onHoverPoint={setElevIdx} />
+          </div>
+        )}
+
         {/* 下部コントロール */}
         {!isAllMode && route && !editMode && (
           <div style={ui.panel}>
@@ -875,6 +896,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   <option value={20}>20x</option><option value={50}>50x</option>
                 </select>
                 <button className="btn-primary" style={{ padding:'7px 16px', fontSize:13 }} onClick={() => { setPlayIndex(0); setPlayback(true); }}>▶ 再生</button>
+                {hasElevationData(route.points) && (
+                  <button onClick={() => setShowElev(e => !e)} style={{ padding:'7px 12px', fontSize:13, background: showElev ? '#eff6ff' : '#f3f4f6', border: showElev ? '1.5px solid #2563eb' : '1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color: showElev ? '#2563eb' : '#374151', fontWeight:500 }}>⛰ 標高</button>
+                )}
                 {onUpdateRoute && <button onClick={startEditMode} style={{ padding:'7px 14px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', fontWeight:500 }}>✏️ 編集</button>}
               </div>
             ) : (

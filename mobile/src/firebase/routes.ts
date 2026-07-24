@@ -1,20 +1,50 @@
 import {
   collection, addDoc, getDocs, doc, getDoc,
-  query, where, Timestamp, deleteDoc
+  query, where, Timestamp, deleteDoc, orderBy, writeBatch
 } from 'firebase/firestore';
 import { db, auth } from './config';
-import { Route } from '../../src/types';
+import { Route, TrackPoint } from '../../src/types';
 
 export type RouteMetadata = Omit<Route, 'points'>;
 
-// ルート保存
+// points はルート本体から分離し routes/{id}/pts/{i} に分割保存する（軽量形式）。
+// 本体が軽くなり一覧・統計クエリが高速/低コストになる。読み込みは両形式に対応。
+const PTS_CHUNK = 1500;
+
+async function writePointChunks(routeId: string, points: TrackPoint[]): Promise<void> {
+  const batch = writeBatch(db);
+  for (let i = 0; i * PTS_CHUNK < points.length; i++) {
+    batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
+      { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
+  }
+  await batch.commit();
+}
+
+async function loadPointChunks(routeId: string): Promise<TrackPoint[]> {
+  const snap = await getDocs(query(collection(db, 'routes', routeId, 'pts'), orderBy('i')));
+  return snap.docs.flatMap(d => (d.data().points ?? []) as TrackPoint[]);
+}
+
+async function deletePointChunks(routeId: string): Promise<void> {
+  const snap = await getDocs(collection(db, 'routes', routeId, 'pts'));
+  if (snap.empty) return;
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ルート保存（軽量形式: 本体メタデータ + pts チャンク）
 export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
+  const { points, ...meta } = route;
   const docRef = await addDoc(collection(db, 'routes'), {
-    ...route,
+    ...meta,
     startTime: Timestamp.fromMillis(route.startTime),
     endTime: Timestamp.fromMillis(route.endTime),
     createdAt: Timestamp.fromMillis(route.createdAt),
+    ptsChunked: true,
+    pointCount: points.length,
   });
+  await writePointChunks(docRef.id, points);
   return docRef.id;
 }
 
@@ -117,6 +147,7 @@ export async function getUserRoutes(userId: string): Promise<Route[]> {
     return {
       id: d.id,
       ...data,
+      points: data.points || [], // 軽量形式は空（詳細は getRoute で取得）
       startTime: data.startTime.toMillis(),
       endTime: data.endTime.toMillis(),
       createdAt: data.createdAt.toMillis(),
@@ -125,14 +156,18 @@ export async function getUserRoutes(userId: string): Promise<Route[]> {
   return routes.sort((a, b) => b.startTime - a.startTime);
 }
 
-// ルート1件取得
+// ルート1件取得（旧形式=本体内蔵 / 軽量形式=ptsチャンク の両対応）
 export async function getRoute(routeId: string): Promise<Route | null> {
   const snap = await getDoc(doc(db, 'routes', routeId));
   if (!snap.exists()) return null;
   const data = snap.data();
+  const points = Array.isArray(data.points) && data.points.length > 0
+    ? data.points
+    : await loadPointChunks(routeId);
   return {
     id: snap.id,
     ...data,
+    points,
     startTime: data.startTime.toMillis(),
     endTime: data.endTime.toMillis(),
     createdAt: data.createdAt.toMillis(),
@@ -145,8 +180,9 @@ export async function updateRoute(routeId: string, patch: { mode?: string; tags?
   await updateDoc(doc(db, 'routes', routeId), patch);
 }
 
-// ルート削除
+// ルート削除（ptsチャンクも削除）
 export async function deleteRoute(routeId: string): Promise<void> {
+  await deletePointChunks(routeId);
   await deleteDoc(doc(db, 'routes', routeId));
 }
 
@@ -154,6 +190,9 @@ export async function deleteRoute(routeId: string): Promise<void> {
 export async function deleteAllUserRoutes(userId: string): Promise<number> {
   const q = query(collection(db, 'routes'), where('userId', '==', userId));
   const snap = await getDocs(q);
-  await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+  for (const d of snap.docs) {
+    await deletePointChunks(d.id);
+    await deleteDoc(d.ref);
+  }
   return snap.docs.length;
 }

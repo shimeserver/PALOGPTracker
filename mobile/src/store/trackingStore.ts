@@ -108,6 +108,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         speed: loc.coords.speed != null && loc.coords.speed >= 0
           ? loc.coords.speed * 3.6
           : 0,
+        // 高度(m)。標高プロファイル用。undefinedはFirestoreが拒否するため条件付きで付与
+        ...(loc.coords.altitude != null ? { alt: Math.round(loc.coords.altitude * 10) / 10 } : {}),
       };
       // 直前点との速度チェック（300km/h超 = GPSジャンプとみなしてスキップ）
       const prev = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];

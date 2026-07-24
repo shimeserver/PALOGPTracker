@@ -7,7 +7,8 @@ import LandmarksPanel from '../components/LandmarksPanel';
 import SettingsPanel from '../components/SettingsPanel';
 import CarsPanel from '../components/CarsPanel';
 import ActivityPanel from '../components/ActivityPanel';
-import { getUserRoutes, deleteRoute, getUserTags } from '../firebase/data';
+import PrefectureMapPanel from '../components/PrefectureMapPanel';
+import { getUserRoutes, deleteRoute, getUserTags, hydrateRoutePoints } from '../firebase/data';
 import type { Route, TagDef, Car } from '../firebase/data';
 import type { MapSettings } from '../components/SettingsPanel';
 import type { RouteMapViewHandle } from '../components/RouteMapView';
@@ -29,6 +30,7 @@ export default function MainPage({ user }: Props) {
   const [settingsOpen, setSettingsOpen]     = useState(false);
   const [carsOpen, setCarsOpen]             = useState(false);
   const [activityOpen, setActivityOpen]     = useState(false);
+  const [prefsOpen, setPrefsOpen]           = useState(false);
   const [landmarkCount, setLandmarkCount]   = useState(0);
   const [tags, setTags]                     = useState<TagDef[]>([]);
   const [cars, setCars]                     = useState<Car[]>([]);
@@ -38,14 +40,22 @@ export default function MainPage({ user }: Props) {
   const [pinDragMode, setPinDragMode] = useState<{ id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
+  // チャンク形式ルートの points をバックグラウンドで補充（一覧表示は先に出す）
+  const hydrate = (list: Route[]) => {
+    hydrateRoutePoints(list, (routeId, points) => {
+      setRoutes(prev => prev.map(r => r.id === routeId ? { ...r, points } : r));
+      setSelectedRoute(prev => prev?.id === routeId ? { ...prev, points } : prev);
+    }).catch(() => {});
+  };
+
   useEffect(() => {
-    getUserRoutes(user.uid).then(r => { setRoutes(r); setRoutesLoading(false); });
+    getUserRoutes(user.uid).then(r => { setRoutes(r); setRoutesLoading(false); hydrate(r); });
     getUserTags(user.uid).then(setTags);
   }, [user.uid]);
 
   const reloadRoutes = () => {
     setRoutesLoading(true);
-    getUserRoutes(user.uid).then(r => { setRoutes(r); setRoutesLoading(false); });
+    getUserRoutes(user.uid).then(r => { setRoutes(r); setRoutesLoading(false); hydrate(r); });
   };
 
   const reloadTags = () => getUserTags(user.uid).then(setTags);
@@ -124,6 +134,7 @@ export default function MainPage({ user }: Props) {
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenCars={() => setCarsOpen(true)}
               onOpenActivity={() => setActivityOpen(true)}
+              onOpenPrefs={() => setPrefsOpen(true)}
               tags={tags}
               onUpdateRoute={handleUpdateRoute}
               onTagsChange={reloadTags}
@@ -182,6 +193,12 @@ export default function MainPage({ user }: Props) {
       <ActivityPanel
         open={activityOpen}
         onClose={() => setActivityOpen(false)}
+        routes={routes}
+      />
+
+      <PrefectureMapPanel
+        open={prefsOpen}
+        onClose={() => setPrefsOpen(false)}
         routes={routes}
       />
 

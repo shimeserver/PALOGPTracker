@@ -5,6 +5,7 @@ export interface TrackPoint {
   lng: number;
   timestamp: number;
   speed: number;
+  alt?: number; // 高度(m)。記録/インポート時に取得できた場合のみ
 }
 
 export type TrackingMode = 'car' | 'walk' | 'bicycle';

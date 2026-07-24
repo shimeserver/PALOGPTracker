@@ -35,9 +35,10 @@ export function parseRouteHistoryCsv(csvText: string): ParsedLog[] {
         const lat = parseFloat(parts[1]);
         const lng = parseFloat(parts[2]);
         const timestamp = new Date(parts[3]).getTime();
+        const alt = parseFloat(parts[4]);
         if (!isNaN(lat) && !isNaN(lng) && !isNaN(timestamp)) {
           // 速度は座標と時刻から後で再計算する（高度を速度として取り込まない）
-          current.points.push({ lat, lng, timestamp, speed: 0 });
+          current.points.push({ lat, lng, timestamp, speed: 0, ...(isNaN(alt) ? {} : { alt: Math.round(alt * 10) / 10 }) });
         }
       }
     } else if (line === 'LogEnd') {

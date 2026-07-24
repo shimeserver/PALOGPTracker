@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { TileKey, ColorMode } from './RouteMapView';
-import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl } from '../firebase/data';
+import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks } from '../firebase/data';
 import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
 
 export interface MapSettings {
@@ -36,12 +36,28 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
   const [importProgress, setImportProgress] = useState('');
   const [restoring, setRestoring]         = useState(false);
   const [restoreProgress, setRestoreProgress] = useState('');
+  const [migrating, setMigrating]         = useState(false);
+  const [migrateProgress, setMigrateProgress] = useState('');
   const csvInputRef  = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   if (!open) return null;
 
   const set = (patch: Partial<MapSettings>) => onSettings({ ...settings, ...patch });
+
+  const handleMigrateChunks = async () => {
+    if (!confirm('全ルートのGPS点列を軽量形式（分割保存）に移行します。\nデータは変わらず、読み込みが速くなります。実行しますか？')) return;
+    setMigrating(true); setMigrateProgress('');
+    try {
+      const n = await migrateRoutesToChunks(userId, (done, total) => setMigrateProgress(`${done} / ${total}`));
+      alert(n > 0 ? `${n}件のルートを軽量形式に移行しました。` : 'すべてのルートは移行済みです。');
+      if (n > 0) onImportDone(); // 一覧を再読込
+    } catch (e) {
+      alert(`移行に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const handleDeleteAllRoutes = async () => {
     if (!confirm(`全ルート（${routeCount}件）を削除しますか？\nこの操作は取り消せません。`)) return;
@@ -269,6 +285,14 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
         {/* データ管理 */}
         <section style={s.section}>
           <p style={s.sectionTitle}>データ管理</p>
+          <button
+            style={{ ...s.deleteBtn, background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe', marginBottom: 8, opacity: migrating ? 0.6 : 1 }}
+            onClick={handleMigrateChunks}
+            disabled={migrating}
+          >
+            {migrating ? `📦 最適化中... ${migrateProgress}` : '📦 ストレージ最適化（ルートを軽量形式に移行）'}
+          </button>
+          <p style={s.deleteNote}>GPS点列をルート本体から分離して保存。一覧の読み込みが速く・安くなります（1回でOK）</p>
           <button style={s.deleteBtn} onClick={handleDeleteAllRoutes} disabled={routeCount === 0}>
             🗑 全ルートを削除（{routeCount}件）
           </button>

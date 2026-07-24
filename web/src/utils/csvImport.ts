@@ -1,5 +1,6 @@
 import { collection, addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { saveRouteChunked } from '../firebase/data';
 import type { TrackPoint } from '../firebase/data';
 
 export interface DetectedStop {
@@ -333,7 +334,7 @@ export function parseRouteHistoryCsv(csvText: string): ParsedLog[] {
         const timestamp = new Date(parts[3]).getTime();
         const altitude = parseFloat(parts[4]) || 0;
         if (!isNaN(lat) && !isNaN(lng) && !isNaN(timestamp)) {
-          current.points.push({ lat, lng, timestamp, speed: 0 });
+          current.points.push({ lat, lng, timestamp, speed: 0, ...(altitude !== 0 ? { alt: Math.round(altitude * 10) / 10 } : {}) });
           current.altitudes.push(altitude);
         }
       }
@@ -378,18 +379,18 @@ export async function importRouteHistoryCsv(
       const avgSpeed = speeds.length ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
       const maxSpeed = speeds.length ? speeds.reduce((m, s) => s > m ? s : m, 0) : 0;
 
-      await addDoc(collection(db, 'routes'), {
+      await saveRouteChunked({
         userId,
         name: log.name || `インポート ${new Date(pts[0].timestamp).toLocaleDateString('ja-JP')}`,
         tags: log.tags,
-        startTime: Timestamp.fromMillis(pts[0].timestamp),
-        endTime:   Timestamp.fromMillis(pts[pts.length - 1].timestamp),
+        startTime: pts[0].timestamp,
+        endTime: pts[pts.length - 1].timestamp,
         totalDistance: totalDist,
         avgSpeed,
         maxSpeed,
         points: sampledPts,
         source: 'imported',
-        createdAt: Timestamp.fromMillis(Date.now()),
+        createdAt: Date.now(),
       });
       success++;
       const routeStops = detectStops(pts, log.name || `ルート${i + 1}`);
