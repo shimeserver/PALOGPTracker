@@ -5,7 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
-import { bridgeGaps, removeSpeedWarps } from '../utils/gapBridge';
+import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
   const R = 6371;
@@ -437,8 +437,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       if (editPoints.length < 2) return;
       setSavingEdit(true);
       try {
-        // 1) GPSワープ（一瞬で飛んで戻る誤点）を除去 2) ギャップを道なりに補間 3) 速度を再計算・外れ値除去
-        const cleaned = removeSpeedWarps(editPoints);
+        // 1) GPSワープ（飛んで戻る誤点）を位置ベースで除去 2) 離れたギャップを道なりに補間 3) 速度を再計算・外れ値除去
+        const cleaned = removeGeoWarps(editPoints);
         const r = await bridgeGaps(cleaned.points, routeModeRef.current);
         if (r.bridged === 0 && cleaned.removed === 0) {
           if (r.detected === 0) {
