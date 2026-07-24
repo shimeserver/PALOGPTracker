@@ -116,6 +116,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // 区間修正モード: ルート上の2点をクリック→間をOSRMの道なり経路で置き換え
     const [sectionMode, setSectionMode] = useState(false);
     const [sectionStart, setSectionStart] = useState<number | null>(null);
+    // 複数の経路候補（高速/下道など）からクリックで選ばせる
+    const [sectionCandidates, setSectionCandidates] = useState<{ a: number; b: number; routes: [number, number][][] } | null>(null);
     const sectionModeRef = useRef(false);
     const sectionStartRef = useRef<number | null>(null);
     const editPointsRef = useRef<TrackPoint[]>([]);
@@ -147,7 +149,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => {
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]);
-      setHasUndo(false); setSectionMode(false); setSectionStart(null);
+      setHasUndo(false); setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
       prevEditPointsRef.current = [];
     }, [route?.id]);
 
@@ -290,11 +292,45 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const cancelEditMode = () => {
       setEditMode(false); setEditPoints([]);
       setHasUndo(false);
-      setSectionMode(false); setSectionStart(null);
+      setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
       prevEditPointsRef.current = [];
     };
 
-    // 選択した2点の間をOSRMの道なり経路で置き換える（区間修正）
+    // 2点間の方位角（度、北=0時計回り）
+    const bearingDeg = (a: TrackPoint, b: TrackPoint): number => {
+      const f1 = a.lat * Math.PI / 180, f2 = b.lat * Math.PI / 180;
+      const dl = (b.lng - a.lng) * Math.PI / 180;
+      const y = Math.sin(dl) * Math.cos(f2);
+      const x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl);
+      return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    };
+
+    // 候補ジオメトリを実際に editPoints に適用する
+    const applySectionGeometry = (a: number, b: number, rc: [number, number][]) => {
+      const pts = editPointsRef.current;
+      const p1 = pts[a], p2 = pts[b];
+      const t0 = p1.timestamp, t1 = p2.timestamp;
+      const cum: number[] = [0];
+      for (let i = 1; i < rc.length; i++) {
+        const pa = { lat: rc[i-1][1], lng: rc[i-1][0] };
+        const pb = { lat: rc[i][1], lng: rc[i][0] };
+        cum.push(cum[i-1] + haversineKm(pa as TrackPoint, pb as TrackPoint));
+      }
+      const total = cum[cum.length - 1];
+      const newSeg: TrackPoint[] = rc.map((c, i) => ({
+        lng: c[0], lat: c[1],
+        timestamp: total > 0 ? Math.round(t0 + (t1 - t0) * (cum[i] / total)) : t0,
+        speed: 0,
+      }));
+      saveUndo(pts);
+      setEditPoints([...pts.slice(0, a), ...calcSpeedsForSegment(newSeg), ...pts.slice(b + 1)]);
+      setSectionCandidates(null);
+    };
+
+    // 選択した2点の間をOSRMの道なり経路で置き換える（区間修正）。
+    // 高架高速と下道の重なり対策:
+    // - 端点の進行方位をbearingsで渡し、走行方向に合う道路（本線）へスナップされやすくする
+    // - alternatives=true で代替経路も取得し、複数あれば地図上でクリック選択させる
     const repairSection = async (i0: number, i1: number) => {
       const a = Math.min(i0, i1), b = Math.max(i0, i1);
       const pts = editPointsRef.current;
@@ -304,31 +340,33 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const profile = routeModeRef.current === 'walk' ? 'foot'
           : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
         const p1 = pts[a], p2 = pts[b];
-        const res = await fetch(
-          `https://router.project-osrm.org/route/v1/${profile}/${p1.lng},${p1.lat};${p2.lng},${p2.lat}?overview=full&geometries=geojson`
-        );
-        const data = await res.json();
-        if (data.code !== 'Ok' || !data.routes?.[0]) {
-          alert(`道路経路を取得できませんでした: ${data.code ?? 'エラー'}`);
+        const base = `https://router.project-osrm.org/route/v1/${profile}/${p1.lng},${p1.lat};${p2.lng},${p2.lat}`;
+        // 進行方位ヒント（前後の点から算出、許容±60°）
+        const brgStart = Math.round(bearingDeg(p1, pts[Math.min(a + 1, pts.length - 1)]));
+        const brgEnd = Math.round(bearingDeg(pts[Math.max(b - 1, 0)], p2));
+        let data: any = null;
+        // まず方位ヒント付きで試し、失敗したらヒント無しでリトライ
+        for (const url of [
+          `${base}?overview=full&geometries=geojson&alternatives=true&bearings=${brgStart},60;${brgEnd},60`,
+          `${base}?overview=full&geometries=geojson&alternatives=true`,
+        ]) {
+          try {
+            const res = await fetch(url);
+            const j = await res.json();
+            if (j.code === 'Ok' && j.routes?.length) { data = j; break; }
+          } catch { /* 次のURLへ */ }
+        }
+        if (!data) {
+          alert('道路経路を取得できませんでした');
           return;
         }
-        const rc: [number, number][] = data.routes[0].geometry.coordinates;
-        // タイムスタンプは経路上の距離比例で t0..t1 に配分
-        const t0 = p1.timestamp, t1 = p2.timestamp;
-        const cum: number[] = [0];
-        for (let i = 1; i < rc.length; i++) {
-          const pa = { lat: rc[i-1][1], lng: rc[i-1][0] };
-          const pb = { lat: rc[i][1], lng: rc[i][0] };
-          cum.push(cum[i-1] + haversineKm(pa as TrackPoint, pb as TrackPoint));
+        const routes: [number, number][][] = data.routes.map((r: any) => r.geometry.coordinates);
+        if (routes.length <= 1) {
+          applySectionGeometry(a, b, routes[0]);
+        } else {
+          // 複数候補: 地図上でクリック選択してもらう（高速/下道の選び分け）
+          setSectionCandidates({ a, b, routes });
         }
-        const total = cum[cum.length - 1];
-        const newSeg: TrackPoint[] = rc.map((c, i) => ({
-          lng: c[0], lat: c[1],
-          timestamp: total > 0 ? Math.round(t0 + (t1 - t0) * (cum[i] / total)) : t0,
-          speed: 0,
-        }));
-        saveUndo(pts);
-        setEditPoints([...pts.slice(0, a), ...calcSpeedsForSegment(newSeg), ...pts.slice(b + 1)]);
       } catch (e) {
         alert(`区間修正失敗: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -635,6 +673,19 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               zIndex={20}
             />
           )}
+
+          {/* 区間修正: 経路候補（クリックで選択、高速/下道の選び分け） */}
+          {editMode && sectionCandidates && sectionCandidates.routes.map((rc, i) => (
+            <Polyline
+              key={`cand-${i}`}
+              path={rc.map(([lng, lat]) => ({ lat, lng }))}
+              options={{
+                strokeColor: ['#2563eb', '#ef4444', '#22c55e'][i % 3],
+                strokeWeight: 6, strokeOpacity: 0.85, zIndex: 30 + i,
+              }}
+              onClick={() => applySectionGeometry(sectionCandidates.a, sectionCandidates.b, rc)}
+            />
+          ))}
         </GoogleMap>
 
         {/* 青ピン：スポット登録モーダル */}
@@ -797,9 +848,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         {editMode && (
           <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: sectionMode ? 'rgba(245,158,11,0.95)' : 'rgba(37,99,235,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
             {savingEdit ? '🔄 ルート計算中...'
+            : sectionCandidates ? `🎨 経路候補が${sectionCandidates.routes.length}本あります — 実際に走った色の線をクリック`
             : sectionMode && sectionStart == null ? '✂️ おかしい区間の【始点】をルート上でクリック'
             : sectionMode ? '✂️ 続けて【終点】をクリック — 間が道なりに置き換わります'
             : '✏️ 編集モード — ✂️区間修正で形を直せます'}
+            {sectionCandidates && (
+              <button onClick={() => setSectionCandidates(null)} style={{ marginLeft: 10, background: 'rgba(255,255,255,0.25)', border: 'none', borderRadius: 12, color: '#fff', padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>やめる</button>
+            )}
           </div>
         )}
 
