@@ -6,6 +6,7 @@ import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
+import { corridorRoute } from '../utils/osmCorridor';
 import ElevationProfile, { hasElevationData } from './ElevationProfile';
 import DensityOverlay from './DensityOverlay';
 
@@ -360,6 +361,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         ];
         const routes: [number, number][][] = [];
         const seen = new Set<string>();
+        // 高速コリドー候補（OSM直読み）を最優先で取得。
+        // 公開OSRMは首都高・アクアライン等の有料道路を使わないため、これが唯一の正解になる区間がある。
+        const corridorPromise = profile === 'driving' ? corridorRoute(p1, p2).catch(() => null) : Promise.resolve(null);
         for (const url of urls) {
           try {
             const res = await fetch(url);
@@ -374,6 +378,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             }
           } catch { /* 次のURLへ */ }
         }
+        const corridor = await corridorPromise;
+        if (corridor) routes.unshift(corridor); // 先頭（青）に高速コリドー候補
         if (routes.length === 0) {
           alert('道路経路を取得できませんでした');
           return;
