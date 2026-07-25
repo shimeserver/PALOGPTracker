@@ -351,28 +351,38 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         // 進行方位ヒント（前後の点から算出、許容±60°）
         const brgStart = Math.round(bearingDeg(p1, pts[Math.min(a + 1, pts.length - 1)]));
         const brgEnd = Math.round(bearingDeg(pts[Math.max(b - 1, 0)], p2));
-        let data: any = null;
-        // まず方位ヒント付きで試し、失敗したらヒント無しでリトライ
-        for (const url of [
+        // 方位ヒント付き/無しの両方を取得して候補を合流する。
+        // ヒントが端点を誤ったエッジ（逆方向ランプ等）にスナップさせて変な経路になるケースがあるため、
+        // 素の候補も必ず混ぜる（山手トンネル区間の実測でヒント無しが正解だった）。
+        const urls = [
           `${base}?overview=full&geometries=geojson&alternatives=true&bearings=${brgStart},60;${brgEnd},60`,
           `${base}?overview=full&geometries=geojson&alternatives=true`,
-        ]) {
+        ];
+        const routes: [number, number][][] = [];
+        const seen = new Set<string>();
+        for (const url of urls) {
           try {
             const res = await fetch(url);
             const j = await res.json();
-            if (j.code === 'Ok' && j.routes?.length) { data = j; break; }
+            if (j.code === 'Ok' && j.routes?.length) {
+              for (const r of j.routes) {
+                const key = `${Math.round(r.distance)}_${r.geometry.coordinates.length}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                routes.push(r.geometry.coordinates);
+              }
+            }
           } catch { /* 次のURLへ */ }
         }
-        if (!data) {
+        if (routes.length === 0) {
           alert('道路経路を取得できませんでした');
           return;
         }
-        const routes: [number, number][][] = data.routes.map((r: any) => r.geometry.coordinates);
-        if (routes.length <= 1) {
+        if (routes.length === 1) {
           applySectionGeometry(a, b, routes[0]);
         } else {
-          // 複数候補: 地図上でクリック選択してもらう（高速/下道の選び分け）
-          setSectionCandidates({ a, b, routes });
+          // 複数候補: 地図上でクリック選択してもらう（最大4本）
+          setSectionCandidates({ a, b, routes: routes.slice(0, 4) });
         }
       } catch (e) {
         alert(`区間修正失敗: ${e instanceof Error ? e.message : String(e)}`);
@@ -680,7 +690,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               key={`cand-${i}`}
               path={rc.map(([lng, lat]) => ({ lat, lng }))}
               options={{
-                strokeColor: ['#2563eb', '#ef4444', '#22c55e'][i % 3],
+                strokeColor: ['#2563eb', '#ef4444', '#22c55e', '#f59e0b'][i % 4],
                 strokeWeight: 6, strokeOpacity: 0.85, zIndex: 30 + i,
               }}
               onClick={() => applySectionGeometry(sectionCandidates.a, sectionCandidates.b, rc)}
