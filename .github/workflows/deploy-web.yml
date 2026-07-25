@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main   # mainにpushするたびに自動デプロイ
+  workflow_dispatch:  # 手動実行（キュー詰まり時の再トリガー用）
 
 permissions:
   contents: write
