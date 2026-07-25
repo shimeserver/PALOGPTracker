@@ -37,6 +37,12 @@ interface RouteCache { pts: WPt[]; ptCells: Float64Array; cellList: number[] }
 const routeCache = new Map<string, RouteCache>();
 const cellRoutes = new Map<number, Set<string>>();
 
+// 蓄積キャッシュを全消去（データ修復後などに再構成したい時用）
+export function resetDensityCache(): void {
+  routeCache.clear();
+  cellRoutes.clear();
+}
+
 function processRoute(key: string, r: Route): RouteCache {
   const pts = r.points;
   // 通過セル集計（間引き＋補間で列挙。カウント精度用）

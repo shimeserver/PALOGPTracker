@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { TileKey, ColorMode } from './RouteMapView';
 import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks } from '../firebase/data';
+import { resetDensityCache } from './DensityOverlay';
 import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
 
 export interface MapSettings {
@@ -321,6 +322,17 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
             {restoring ? `🖼 復元中... ${restoreProgress}` : '🖼 期限切れ写真を自動復元（Places API）'}
           </button>
           <p style={s.deleteNote}>placeIdが保存されているスポットの写真をPlaces APIで取得し直してFirebase Storageに永続保存します</p>
+          <button
+            style={{ ...s.deleteBtn, background: '#f0fdf4', color: '#166534', borderColor: '#bbf7d0', marginTop: 8 }}
+            onClick={() => {
+              resetDensityCache();
+              try { localStorage.removeItem('prefVisit_v1'); } catch { /* ignore */ }
+              alert('全ルート表示と都道府県マップのキャッシュをリセットしました。\n次に開いた時に最新データで再構成されます。');
+            }}
+          >
+            🔄 全ルートマージデータをリセット
+          </button>
+          <p style={s.deleteNote}>全ルート表示（密度マップ）と都道府県制覇の集計キャッシュを破棄し、次回表示時に最新のルートデータから作り直します。ルートを修復・削除した後に使ってください</p>
         </section>
       </div>
     </>
