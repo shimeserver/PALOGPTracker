@@ -41,6 +41,30 @@ interface Props {
 
 const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
 
+// 自己修復イメージ: Google Placesの一時URL（storagePath空で保存されたもの）は期限切れで
+// 表示に失敗することがある。エラー時に placeId から新しいURLを取り直して表示し直す。
+// 修復関数(heal)は新URLの永続保存も裏で行う。
+function HealableImg({ lm, heal, style }: {
+  lm: Landmark;
+  heal: (lm: Landmark) => Promise<string | null>;
+  style?: React.CSSProperties;
+}) {
+  const [src, setSrc] = useState(lm.photos[0]?.url ?? '');
+  const tried = useRef(false);
+  useEffect(() => { setSrc(lm.photos[0]?.url ?? ''); tried.current = false; }, [lm.id, lm.photos[0]?.url]);
+  if (!src) return null;
+  return (
+    <img src={src} loading="lazy" style={style}
+      onError={async () => {
+        if (tried.current) { setSrc(''); return; }
+        tried.current = true;
+        const fresh = await heal(lm);
+        if (fresh) setSrc(fresh); else setSrc('');
+      }}
+    />
+  );
+}
+
 export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition, activePinDragId }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
   const [selected, setSelected]   = useState<Landmark | null>(null);
@@ -90,6 +114,35 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     setLoading(true);
     getUserLandmarks(userId).then(l => { setLandmarks(l); setLoading(false); onCountChange(l.length); });
   }, [userId, active]);
+
+  // 期限切れ写真の自己修復: placeIdから新しいURLを取得して表示し、Storageへ永続保存し直す
+  const healingRef = useRef<Set<string>>(new Set());
+  const healPhoto = async (lm: Landmark): Promise<string | null> => {
+    if (!lm.placeId || !lm.id) return null;
+    if (healingRef.current.has(lm.id)) return null; // 同一スポットの多重修復を防ぐ
+    healingRef.current.add(lm.id);
+    const svc = getPlacesService();
+    if (!svc) return null;
+    return new Promise(resolve => {
+      svc.getDetails({ placeId: lm.placeId!, fields: ['photos'] }, (result, status) => {
+        const fresh = status === google.maps.places.PlacesServiceStatus.OK && result?.photos?.[0]
+          ? result.photos[0].getUrl({ maxWidth: 600 })
+          : null;
+        if (fresh) {
+          // 裏でStorageへ永続保存（成功時のみ差し替え。以後は期限切れしない）
+          uploadLandmarkPhotoFromUrl(userId, lm.id!, fresh).then(stored => {
+            if (stored && stored.storagePath) {
+              const photos = [stored, ...(lm.photos || []).slice(1).filter(p => p.storagePath)];
+              updateLandmark(lm.id!, { photos }).catch(() => {});
+              setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, photos } : x));
+              setSelected(prev => (prev && prev.id === lm.id) ? { ...prev, photos } : prev);
+            }
+          }).catch(() => {});
+        }
+        resolve(fresh);
+      });
+    });
+  };
 
   // 詳細から離れたらピックモード・ドラッグモード解除
   useEffect(() => {
@@ -592,10 +645,15 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <div style={{ position: 'relative' }}>
-            <img src={coverUrl} loading="lazy"
-              style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }}
-              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-            />
+            {selected.photos.length > 0 ? (
+              <HealableImg lm={selected} heal={healPhoto}
+                style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }} />
+            ) : (
+              <img src={coverUrl} loading="lazy"
+                style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            )}
             {selected.photos.length === 0 && (
               <span style={{ position: 'absolute', bottom: 6, right: 8, background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: 10, padding: '2px 6px', borderRadius: 4 }}>Street View</span>
             )}
@@ -753,16 +811,17 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
           </p>
         )}
         {filtered.map(lm => {
-          const thumbUrl = lm.photos.length > 0
-            ? lm.photos[0].url
-            : NO_PHOTO_PLACEHOLDER;
           return (
             <div key={lm.id} style={s.card} onClick={() => handleSelect(lm)}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <img src={thumbUrl} loading="lazy"
-                  style={{ width: 60, height: 60, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
-                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
+                {lm.photos.length > 0 ? (
+                  <HealableImg lm={lm} heal={healPhoto}
+                    style={{ width: 60, height: 60, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+                ) : (
+                  <img src={NO_PHOTO_PLACEHOLDER} loading="lazy"
+                    style={{ width: 60, height: 60, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
+                  />
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     {editingId === lm.id ? (

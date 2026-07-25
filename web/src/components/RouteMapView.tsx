@@ -642,7 +642,22 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                     <div style={{ color: '#1f2937', fontSize: 13 }}>
                       <strong>{lm.name}</strong><br />
                       {lm.category} | 来訪{lm.visitCount}回
-                      {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }} /></>}
+                      {lm.photos.length > 0 && <><br /><img src={lm.photos[0].url} style={{ width: 120, marginTop: 6, borderRadius: 6 }}
+                        onError={e => {
+                          // 期限切れGoogle URLの自己修復: placeIdから新URLを取り直して表示
+                          const img = e.target as HTMLImageElement;
+                          if (img.dataset.healed || !lm.placeId || !mapRef.current) { img.style.display = 'none'; return; }
+                          img.dataset.healed = '1';
+                          try {
+                            new google.maps.places.PlacesService(mapRef.current).getDetails(
+                              { placeId: lm.placeId, fields: ['photos'] },
+                              (result, status) => {
+                                const fresh = status === google.maps.places.PlacesServiceStatus.OK && result?.photos?.[0]
+                                  ? result.photos[0].getUrl({ maxWidth: 600 }) : null;
+                                if (fresh) img.src = fresh; else img.style.display = 'none';
+                              });
+                          } catch { img.style.display = 'none'; }
+                        }} /></>}
                       {lm.category === 'ガソリンスタンド' && route && (
                         <><br /><button onClick={() => openFuelModal(lm)} style={{ marginTop: 6, padding: '4px 10px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>⛽ 給油記録</button></>
                       )}
