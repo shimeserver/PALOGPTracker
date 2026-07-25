@@ -123,6 +123,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // 標高プロファイル
     const [showElev, setShowElev] = useState(false);
     const [elevIdx, setElevIdx] = useState<number | null>(null);
+    // 全ルート表示時のスポットマーカー表示切替（設定はブラウザに保存）
+    const [showSpotsAllMode, setShowSpotsAllMode] = useState(() => localStorage.getItem('palogp_allmode_spots') !== '0');
     // 密度オーバーレイに渡すためのリアクティブなmap参照
     const [mapObj, setMapObj] = useState<google.maps.Map | null>(null);
     const sectionModeRef = useRef(false);
@@ -611,7 +613,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           )}
 
           {/* ランドマーク */}
-          {landmarks.map(lm => {
+          {(!isAllMode || showSpotsAllMode) && landmarks.map(lm => {
             const isDragTarget = pinDragMode?.id === lm.id;
             return (
               <Marker
@@ -988,6 +990,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <span style={{ width: 90, height: 8, borderRadius: 4, background: 'linear-gradient(90deg, hsl(220,85%,50%), hsl(180,85%,45%), hsl(120,80%,42%), hsl(60,90%,48%), hsl(30,90%,50%), hsl(0,85%,50%))' }} />
               <span style={{ fontSize: 11 }}>多数</span>
             </span>
+            <button
+              onClick={() => setShowSpotsAllMode(v => { localStorage.setItem('palogp_allmode_spots', v ? '0' : '1'); return !v; })}
+              style={{ marginLeft: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+                background: showSpotsAllMode ? '#f59e0b' : '#f3f4f6',
+                color: showSpotsAllMode ? '#fff' : '#6b7280',
+                border: showSpotsAllMode ? 'none' : '1.5px solid #e8eaed' }}
+              title="スポットマーカーの表示/非表示"
+            >
+              ★ スポット{showSpotsAllMode ? '' : '非表示'}
+            </button>
           </div>
         )}
 
