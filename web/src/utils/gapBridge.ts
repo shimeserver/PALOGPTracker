@@ -33,6 +33,38 @@ function turnCos(p1: LL, p2: LL, p3: LL): number {
   return (ax * bx + ay * by) / (la * lb);
 }
 
+// 直線チェーン圧縮: 「140m超の点間隔がほぼ無折れ（5°以下）で1km以上続く」区間の中間点を削除する。
+// 正常な3秒間隔の記録は時速100kmでも点間約83mなので、この形は「記録が死んでいた区間に
+// まばらな点が直線状に残った」アーティファクト（山手トンネルの斜め直線等）。
+// 中間点を消して1本の大ギャップにすれば、後段のOSRM補間が道なりに埋める。
+// 本物の直線高速道路（湾岸線等）は点間隔が正常なので対象外（検証済み）。
+function collapseStraightChords(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
+  const SEG_MIN_KM = 0.14, TURN_MAX_COS = Math.cos(5 * Math.PI / 180), RUN_MIN_KM = 1.0;
+  const remove: boolean[] = new Array(pts.length).fill(false);
+  let removed = 0;
+  let i = 0;
+  while (i < pts.length - 1) {
+    if (haversineKm(pts[i], pts[i + 1]) >= SEG_MIN_KM) {
+      let j = i + 1;
+      let run = haversineKm(pts[i], pts[i + 1]);
+      while (j < pts.length - 1
+        && haversineKm(pts[j], pts[j + 1]) >= SEG_MIN_KM
+        && turnCos(pts[j - 1], pts[j], pts[j + 1]) >= TURN_MAX_COS) {
+        run += haversineKm(pts[j], pts[j + 1]);
+        j++;
+      }
+      if (run >= RUN_MIN_KM && j - i >= 2) {
+        for (let k = i + 1; k < j; k++) {
+          if (!remove[k]) { remove[k] = true; removed++; }
+        }
+      }
+      i = j;
+    } else i++;
+  }
+  if (removed === 0) return { points: pts, removed: 0 };
+  return { points: pts.filter((_, k) => !remove[k]), removed };
+}
+
 // バックトラック切除: 「300m以上進んで80m以内の元の場所へ戻り、途中に80°超の折れがあり、
 // 通過方向が変わらない」区間を除去する。過去の不具合で保存された“道なりに補間された行って戻り”
 // （点が10〜30m間隔と密なため、ジャンプ検出も反転密度検出も効かない）を捕まえる。
@@ -152,13 +184,14 @@ export function removeGeoWarps(points: TrackPoint[]): { points: TrackPoint[]; re
   const JUMP_MIN_KM = 0.15;  // 異常の開始条件（直前点からの飛び）
 
   if (points.length < 3) return { points, removed: 0 };
-  // 1) バックトラック（密な行って戻り） 2) 密集反転クラスタ 3) 孤立スパイク 4) 窓検出 の順に除去
+  // 1) バックトラック 2) 反転クラスタ 3) 孤立スパイク 4) 直線チェーン圧縮 5) 窓検出 の順に除去
   const backPass = removeBacktracks(points);
   const clusterPass = removeReversalClusters(backPass.points);
   const vertexPass = removeSpikeVertices(clusterPass.points);
-  points = vertexPass.points;
+  const chordPass = collapseStraightChords(vertexPass.points);
+  points = chordPass.points;
   const out: TrackPoint[] = [points[0]];
-  let removed = backPass.removed + clusterPass.removed + vertexPass.removed;
+  let removed = backPass.removed + clusterPass.removed + vertexPass.removed + chordPass.removed;
   let i = 1;
   while (i < points.length - 1) {
     const prev = out[out.length - 1];

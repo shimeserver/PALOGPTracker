@@ -32,6 +32,34 @@ function turnCos(p1: { lat: number; lng: number }, p2: { lat: number; lng: numbe
   return (ax * bx + ay * by) / (la * lb);
 }
 
+// 直線チェーン圧縮（記録死亡区間のまばらな直線点列を1本のギャップに・Web版と同一、検証済み）。
+function collapseStraightChords(pts: TrackPoint[]): TrackPoint[] {
+  const SEG_MIN_KM = 0.14, TURN_MAX_COS = Math.cos(5 * Math.PI / 180), RUN_MIN_KM = 1.0;
+  const remove: boolean[] = new Array(pts.length).fill(false);
+  let removed = 0;
+  let i = 0;
+  while (i < pts.length - 1) {
+    if (haversineKm(pts[i], pts[i + 1]) >= SEG_MIN_KM) {
+      let j = i + 1;
+      let run = haversineKm(pts[i], pts[i + 1]);
+      while (j < pts.length - 1
+        && haversineKm(pts[j], pts[j + 1]) >= SEG_MIN_KM
+        && turnCos(pts[j - 1], pts[j], pts[j + 1]) >= TURN_MAX_COS) {
+        run += haversineKm(pts[j], pts[j + 1]);
+        j++;
+      }
+      if (run >= RUN_MIN_KM && j - i >= 2) {
+        for (let k = i + 1; k < j; k++) {
+          if (!remove[k]) { remove[k] = true; removed++; }
+        }
+      }
+      i = j;
+    } else i++;
+  }
+  if (removed === 0) return pts;
+  return pts.filter((_, k) => !remove[k]);
+}
+
 // バックトラック切除（密な“行って戻り”・Web版と同一、検証済み）。
 function removeBacktracks(pts: TrackPoint[]): TrackPoint[] {
   const RETURN_KM = 0.08, MIN_PATH_KM = 0.3, MAX_PATH_KM = 5, MIN_TURN_COS = Math.cos(80 * Math.PI / 180), HEADING_COS = 0.5;
@@ -127,7 +155,7 @@ function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
 function removeGeoWarps(points: TrackPoint[]): TrackPoint[] {
   const MAX_WINDOW = 8, DETOUR_RATIO = 2.5, MIN_PATH_KM = 0.15, MAX_DIRECT_KM = 0.5, REVERSAL_COS = -0.3, JUMP_MIN_KM = 0.15;
   if (points.length < 3) return points;
-  points = removeSpikeVertices(removeReversalClusters(removeBacktracks(points))); // 行って戻り→毛玉→孤立スパイクの順
+  points = collapseStraightChords(removeSpikeVertices(removeReversalClusters(removeBacktracks(points)))); // 戻り→毛玉→スパイク→直線チェーン
   const out: TrackPoint[] = [points[0]];
   let removed = 0;
   let i = 1;
