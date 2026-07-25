@@ -398,7 +398,8 @@ export async function importRouteHistoryCsv(
       const routeStops = detectStops(pts, log.name || `ルート${i + 1}`);
       allStops.push(...deduplicateRouteStops(routeStops, pts));
       await delay(200);
-    } catch {
+    } catch (err) {
+      console.error(`ルートインポート失敗: ${log.name || `ルート${i + 1}`}`, err);
       failed++;
       await delay(500);
     }

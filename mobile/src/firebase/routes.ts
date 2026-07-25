@@ -11,13 +11,20 @@ export type RouteMetadata = Omit<Route, 'points'>;
 // 本体が軽くなり一覧・統計クエリが高速/低コストになる。読み込みは両形式に対応。
 const PTS_CHUNK = 1500;
 
+// 1コミットあたりのチャンク数上限。Firestoreはコミット1回10MiB制限があり、
+// 長距離ルートを1バッチで送ると超過して保存が丸ごと失敗する。
+const CHUNKS_PER_COMMIT = 15;
+
 async function writePointChunks(routeId: string, points: TrackPoint[]): Promise<void> {
-  const batch = writeBatch(db);
-  for (let i = 0; i * PTS_CHUNK < points.length; i++) {
-    batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
-      { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
+  const chunkCount = Math.ceil(points.length / PTS_CHUNK);
+  for (let start = 0; start < chunkCount; start += CHUNKS_PER_COMMIT) {
+    const batch = writeBatch(db);
+    for (let i = start; i < Math.min(start + CHUNKS_PER_COMMIT, chunkCount); i++) {
+      batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
+        { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
+    }
+    await batch.commit();
   }
-  await batch.commit();
 }
 
 async function loadPointChunks(routeId: string): Promise<TrackPoint[]> {

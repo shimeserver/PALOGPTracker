@@ -90,16 +90,27 @@ const toMs = (v: unknown): number =>
 // 本体ドキュメントが軽くなり一覧取得が高速・低コストになる（Firestoreの1MB制限対策も兼ねる）。
 const PTS_CHUNK = 1500;
 
+// 1コミットあたりのチャンク数上限。Firestoreはコミット1回10MiB制限があり、
+// 1チャンク(1500点)はエンコード後 約250KB になるため、まとめすぎると超過して保存が丸ごと失敗する。
+const CHUNKS_PER_COMMIT = 15;
+
 export async function writeRoutePointChunks(routeId: string, points: TrackPoint[]): Promise<void> {
   // 既存チャンクを消してから書き直す（チャンク数が減るケースに対応）
   const old = await getDocs(collection(db, 'routes', routeId, 'pts'));
-  const batch = writeBatch(db);
-  old.docs.forEach(d => batch.delete(d.ref));
-  for (let i = 0; i * PTS_CHUNK < points.length; i++) {
-    batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
-      { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
+  if (!old.empty) {
+    const delBatch = writeBatch(db);
+    old.docs.forEach(d => delBatch.delete(d.ref));
+    await delBatch.commit();
   }
-  await batch.commit();
+  const chunkCount = Math.ceil(points.length / PTS_CHUNK);
+  for (let start = 0; start < chunkCount; start += CHUNKS_PER_COMMIT) {
+    const batch = writeBatch(db);
+    for (let i = start; i < Math.min(start + CHUNKS_PER_COMMIT, chunkCount); i++) {
+      batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
+        { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
+    }
+    await batch.commit();
+  }
 }
 
 export async function loadRoutePoints(routeId: string): Promise<TrackPoint[]> {
