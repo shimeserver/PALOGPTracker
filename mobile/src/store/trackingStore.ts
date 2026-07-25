@@ -69,6 +69,17 @@ function haversine(p1: TrackPoint, p2: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// モード別のジャンプ判定上限（km/h）。これ超の移動を示す点はGPSジャンプとみなして捨てる。
+// walk は公共交通（新幹線=最高320km/h）を含むため上限を高くしている。
+const MODE_MAX_KMH: Record<TrackingMode, number> = { car: 300, walk: 330, bicycle: 120 };
+
+// GPS復帰直後（60秒以上受信が途切れた後）の最初のfixは精度が悪いことが多い。
+// その場合は精度30m以下を要求する。ただし連続3点まで＝それ以降は通常基準(50m)に
+// 戻して受け入れる（トンネル出口などで精度が回復しない環境でのデータ全損を防ぐ）。
+const REENTRY_GAP_MS = 60000;
+const REENTRY_MAX_ACC_M = 30;
+let reentryRejects = 0;
+
 interface TrackingState {
   isTracking: boolean;
   isPaused: boolean;
@@ -101,6 +112,15 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     for (const loc of locations) {
       // 精度が50m超の場合はスキップ（GPSが安定していない）
       if (loc.coords.accuracy != null && loc.coords.accuracy > 50) continue;
+      // GPS復帰直後の低精度fixを破棄（最大3点まで）
+      const lastPt = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
+      if (lastPt && loc.timestamp - lastPt.timestamp > REENTRY_GAP_MS
+        && loc.coords.accuracy != null && loc.coords.accuracy > REENTRY_MAX_ACC_M
+        && reentryRejects < 3) {
+        reentryRejects++;
+        continue;
+      }
+      reentryRejects = 0;
       const pt: TrackPoint = {
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
@@ -111,13 +131,13 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         // 高度(m)。標高プロファイル用。undefinedはFirestoreが拒否するため条件付きで付与
         ...(loc.coords.altitude != null ? { alt: Math.round(loc.coords.altitude * 10) / 10 } : {}),
       };
-      // 直前点との速度チェック（300km/h超 = GPSジャンプとみなしてスキップ）
+      // 直前点との速度チェック（モード別上限超 = GPSジャンプとみなしてスキップ）
       const prev = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
       if (prev) {
         const dtH = (pt.timestamp - prev.timestamp) / 3600000;
         if (dtH > 0) {
           const distKm = haversine(prev, pt);
-          if (distKm / dtH > 300) continue;
+          if (distKm / dtH > MODE_MAX_KMH[get().trackingMode]) continue;
         }
       }
       newPoints.push(pt);
@@ -159,6 +179,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
 
     await clearRecovery(); // 前回の残存データをクリア
     lastBackupLen = 0;
+    reentryRejects = 0;
     set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
 
     await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS);

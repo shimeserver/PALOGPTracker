@@ -3,6 +3,8 @@ import type { TileKey, ColorMode } from './RouteMapView';
 import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks } from '../firebase/data';
 import { resetDensityCache } from './DensityOverlay';
 import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
+import { exportRoutesGpx, exportRoutesCsv, downloadBlob, exportFilename } from '../utils/exportRoutes';
+import type { Route } from '../firebase/data';
 
 export interface MapSettings {
   tileKey: TileKey;
@@ -22,6 +24,7 @@ interface Props {
   onDeleteAllLandmarks: () => void;
   onImportDone: () => void;
   getPlacesService: () => google.maps.places.PlacesService | null;
+  routes: Route[];
 }
 
 const TILE_OPTIONS: { key: TileKey; label: string; desc: string; preview: string }[] = [
@@ -30,7 +33,7 @@ const TILE_OPTIONS: { key: TileKey; label: string; desc: string; preview: string
   { key: 'terrain', label: '地形図',     desc: '標高・地形がわかる地図',       preview: '⛰️' },
 ];
 
-export default function SettingsPanel({ open, onClose, settings, onSettings, userId, routeCount, landmarkCount, onDeleteAllRoutes, onDeleteAllLandmarks, onImportDone, getPlacesService }: Props) {
+export default function SettingsPanel({ open, onClose, settings, onSettings, userId, routeCount, landmarkCount, onDeleteAllRoutes, onDeleteAllLandmarks, onImportDone, getPlacesService, routes }: Props) {
   const [dedupProgress, setDedupProgress] = useState('');
   const [deduping, setDeduping]           = useState(false);
   const [importing, setImporting]         = useState(false);
@@ -39,12 +42,32 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
   const [restoreProgress, setRestoreProgress] = useState('');
   const [migrating, setMigrating]         = useState(false);
   const [migrateProgress, setMigrateProgress] = useState('');
+  const [exporting, setExporting]         = useState(false);
+  const [exportProgress, setExportProgress] = useState('');
   const csvInputRef  = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   if (!open) return null;
 
   const set = (patch: Partial<MapSettings>) => onSettings({ ...settings, ...patch });
+
+  const handleExport = (format: 'gpx' | 'csv') => async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportProgress('点データを読み込み中...');
+    try {
+      const onProgress = (done: number, total: number) => setExportProgress(`ルート ${done} / ${total} を処理中...`);
+      const blob = format === 'gpx'
+        ? await exportRoutesGpx(routes, onProgress)
+        : await exportRoutesCsv(routes, onProgress);
+      downloadBlob(blob, exportFilename(format));
+    } catch (e) {
+      alert(`エクスポート失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(false);
+      setExportProgress('');
+    }
+  };
 
   const handleMigrateChunks = async () => {
     if (!confirm('全ルートのGPS点列を軽量形式（分割保存）に移行します。\nデータは変わらず、読み込みが速くなります。実行しますか？')) return;
@@ -281,6 +304,24 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
             🗺️ Google Timelineインポート（.json）
           </button>
           {importing && <p style={{ color: '#2563eb', fontSize: 12, marginTop: 8 }}>{importProgress}</p>}
+        </section>
+
+        {/* エクスポート */}
+        <section style={s.section}>
+          <p style={s.sectionTitle}>エクスポート（バックアップ）</p>
+          <button
+            style={{ ...s.importBtn, marginBottom: 8 }}
+            onClick={handleExport('gpx')} disabled={exporting || routes.length === 0}
+          >
+            📤 GPX形式でエクスポート（{routes.length}件）
+          </button>
+          <button
+            style={s.importBtn}
+            onClick={handleExport('csv')} disabled={exporting || routes.length === 0}
+          >
+            📤 CSV形式でエクスポート（再インポート可能）
+          </button>
+          {exporting && <p style={{ color: '#2563eb', fontSize: 12, marginTop: 8 }}>{exportProgress}</p>}
         </section>
 
         {/* データ管理 */}

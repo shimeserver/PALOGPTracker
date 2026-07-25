@@ -7,5 +7,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // ベンダーを分割してキャッシュ効率と並列ロードを改善（1MB単一チャンク対策）
+        manualChunks(id: string) {
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) return 'firebase';
+          if (id.includes('node_modules/@react-google-maps')) return 'gmaps';
+        },
+      },
+    },
   },
 })

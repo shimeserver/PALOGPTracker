@@ -19,11 +19,20 @@ interface Props {
   onOpenCars: () => void;
   onOpenActivity: () => void;
   onOpenPrefs: () => void;
+  onOpenGapScan: () => void;
   carWarning?: boolean;
   tags: TagDef[];
   onUpdateRoute: (route: Route) => void;
   onTagsChange: () => void;
   activeCar: Car | null;
+  // 車両・日付フィルタ（状態はMainPageが持ち、一覧と全ルート表示の両方に効く）
+  cars: Car[];
+  carFilter: string;
+  dateFrom: string;
+  dateTo: string;
+  onCarFilter: (id: string) => void;
+  onDateFrom: (d: string) => void;
+  onDateTo: (d: string) => void;
 }
 
 function formatDate(ms: number) {
@@ -36,8 +45,9 @@ function formatDuration(start: number, end: number) {
 
 export default function RoutesPanel({
   userId, routes, loading, selectedRoute, showAllRoutes,
-  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity, onOpenPrefs,
+  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity, onOpenPrefs, onOpenGapScan,
   tags, onUpdateRoute, onTagsChange, activeCar, carWarning,
+  cars, carFilter, dateFrom, dateTo, onCarFilter, onDateFrom, onDateTo,
 }: Props) {
   const [search, setSearch]               = useState('');
   const [editingId, setEditingId]         = useState<string | null>(null);
@@ -173,6 +183,7 @@ export default function RoutesPanel({
           </span>
         )}
         {!activeCar && <div style={{ flex: 1 }} />}
+        <button style={styles.iconBtn} onClick={onOpenGapScan} title="ギャップ点検（飛びが残っているルートを一覧・一括修復）">🩹</button>
         <button style={styles.iconBtn} onClick={onOpenActivity} title="活動統計">🏃</button>
         <button style={styles.iconBtn} onClick={onOpenPrefs} title="都道府県制覇マップ">🗾</button>
         <button style={styles.iconBtn} onClick={onOpenCars} title="愛車管理">{carWarning ? '⚠️' : '🚗'}</button>
@@ -229,6 +240,36 @@ export default function RoutesPanel({
           style={styles.search} placeholder="ルートやタグ名を検索..."
           value={search} onChange={e => setSearch(e.target.value)}
         />
+        {/* 車両・日付フィルタ（全ルート表示にも効く） */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
+          <select
+            value={carFilter}
+            onChange={e => onCarFilter(e.target.value)}
+            style={{ ...styles.filterInput, flex: '1 1 90px', color: carFilter ? '#2563eb' : '#6b7280', fontWeight: carFilter ? 600 : 400 }}
+            title="車両で絞り込み"
+          >
+            <option value="">🚗 全車両</option>
+            {cars.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
+          </select>
+          <input
+            type="date" value={dateFrom} onChange={e => onDateFrom(e.target.value)}
+            style={{ ...styles.filterInput, flex: '1 1 110px', color: dateFrom ? '#2563eb' : '#6b7280' }}
+            title="この日以降"
+          />
+          <span style={{ color: '#9ca3af', fontSize: 11 }}>〜</span>
+          <input
+            type="date" value={dateTo} onChange={e => onDateTo(e.target.value)}
+            style={{ ...styles.filterInput, flex: '1 1 110px', color: dateTo ? '#2563eb' : '#6b7280' }}
+            title="この日まで"
+          />
+          {(carFilter || dateFrom || dateTo) && (
+            <button
+              onClick={() => { onCarFilter(''); onDateFrom(''); onDateTo(''); }}
+              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: '2px 4px', fontWeight: 600 }}
+              title="フィルタを解除"
+            >✕ 解除</button>
+          )}
+        </div>
         <p style={styles.count}>
           {loading ? '読み込み中...' : `${filtered.length}件`}
           {selectedIds.size > 0 && <span style={{ color: '#f59e0b', marginLeft: 8 }}>{selectedIds.size}件選択</span>}
@@ -436,6 +477,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8, padding: '8px 12px', fontSize: 14, outline: 'none', marginBottom: 4,
   },
   count: { color: '#9ca3af', fontSize: 12 },
+  filterInput: {
+    background: '#f8f9fa', border: '1.5px solid #e8eaed', borderRadius: 6,
+    padding: '4px 6px', fontSize: 12, outline: 'none', minWidth: 0,
+  },
   allRoutesBtn: {
     width: '100%', background: '#f8f9fa', color: '#6b7280',
     border: '1.5px solid #e8eaed', borderRadius: 8, padding: '8px 12px',

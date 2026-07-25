@@ -14,6 +14,7 @@ const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
 const TOTAL_BUDGET_MS = 30000; // 補間全体の時間予算（コリドーフォールバック分を含む）
 const MAX_FAILS = 2;          // 連続失敗（=オフライン想定）でそれ以降の補間を諦める
 const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
+const AUTO_BRIDGE_MAX_KM = 50; // これ超のギャップはフェリー等の可能性が高く自動補間しない（直線のまま）
 
 function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6371;
@@ -189,7 +190,8 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
     const cur = points[i];
     const distKm = haversineKm(prev, cur);
     // ギャップ = 距離が離れた区間（時間には依存しない）
-    const isGap = distKm >= GAP_MIN_DIST_KM;
+    // 超長距離ギャップはフェリー航路等の可能性が高く、偽の陸路を描かないよう補間しない
+    const isGap = distKm >= GAP_MIN_DIST_KM && distKm <= AUTO_BRIDGE_MAX_KM;
 
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {

@@ -7,12 +7,15 @@ import { corridorRoute } from './osmCorridor';
 // ワープ（飛び出して戻る誤点）は事前に位置ベースで除去する。
 
 const OSRM = 'https://router.project-osrm.org/route/v1/';
-const GAP_MIN_DIST_KM = 0.3;  // 連続点がこれ以上離れていればギャップ（GPS喪失）とみなす
-const MAX_GAPS = 30;
+export const GAP_MIN_DIST_KM = 0.3;  // 連続点がこれ以上離れていればギャップ（GPS喪失）とみなす
+const DEFAULT_MAX_GAPS = 100;
 const CALL_TIMEOUT_MS = 6000;
-const TOTAL_BUDGET_MS = 25000;
+const DEFAULT_BUDGET_MS = 60000;
 const MAX_FAILS = 3;
 const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
+const SEA_MIN_KM = 5;         // これ以上のギャップで経路が大回りになる場合＝海上・航路とみなす
+const SEA_DETOUR_RATIO = 3;   // 道路経路が直線の3倍超＝湾・海峡を回り込んでいる＝航路の可能性大
+const AUTO_BRIDGE_MAX_KM = 50; // これ超のギャップはフェリー等の可能性が高く自動補間しない（手動✂️区間修正で対応）
 
 type LL = { lat: number; lng: number };
 
@@ -283,6 +286,18 @@ export async function snapWholeRoute(points: TrackPoint[], mode?: string): Promi
   return { points: result, ok: true, failedChunks };
 }
 
+// 修復できずに残ったギャップ（地図上での可視化・レポート用）
+export interface UnresolvedGap {
+  lat: number; lng: number;    // ギャップ始点
+  lat2: number; lng2: number;  // ギャップ終点
+  distKm: number;
+  reason: 'sea' | 'detour' | 'failed' | 'limit';
+  // sea    = 海上・フェリー航路とみなし直線のまま（正常）
+  // detour = 道路経路が遠回りになるため不採用（直線のまま）
+  // failed = 経路取得失敗（オフライン・OSRMエラー等）
+  // limit  = ギャップ数/時間の上限で未処理（再実行で続きから直せる）
+}
+
 export interface BridgeResult {
   points: TrackPoint[];
   bridged: number;      // 実際に補間したギャップ数（コリドー含む）
@@ -290,16 +305,63 @@ export interface BridgeResult {
   detected: number;     // 検出したギャップ数
   rejectedDetour: number; // 妥当な経路なし(遠回り)で除外した数
   failed: number;       // 経路取得失敗（オフライン等）した数
+  sea: number;          // 海上・航路とみなして残した数
+  unresolved: UnresolvedGap[]; // 直線のまま残った全ギャップの位置と理由
+}
+
+export interface BridgeOptions {
+  maxGaps?: number;   // 1回の実行で補間するギャップ数の上限
+  budgetMs?: number;  // 実行全体の時間予算
+  onProgress?: (done: number, total: number) => void; // ギャップ処理の進捗
+}
+
+// スキャン用: 補間なしでギャップ統計だけを返す（ネットワーク不使用・軽量）
+export interface GapStats { count: number; maxKm: number; totalKm: number; }
+export function routeGapStats(points: TrackPoint[]): GapStats {
+  let count = 0, maxKm = 0, totalKm = 0;
+  for (let i = 1; i < points.length; i++) {
+    const d = haversineKm(points[i - 1], points[i]);
+    if (d >= GAP_MIN_DIST_KM) { count++; totalKm += d; if (d > maxKm) maxKm = d; }
+  }
+  return { count, maxKm, totalKm };
+}
+
+// OSRM出力（speed=0）の点に速度を補完し、外れ値を除去する（保存前の共通後処理）
+export function recalcSpeeds(points: TrackPoint[]): TrackPoint[] {
+  if (points.length < 2) return points;
+  const MAX_KMH = 300;
+  const result = points.map(p => ({ ...p }));
+  for (let i = 0; i < result.length - 1; i++) {
+    if (result[i].speed === 0) {
+      const dt = (result[i + 1].timestamp - result[i].timestamp) / 3600000;
+      const v = dt > 0 ? haversineKm(result[i], result[i + 1]) / dt : 0;
+      result[i].speed = v > MAX_KMH ? 0 : v;
+    }
+  }
+  if (result[result.length - 1].speed === 0)
+    result[result.length - 1].speed = result[result.length - 2].speed;
+  for (let i = 0; i < result.length; i++) {
+    const s = result[i].speed;
+    if (s > MAX_KMH) { result[i].speed = 0; continue; }
+    if (i === 0 || i === result.length - 1 || s <= 0) continue;
+    const neighborMax = Math.max(result[i - 1].speed, result[i + 1].speed);
+    if (neighborMax > 0 && s > neighborMax * 3) result[i].speed = (result[i - 1].speed + result[i + 1].speed) / 2;
+  }
+  return result;
 }
 
 const MAX_CORRIDOR_CALLS = 5; // Overpass負荷を抑えるため1回のクリーンアップでの上限
 
-export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<BridgeResult> {
-  if (points.length < 2) return { points, bridged: 0, corridorBridged: 0, detected: 0, rejectedDetour: 0, failed: 0 };
+export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: BridgeOptions): Promise<BridgeResult> {
+  const empty: BridgeResult = { points, bridged: 0, corridorBridged: 0, detected: 0, rejectedDetour: 0, failed: 0, sea: 0, unresolved: [] };
+  if (points.length < 2) return empty;
   const profile = mode === 'walk' ? 'foot' : mode === 'bicycle' ? 'cycling' : 'driving';
-  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  const maxGaps = opts?.maxGaps ?? DEFAULT_MAX_GAPS;
+  const deadline = Date.now() + (opts?.budgetMs ?? DEFAULT_BUDGET_MS);
+  const totalGaps = routeGapStats(points).count;
   const out: TrackPoint[] = [points[0]];
-  let bridged = 0, corridorBridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0;
+  const unresolved: UnresolvedGap[] = [];
+  let bridged = 0, corridorBridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0, sea = 0;
   let corridorCalls = 0;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
@@ -308,23 +370,34 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
     // ギャップ = 距離が離れた区間（時間には依存しない）
     const isGap = distKm >= GAP_MIN_DIST_KM;
     if (isGap) detected++;
-    const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
-    if (canBridge) {
+    const markUnresolved = (reason: UnresolvedGap['reason']) =>
+      unresolved.push({ lat: prev.lat, lng: prev.lng, lat2: cur.lat, lng2: cur.lng, distKm, reason });
+    if (isGap && distKm > AUTO_BRIDGE_MAX_KM) {
+      // 超長距離ギャップ＝フェリー等の可能性が高い。誤って偽の陸路を描かないよう自動補間しない。
+      sea++;
+      markUnresolved('sea');
+    } else if (isGap && (bridged >= maxGaps || fails >= MAX_FAILS || Date.now() >= deadline)) {
+      markUnresolved('limit');
+    } else if (isGap) {
       // まずOSRM。公開OSRMは有料道路を使わないため、拒否/遠回りになった1km以上のギャップは
       // 高速コリドー（OSM直読み・osmCorridor）にフォールバックする（山手トンネル等の自動修復）。
       let path: LL[] | null = null;
       let viaCorridor = false;
+      let detourTotal = 0;
       const coords = await osrmRoute(profile, prev, cur);
       if (coords && coords.length >= 2) {
         fails = 0;
         const p = coords.map(([lng, lat]) => ({ lat, lng }));
         let total = 0;
         for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
+        detourTotal = total;
         if (total >= distKm * 0.9 && total <= distKm * MAX_DETOUR_RATIO) path = p;
       } else {
         fails++;
       }
-      if (!path && profile === 'driving' && distKm >= 1 && corridorCalls < MAX_CORRIDOR_CALLS) {
+      // 海上判定: 一定以上のギャップで道路経路が直線の3倍超＝湾・海峡を回り込む＝航路とみなす
+      const isSea = !path && coords != null && distKm >= SEA_MIN_KM && detourTotal > distKm * SEA_DETOUR_RATIO;
+      if (!path && !isSea && profile === 'driving' && distKm >= 1 && corridorCalls < MAX_CORRIDOR_CALLS) {
         corridorCalls++;
         const cc = await corridorRoute(prev, cur).catch(() => null);
         if (cc && cc.length >= 2) { path = cc.map(([lng, lat]) => ({ lat, lng })); viaCorridor = true; }
@@ -343,13 +416,19 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
           const ts = Math.round(prev.timestamp + frac * (cur.timestamp - prev.timestamp));
           out.push({ lat: path[k].lat, lng: path[k].lng, timestamp: ts, speed: 0 });
         }
+      } else if (isSea) {
+        sea++;
+        markUnresolved('sea');
       } else if (coords) {
         rejectedDetour++; // OSRMは返したが遠回り、コリドーも不成立
+        markUnresolved('detour');
       } else {
         failed++;
+        markUnresolved('failed');
       }
     }
+    if (isGap) opts?.onProgress?.(detected, totalGaps);
     out.push(cur);
   }
-  return { points: out, bridged, corridorBridged, detected, rejectedDetour, failed };
+  return { points: out, bridged, corridorBridged, detected, rejectedDetour, failed, sea, unresolved };
 }

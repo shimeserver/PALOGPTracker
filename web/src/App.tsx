@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { useJsApiLoader, type Libraries } from '@react-google-maps/api';
 import { auth } from './firebase/config';
 import AuthPage from './pages/AuthPage';
-import MainPage from './pages/MainPage';
 import './App.css';
+
+// メイン画面（地図・パネル群）はログイン後にのみ必要なので遅延ロードして初期表示を軽くする
+const MainPage = lazy(() => import('./pages/MainPage'));
 
 // librariesを外部で定義することで安定した参照を保つ（useJsApiLoaderの要件）
 const LIBRARIES: Libraries = ['places'];
@@ -36,5 +38,9 @@ export default function App() {
     );
   }
 
-  return user ? <MainPage user={user} /> : <AuthPage />;
+  return user ? (
+    <Suspense fallback={<div className="loading-screen"><div className="loading-text">読み込み中...</div></div>}>
+      <MainPage user={user} />
+    </Suspense>
+  ) : <AuthPage />;
 }

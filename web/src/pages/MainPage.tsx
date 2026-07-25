@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { signOut, type User } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import RoutesPanel from '../components/RoutesPanel';
@@ -8,7 +8,8 @@ import SettingsPanel from '../components/SettingsPanel';
 import CarsPanel from '../components/CarsPanel';
 import ActivityPanel from '../components/ActivityPanel';
 import PrefectureMapPanel from '../components/PrefectureMapPanel';
-import { getUserRoutes, deleteRoute, getUserTags, hydrateRoutePoints } from '../firebase/data';
+import GapScanPanel from '../components/GapScanPanel';
+import { getUserRoutes, deleteRoute, getUserTags, hydrateRoutePoints, getUserCars } from '../firebase/data';
 import type { Route, TagDef, Car } from '../firebase/data';
 import type { MapSettings } from '../components/SettingsPanel';
 import type { RouteMapViewHandle } from '../components/RouteMapView';
@@ -31,6 +32,11 @@ export default function MainPage({ user }: Props) {
   const [carsOpen, setCarsOpen]             = useState(false);
   const [activityOpen, setActivityOpen]     = useState(false);
   const [prefsOpen, setPrefsOpen]           = useState(false);
+  const [gapScanOpen, setGapScanOpen]       = useState(false);
+  // ルート絞り込み（車両・日付）。一覧と「全ルート表示」の両方に効く
+  const [carFilter, setCarFilter]           = useState<string>('');   // Car.id
+  const [dateFrom, setDateFrom]             = useState<string>('');   // YYYY-MM-DD
+  const [dateTo, setDateTo]                 = useState<string>('');
   const [landmarkCount, setLandmarkCount]   = useState(0);
   const [tags, setTags]                     = useState<TagDef[]>([]);
   const [cars, setCars]                     = useState<Car[]>([]);
@@ -51,7 +57,29 @@ export default function MainPage({ user }: Props) {
   useEffect(() => {
     getUserRoutes(user.uid).then(r => { setRoutes(r); setRoutesLoading(false); hydrate(r); });
     getUserTags(user.uid).then(setTags);
+    getUserCars(user.uid).then(setCars).catch(() => {}); // 車両フィルタ用（CarsPanelを開かなくても必要）
   }, [user.uid]);
+
+  // 車両・日付フィルタを適用した表示対象ルート（一覧・全ルート表示の両方で使用）
+  const visibleRoutes = useMemo(() => {
+    let list = routes;
+    if (carFilter) {
+      const car = cars.find(c => c.id === carFilter);
+      const carTagName = car?.tagId ? tags.find(t => t.id === car.tagId)?.name : undefined;
+      list = list.filter(r => car?.tagId && r.tags.some(id =>
+        id === car.tagId || (carTagName != null && tags.find(t => t.id === id)?.name === carTagName)
+      ));
+    }
+    if (dateFrom) {
+      const from = new Date(dateFrom).getTime();
+      if (!isNaN(from)) list = list.filter(r => r.startTime >= from);
+    }
+    if (dateTo) {
+      const to = new Date(dateTo).getTime() + 86400000; // 終了日を含む
+      if (!isNaN(to)) list = list.filter(r => r.startTime < to);
+    }
+    return list;
+  }, [routes, carFilter, dateFrom, dateTo, cars, tags]);
 
   const reloadRoutes = () => {
     setRoutesLoading(true);
@@ -124,7 +152,7 @@ export default function MainPage({ user }: Props) {
           <div style={{ display: tab === 'routes' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
             <RoutesPanel
               userId={user.uid}
-              routes={routes}
+              routes={visibleRoutes}
               loading={routesLoading}
               selectedRoute={selectedRoute}
               showAllRoutes={showAllRoutes}
@@ -135,11 +163,19 @@ export default function MainPage({ user }: Props) {
               onOpenCars={() => setCarsOpen(true)}
               onOpenActivity={() => setActivityOpen(true)}
               onOpenPrefs={() => setPrefsOpen(true)}
+              onOpenGapScan={() => setGapScanOpen(true)}
               tags={tags}
               onUpdateRoute={handleUpdateRoute}
               onTagsChange={reloadTags}
               activeCar={activeCar}
               carWarning={carWarning}
+              cars={cars}
+              carFilter={carFilter}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onCarFilter={setCarFilter}
+              onDateFrom={setDateFrom}
+              onDateTo={setDateTo}
             />
           </div>
           <div style={{ display: tab === 'landmarks' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
@@ -164,7 +200,7 @@ export default function MainPage({ user }: Props) {
         <RouteMapView
           ref={mapViewRef}
           route={selectedRoute}
-          allRoutes={showAllRoutes ? routes : []}
+          allRoutes={showAllRoutes ? visibleRoutes : []}
           userId={user.uid}
           mapSettings={mapSettings}
           onMapSettings={setMapSettings}
@@ -188,6 +224,7 @@ export default function MainPage({ user }: Props) {
         onDeleteAllLandmarks={() => setLandmarkCount(0)}
         onImportDone={reloadRoutes}
         getPlacesService={getPlacesService}
+        routes={routes}
       />
 
       <ActivityPanel
@@ -200,6 +237,14 @@ export default function MainPage({ user }: Props) {
         open={prefsOpen}
         onClose={() => setPrefsOpen(false)}
         routes={routes}
+      />
+
+      <GapScanPanel
+        open={gapScanOpen}
+        onClose={() => setGapScanOpen(false)}
+        routes={routes}
+        onSelectRoute={r => { setSelectedRoute(r); setShowAllRoutes(false); setTab('routes'); }}
+        onUpdateRoute={handleUpdateRoute}
       />
 
       <CarsPanel

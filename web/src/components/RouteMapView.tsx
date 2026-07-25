@@ -6,6 +6,7 @@ import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
+import type { UnresolvedGap } from '../utils/gapBridge';
 import { corridorRoute } from '../utils/osmCorridor';
 import ElevationProfile, { hasElevationData } from './ElevationProfile';
 import DensityOverlay from './DensityOverlay';
@@ -125,6 +126,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [elevIdx, setElevIdx] = useState<number | null>(null);
     // 全ルート表示時のスポットマーカー表示切替（設定はブラウザに保存）
     const [showSpotsAllMode, setShowSpotsAllMode] = useState(() => localStorage.getItem('palogp_allmode_spots') !== '0');
+    // クリーンアップ後に直線のまま残ったギャップ（⚠マーカーで可視化）
+    const [unresolvedGaps, setUnresolvedGaps] = useState<UnresolvedGap[]>([]);
     // 密度オーバーレイに渡すためのリアクティブなmap参照
     const [mapObj, setMapObj] = useState<google.maps.Map | null>(null);
     const sectionModeRef = useRef(false);
@@ -159,7 +162,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setPlayback(false); setPlayIndex(0); setStopCandidates([]);
       setEditMode(false); setEditPoints([]);
       setHasUndo(false); setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
-      setShowElev(false); setElevIdx(null);
+      setShowElev(false); setElevIdx(null); setUnresolvedGaps([]);
       prevEditPointsRef.current = [];
     }, [route?.id]);
 
@@ -452,6 +455,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       try {
         const cleaned = removeGeoWarps(editPoints);
         const r = await bridgeGaps(cleaned.points, routeModeRef.current);
+        setUnresolvedGaps(r.unresolved);
         if (r.bridged === 0 && cleaned.removed === 0) {
           alert('補正が必要な区間は見つかりませんでした。\n（短距離ワープや、GPS喪失によるギャップなし）');
           return;
@@ -461,8 +465,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const msgs: string[] = [];
         if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
         if (r.bridged > 0) msgs.push(`GPS喪失区間 ${r.bridged}か所を道なりに補間${r.corridorBridged > 0 ? `（うち高速コリドー${r.corridorBridged}）` : ''}`);
+        if (r.sea > 0) msgs.push(`海上・フェリー航路とみなし直線のまま ${r.sea}か所`);
         if (r.rejectedDetour > 0) msgs.push(`回り道になる補間は不採用（直線のまま）${r.rejectedDetour}か所`);
         if (r.failed > 0) msgs.push(`経路取得失敗 ${r.failed}か所`);
+        const limitCount = r.unresolved.filter(g => g.reason === 'limit').length;
+        if (limitCount > 0) msgs.push(`上限で未処理 ${limitCount}か所（もう一度実行すると続きを修復）`);
+        if (r.unresolved.length > 0) msgs.push('残ったギャップは地図上に⚠で表示中');
         alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {
         alert(`ルート補正失敗: ${e instanceof Error ? e.message : String(e)}`);
@@ -669,6 +677,20 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               </Marker>
             );
           })}
+          {/* ⚠ピン：クリーンアップで直線のまま残ったギャップ */}
+          {editMode && unresolvedGaps.map((g, i) => (
+            <Marker
+              key={`ugap-${i}`}
+              position={{ lat: (g.lat + g.lat2) / 2, lng: (g.lng + g.lng2) / 2 }}
+              label={{ text: '⚠', fontSize: '18px', color: g.reason === 'sea' ? '#0284c7' : '#ef4444' }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 11, fillColor: '#fff', fillOpacity: 0.9, strokeColor: g.reason === 'sea' ? '#0284c7' : '#ef4444', strokeWeight: 2 }}
+              title={`${g.distKm.toFixed(1)}km のギャップ: ${
+                g.reason === 'sea' ? '海上・フェリー航路とみなし直線のまま（正常）'
+                : g.reason === 'detour' ? '道路経路が遠回りになるため不採用（✂️区間修正で手動対応可）'
+                : g.reason === 'failed' ? '経路取得失敗（再実行で直る可能性あり）'
+                : '処理上限で未対応（クリーンアップをもう一度実行）'}`}
+            />
+          ))}
           {/* 青ピン：未登録の停車候補 */}
           {!isAllMode && !editMode && stopCandidates.map((sc, i) => (
             <Marker

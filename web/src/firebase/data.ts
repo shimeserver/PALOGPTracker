@@ -66,6 +66,7 @@ export interface Route {
   startTime: number; endTime: number; totalDistance: number;
   avgSpeed: number; maxSpeed: number; points: TrackPoint[];
   source: 'recorded' | 'imported'; mode?: TrackingMode; createdAt: number;
+  gapsOk?: boolean; // true = 残ギャップは意図的な直線（フェリー等）としてギャップ点検の対象外にする
 }
 export interface TagDef {
   id?: string; userId: string; name: string; color: string;
@@ -357,6 +358,11 @@ export async function updateRouteName(routeId: string, name: string): Promise<vo
 
 export async function updateRouteMode(routeId: string, mode: TrackingMode, tags: string[]): Promise<void> {
   await updateDoc(doc(db, 'routes', routeId), { mode, tags });
+}
+
+// ギャップ点検で「残りは直線でOK」とマークする（フェリー航路等の意図的な直線）
+export async function updateRouteGapsOk(routeId: string, gapsOk: boolean): Promise<void> {
+  await updateDoc(doc(db, 'routes', routeId), { gapsOk });
 }
 
 // --- 写真アップロード（Web） ---
