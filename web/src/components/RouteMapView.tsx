@@ -553,16 +553,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           {/* 全ルート表示: 通過回数の密度オーバーレイ（1回=青 → 回数が増えるほど赤へ） */}
           {isAllMode && <DensityOverlay map={mapObj} routes={allRoutes} />}
 
-          {/* 単一ルート：単色（編集モード中は非表示） */}
-          {!isAllMode && !editMode && colorMode === 'solid' && displayed.length > 1 && (
+          {/* 単一ルート：単色（編集モード中は非表示）。巨大ルートでは速度カラーは重すぎるため単色に落とす */}
+          {!isAllMode && !editMode && (colorMode === 'solid' || displayed.length > 20000) && displayed.length > 1 && (
             <>
               <Polyline path={displayedPath} options={solidOutlineOpts} />
               <Polyline path={displayedPath} options={solidMainOpts} />
             </>
           )}
 
-          {/* 単一ルート：速度カラー（編集モード中は非表示） */}
-          {!isAllMode && !editMode && colorMode === 'speed' && displayed.length > 1 &&
+          {/* 単一ルート：速度カラー（編集モード中は非表示・2万点以下のみ） */}
+          {!isAllMode && !editMode && colorMode === 'speed' && displayed.length > 1 && displayed.length <= 20000 &&
             displayed.slice(0, -1).map((p, i) => (
               <Polyline
                 key={i}
