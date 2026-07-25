@@ -2,90 +2,70 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Route } from '../firebase/data';
 
 // 全ルートの「通過回数」密度オーバーレイ（1回=青 → 回数増で赤へ）。
-// 設計:
-// - ルートごとの前処理（間引き2段階LOD・メルカトル座標化・セルマーク）は一度だけ実行し
-//   モジュールキャッシュに蓄積（新ルートは差分処理）。
-// - draw()はパン中も頻繁に呼ばれるため「位置合わせだけ」を行い、
-//   実際の再描画はズーム変更 or 描画済み範囲から出た時だけ実施。
-// - 描画は色ごとに1パスへ統合（stroke呼び出し〜7回）で高速。
+//
+// 描画は「タイルオーバーレイ」(map.overlayMapTypes) 方式。
+// タイルはベースマップと同じ仕組みでGoogleマップ本体が管理するため、
+// パン・ズームアニメーションに完全同期する（交通状況レイヤーと同じ挙動）。
+// 各タイルは必要な区間だけをフル解像度で描くので、間引きによるカクつきも無い。
+//
+// 前処理（座標変換・セル集計・色ラン構築）はルート単位でキャッシュし、
+// 新しいルートだけ差分処理される。
 
 const CELL = 0.00040; // ≈45m
 const COUNT_SAMPLE = 300;
-const LOD_FINE = 1000;   // zoom>=13 用
-const LOD_COARSE = 250;  // zoom<13 用
+const TILE = 256;
 
 const COLORS = [220, 180, 140, 100, 60, 30, 0].map(h => `hsl(${h}, 85%, 50%)`);
-function colorIdx(n: number): number { return Math.min(COLORS.length - 1, n - 1); }
+const colorIdx = (n: number) => Math.min(COLORS.length - 1, n - 1);
 
+// Webメルカトル: latLng → ワールド座標(zoom0で256px四方)
 function project(lat: number, lng: number): { x: number; y: number } {
   const sin = Math.min(Math.max(Math.sin((lat * Math.PI) / 180), -0.9999), 0.9999);
   return {
-    x: 256 * (0.5 + lng / 360),
-    y: 256 * (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)),
+    x: TILE * (0.5 + lng / 360),
+    y: TILE * (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)),
   };
 }
-function unproject(x: number, y: number): { lat: number; lng: number } {
-  const lng = (x / 256 - 0.5) * 360;
-  const t = Math.exp((0.5 - y / 256) * 4 * Math.PI);
-  const lat = (Math.asin((t - 1) / (t + 1)) * 180) / Math.PI;
-  return { lat, lng };
-}
+
+// セルキーは数値（文字列よりメモリ・速度で有利）
+const cellKey = (lat: number, lng: number) =>
+  (Math.round(lat / CELL) + 500000) * 4000000 + (Math.round(lng / CELL) + 1000000);
 
 interface WPt { x: number; y: number }
-interface RouteCache { fine: WPt[]; coarse: WPt[]; cellOfFine: number[]; cellOfCoarse: number[]; cellKeys: string[] }
+interface RouteCache { pts: WPt[]; ptCells: Float64Array; cellList: number[] }
 
 const routeCache = new Map<string, RouteCache>();
-const cellRoutes = new Map<string, Set<string>>();
-
-function cellKeyOf(lat: number, lng: number): string {
-  return `${Math.round(lat / CELL)}_${Math.round(lng / CELL)}`;
-}
-
-function decimate(pts: Route['points'], maxN: number): { w: WPt[]; keys: string[] } {
-  const step = Math.max(1, Math.floor(pts.length / maxN));
-  const w: WPt[] = []; const keys: string[] = [];
-  for (let i = 0; i < pts.length; i += step) {
-    const p = pts[i];
-    w.push(project(p.lat, p.lng));
-    keys.push(cellKeyOf(p.lat, p.lng));
-  }
-  const last = pts[pts.length - 1];
-  w.push(project(last.lat, last.lng));
-  keys.push(cellKeyOf(last.lat, last.lng));
-  return { w, keys };
-}
+const cellRoutes = new Map<number, Set<string>>();
 
 function processRoute(key: string, r: Route): RouteCache {
   const pts = r.points;
-  // 回数集計用セルマーク（補間つき）
-  const cells = new Set<string>();
+  // 通過セル集計（間引き＋補間で列挙。カウント精度用）
+  const cells = new Set<number>();
   const cStep = Math.max(1, Math.floor(pts.length / COUNT_SAMPLE));
   let prev: { lat: number; lng: number } | null = null;
   for (let i = 0; i < pts.length; i += cStep) {
     const p = pts[i];
-    cells.add(cellKeyOf(p.lat, p.lng));
+    cells.add(cellKey(p.lat, p.lng));
     if (prev) {
       const steps = Math.min(20, Math.floor(Math.max(
         Math.abs(p.lat - prev.lat) / CELL, Math.abs(p.lng - prev.lng) / CELL)));
       for (let k = 1; k < steps; k++) {
         const f = k / steps;
-        cells.add(cellKeyOf(prev.lat + (p.lat - prev.lat) * f, prev.lng + (p.lng - prev.lng) * f));
+        cells.add(cellKey(prev.lat + (p.lat - prev.lat) * f, prev.lng + (p.lng - prev.lng) * f));
       }
     }
     prev = p;
   }
-  const fine = decimate(pts, LOD_FINE);
-  const coarse = decimate(pts, LOD_COARSE);
-  const cache: RouteCache = {
-    fine: fine.w, coarse: coarse.w,
-    cellOfFine: [], cellOfCoarse: [],
-    cellKeys: [...cells],
-  };
-  // セルキー→インデックスは後段（色決定）で毎回引くので、キー列だけ保持
-  (cache as any).fineKeys = fine.keys;
-  (cache as any).coarseKeys = coarse.keys;
+  // 描画はフル解像度: 全点のワールド座標と所属セルを保持
+  const w: WPt[] = new Array(pts.length);
+  const ptCells = new Float64Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    w[i] = project(pts[i].lat, pts[i].lng);
+    ptCells[i] = cellKey(pts[i].lat, pts[i].lng);
+  }
+  const cache: RouteCache = { pts: w, ptCells, cellList: [...cells] };
   routeCache.set(key, cache);
-  for (const ck of cache.cellKeys) {
+  for (const ck of cache.cellList) {
     let s = cellRoutes.get(ck);
     if (!s) { s = new Set(); cellRoutes.set(ck, s); }
     s.add(key);
@@ -93,62 +73,63 @@ function processRoute(key: string, r: Route): RouteCache {
   return cache;
 }
 
-// 色ごとにセグメントをまとめた描画データ（LOD別）
-interface ColorBucket { pts: WPt[][]; minX: number; maxX: number; minY: number; maxY: number }
-interface DrawData { fine: ColorBucket[]; coarse: ColorBucket[] }
+// 色ごとのポリライン集合（フル解像度・bbox付き）
+interface Line { pts: WPt[]; minX: number; maxX: number; minY: number; maxY: number }
+type Buckets = Line[][]; // [colorIdx] -> lines
 
-function buildDrawData(routes: Route[]): DrawData {
+function buildBuckets(routes: Route[]): Buckets {
   const active = routes.filter(r => r.id && r.points?.length > 1);
   const activeKeys = new Set(active.map(r => `${r.id}_${r.points.length}`));
   for (const r of active) {
     const key = `${r.id}_${r.points.length}`;
     if (!routeCache.has(key)) processRoute(key, r);
   }
-  const countOfCell = (ck: string): number => {
-    const s = cellRoutes.get(ck);
-    if (!s) return 1;
+  // セル→現在アクティブなルート数 を一括計算（点ごとのSet走査を避ける）
+  const countOfCell = new Map<number, number>();
+  for (const [ck, set] of cellRoutes) {
     let n = 0;
-    for (const k of s) if (activeKeys.has(k)) n++;
-    return Math.max(1, n);
-  };
+    for (const k of set) if (activeKeys.has(k)) n++;
+    if (n > 0) countOfCell.set(ck, n);
+  }
 
-  const make = (lod: 'fine' | 'coarse'): ColorBucket[] => {
-    const buckets: ColorBucket[] = COLORS.map(() => ({ pts: [], minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }));
-    for (const r of active) {
-      const cache = routeCache.get(`${r.id}_${r.points.length}`)! as any;
-      const w: WPt[] = lod === 'fine' ? cache.fine : cache.coarse;
-      const keys: string[] = lod === 'fine' ? cache.fineKeys : cache.coarseKeys;
-      let curIdx = -1; let curLine: WPt[] = [];
-      const flush = () => {
-        if (curIdx >= 0 && curLine.length > 1) {
-          const b = buckets[curIdx];
-          b.pts.push(curLine);
-          for (const p of curLine) {
-            if (p.x < b.minX) b.minX = p.x; if (p.x > b.maxX) b.maxX = p.x;
-            if (p.y < b.minY) b.minY = p.y; if (p.y > b.maxY) b.maxY = p.y;
-          }
+  const buckets: Buckets = COLORS.map(() => []);
+  for (const r of active) {
+    const cache = routeCache.get(`${r.id}_${r.points.length}`)!;
+    const { pts, ptCells } = cache;
+    let curIdx = -1;
+    let curPts: WPt[] = [];
+    let lastPt: WPt | null = null; // 直前の点（色替わり目の橋渡し用）
+    const flush = () => {
+      if (curIdx >= 0 && curPts.length > 1) {
+        let minX = curPts[0].x, maxX = curPts[0].x, minY = curPts[0].y, maxY = curPts[0].y;
+        for (const q of curPts) {
+          if (q.x < minX) minX = q.x; if (q.x > maxX) maxX = q.x;
+          if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y;
         }
-      };
-      for (let i = 0; i < w.length; i++) {
-        const idx = colorIdx(countOfCell(keys[i]));
-        if (idx !== curIdx) {
-          const bridge = curLine.length > 0 ? curLine[curLine.length - 1] : null;
-          flush();
-          curIdx = idx; curLine = bridge ? [bridge, w[i]] : [w[i]];
-        } else {
-          curLine.push(w[i]);
-        }
+        buckets[curIdx].push({ pts: curPts, minX, maxX, minY, maxY });
       }
-      flush();
+    };
+    for (let i = 0; i < pts.length; i++) {
+      const idx = colorIdx(countOfCell.get(ptCells[i]) ?? 1);
+      const p = pts[i];
+      if (idx !== curIdx) {
+        flush();
+        curIdx = idx;
+        curPts = lastPt ? [lastPt, p] : [p]; // 前ランの終点から繋ぐ（隙間防止）
+      } else {
+        curPts.push(p);
+      }
+      lastPt = p;
     }
-    return buckets;
-  };
-  return { fine: make('fine'), coarse: make('coarse') };
+    flush();
+  }
+  return buckets;
 }
 
 interface Props { map: google.maps.Map | null; routes: Route[]; }
 
 export default function DensityOverlay({ map, routes }: Props) {
+  // ハイドレーション中の連続更新は250msデバウンスで1回に
   const [debounced, setDebounced] = useState<Route[]>(routes);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -157,118 +138,104 @@ export default function DensityOverlay({ map, routes }: Props) {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [routes]);
 
-  const drawData = useMemo(() => buildDrawData(debounced), [debounced]);
+  const buckets = useMemo(() => buildBuckets(debounced), [debounced]);
 
   useEffect(() => {
     if (!map) return;
-    const hasData = drawData.fine.some(b => b.pts.length > 0);
-    if (!hasData) return;
+    if (!buckets.some(b => b.length > 0)) return;
 
-    class DensityView extends google.maps.OverlayView {
-      canvas: HTMLCanvasElement | null = null;
-      // 描画済み領域（ワールド座標）とズーム。範囲内のパンは位置合わせのみ。
-      rendered: { zoom: number; wx0: number; wy0: number; wx1: number; wy1: number; anchor: google.maps.LatLng } | null = null;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
 
-      onAdd() {
-        this.canvas = document.createElement('canvas');
-        this.canvas.style.position = 'absolute';
-        this.canvas.style.pointerEvents = 'none';
-        this.getPanes()!.overlayLayer.appendChild(this.canvas);
-      }
-      onRemove() { this.canvas?.remove(); this.canvas = null; this.rendered = null; }
+    const mapType: google.maps.MapType = {
+      tileSize: new google.maps.Size(TILE, TILE),
+      maxZoom: 22,
+      minZoom: 0,
+      name: 'density',
+      alt: 'density',
+      radius: 6378137,
+      projection: null as unknown as google.maps.Projection,
+      getTile(coord: google.maps.Point, zoom: number, ownerDocument: Document): Element {
+        const canvas = ownerDocument.createElement('canvas');
+        canvas.width = TILE * dpr;
+        canvas.height = TILE * dpr;
+        canvas.style.width = `${TILE}px`;
+        canvas.style.height = `${TILE}px`;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return canvas;
 
-      draw() {
-        const proj = this.getProjection();
-        const canvas = this.canvas;
-        if (!proj || !canvas) return;
-        const zoom = map!.getZoom();
-        const bounds = map!.getBounds();
-        const div = map!.getDiv() as HTMLElement;
-        if (zoom == null || !bounds || div.clientWidth === 0) return;
-
-        // 既存レンダリングが同ズームで、現在のビューがカバー範囲内なら位置合わせのみ（パン時はここで即return）
-        if (this.rendered && this.rendered.zoom === zoom) {
-          const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-          const vNW = project(ne.lat(), sw.lng());
-          const vSE = project(sw.lat(), ne.lng());
-          const r = this.rendered;
-          if (vNW.x >= r.wx0 && vSE.x <= r.wx1 && vNW.y >= r.wy0 && vSE.y <= r.wy1) {
-            const px = proj.fromLatLngToDivPixel(r.anchor)!;
-            canvas.style.left = `${px.x}px`;
-            canvas.style.top = `${px.y}px`;
-            return;
-          }
-        }
-        this.repaint(proj, zoom, bounds, div);
-      }
-
-      repaint(proj: google.maps.MapCanvasProjection, zoom: number, bounds: google.maps.LatLngBounds, div: HTMLElement) {
-        const canvas = this.canvas!;
-        const w = div.clientWidth, h = div.clientHeight;
-        const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
-        const nwW = project(ne.lat(), sw.lng());
         const scale = Math.pow(2, zoom);
-        const M = Math.round(Math.max(w, h) * 0.75); // パン余白（広め）
+        const n = scale; // タイル数
+        const tx = ((coord.x % n) + n) % n; // 経度方向のラップ対応
+        const ty = coord.y;
+        if (ty < 0 || ty >= n) return canvas;
 
-        const cw = w + M * 2, ch = h + M * 2;
-        const dpr = window.devicePixelRatio || 1;
-        if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
-          canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
-          canvas.style.width = `${cw}px`; canvas.style.height = `${ch}px`;
-        }
-        const ctx = canvas.getContext('2d')!;
+        // このタイルのワールド範囲
+        const ws = TILE / scale;            // タイル1枚のワールド幅
+        const wx0 = tx * ws, wy0 = ty * ws;
+        const lw = zoom >= 14 ? 5 : zoom >= 12 ? 4 : 3;
+        const pad = (lw + 2) / scale;       // 線幅ぶん外側も描く（タイル境界の欠け防止）
+        const wxMin = wx0 - pad, wxMax = wx0 + ws + pad;
+        const wyMin = wy0 - pad, wyMax = wy0 + ws + pad;
+
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, cw, ch);
-
-        // キャンバス左上のワールド座標と位置
-        const wx0 = nwW.x - M / scale, wy0 = nwW.y - M / scale;
-        const wx1 = nwW.x + (w + M) / scale, wy1 = nwW.y + (h + M) / scale;
-        const anchorLL = unproject(wx0, wy0);
-        const anchor = new google.maps.LatLng(anchorLL.lat, anchorLL.lng);
-        const aPx = proj.fromLatLngToDivPixel(anchor)!;
-        canvas.style.left = `${aPx.x}px`;
-        canvas.style.top = `${aPx.y}px`;
-
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.lineWidth = zoom >= 14 ? 5 : zoom >= 12 ? 4 : 3;
-        ctx.globalAlpha = 0.92;
+        ctx.lineWidth = lw;
+        ctx.globalAlpha = 0.9;
 
-        const buckets = zoom >= 13 ? drawData.fine : drawData.coarse;
-        // 青(回数少)→赤(回数多)の順に描く＝ホットな道が上
+        // 低ズームでは点間隔がサブピクセルになるため間引く（見た目は不変・描画量削減）
+        const stride = zoom >= 13 ? 1 : zoom >= 11 ? 2 : zoom >= 9 ? 4 : 8;
+
+        // 青(1回)→赤(多数)の順に重ねる
         for (let ci = 0; ci < buckets.length; ci++) {
-          const b = buckets[ci];
-          if (b.pts.length === 0) continue;
-          if (b.maxX < wx0 || b.minX > wx1 || b.maxY < wy0 || b.minY > wy1) continue;
+          const lines = buckets[ci];
+          if (lines.length === 0) continue;
           ctx.strokeStyle = COLORS[ci];
           ctx.beginPath();
-          for (const line of b.pts) {
-            // 線単位の簡易カリング
-            let visible = false;
-            for (const p of line) { if (p.x >= wx0 && p.x <= wx1 && p.y >= wy0 && p.y <= wy1) { visible = true; break; } }
-            if (!visible) continue;
-            ctx.moveTo((line[0].x - wx0) * scale, (line[0].y - wy0) * scale);
-            for (let i = 1; i < line.length; i++) {
-              ctx.lineTo((line[i].x - wx0) * scale, (line[i].y - wy0) * scale);
+          let drew = false;
+          for (const line of lines) {
+            if (line.maxX < wxMin || line.minX > wxMax || line.maxY < wyMin || line.minY > wyMax) continue;
+            const pts = line.pts;
+            let penDown = false;
+            let prevIn = false;
+            for (let i = 0; i < pts.length; i += (i + stride < pts.length ? stride : 1)) {
+              const p = pts[i];
+              const inside = p.x >= wxMin && p.x <= wxMax && p.y >= wyMin && p.y <= wyMax;
+              if (!inside && !prevIn) { penDown = false; prevIn = false; continue; }
+              const x = (p.x - wx0) * scale, y = (p.y - wy0) * scale;
+              if (!penDown) {
+                // 範囲外→内に入った場合は直前点から線を引く（切れ目防止）
+                if (i > 0 && !prevIn) {
+                  const q = pts[i - 1];
+                  ctx.moveTo((q.x - wx0) * scale, (q.y - wy0) * scale);
+                  ctx.lineTo(x, y);
+                } else {
+                  ctx.moveTo(x, y);
+                }
+                penDown = true;
+              } else {
+                ctx.lineTo(x, y);
+              }
+              drew = true;
+              prevIn = inside;
+              if (!inside) penDown = false; // 内→外に出たら一旦切る（外側の点までは引いた）
             }
           }
-          ctx.stroke();
+          if (drew) ctx.stroke();
         }
-
-        this.rendered = { zoom, wx0, wy0, wx1, wy1, anchor };
-      }
-    }
-
-    const overlay = new DensityView();
-    overlay.setMap(map);
-    const ro = new ResizeObserver(() => { (overlay as any).rendered = null; overlay.draw(); });
-    ro.observe(map.getDiv());
-
-    return () => {
-      ro.disconnect();
-      overlay.setMap(null);
+        return canvas;
+      },
+      releaseTile() { /* GCに任せる */ },
     };
-  }, [map, drawData]);
+
+    map.overlayMapTypes.push(mapType);
+    return () => {
+      const arr = map.overlayMapTypes;
+      for (let i = arr.getLength() - 1; i >= 0; i--) {
+        if (arr.getAt(i) === mapType) arr.removeAt(i);
+      }
+    };
+  }, [map, buckets]);
 
   return null;
 }
