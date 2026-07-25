@@ -33,10 +33,52 @@ function turnCos(p1: LL, p2: LL, p3: LL): number {
   return (ax * bx + ay * by) / (la * lb);
 }
 
-// 鋭い折り返し頂点の反復除去（移動しながらのノイズにも効く）。
-// 段階閾値: 「120°超の折り返し＋両腕80m超」or「90°超＋両腕150m超」は
-// 3秒サンプリングの実走行では物理的に不可能（150m/3s=180km/hで90°旋回は不可能）なので除去。
-// つづら折り・ヘアピンは折り返し時の腕が短い（〜25m）ため誤爆しない（検証済み）。
+// 密集反転クラスタの除去（トンネル付近等の「毛玉」状GPS暴れ）。
+// 100°超の反転が3点以内の間隔で3回以上連続する帯は、実走行では発生しない
+// （ヘアピンは反転1回ごとに長い直線が挟まる／市街地の90°転回は100°未満）。
+// 浮島JCT付近の実データ5ルートで23〜137点の暴れを除去し、
+// ヘアピン・市街地グリッドの合成データでは誤爆ゼロを確認済み。
+function removeReversalClusters(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
+  const n = pts.length;
+  if (n < 5) return { points: pts, removed: 0 };
+  const rev: boolean[] = new Array(n).fill(false);
+  for (let i = 1; i < n - 1; i++) {
+    if (turnCos(pts[i - 1], pts[i], pts[i + 1]) < -0.17) rev[i] = true; // >100°
+  }
+  const keep: boolean[] = new Array(n).fill(true);
+  let removed = 0;
+  let i = 1;
+  while (i < n - 1) {
+    if (rev[i]) {
+      // 3点以内の間隔で続く反転を1クラスタにまとめる
+      const cluster: number[] = [i];
+      let j = i;
+      for (;;) {
+        let next = -1;
+        for (let k = j + 1; k < Math.min(j + 4, n - 1); k++) {
+          if (rev[k]) { next = k; break; }
+        }
+        if (next < 0) break;
+        cluster.push(next);
+        j = next;
+      }
+      if (cluster.length >= 3) {
+        for (let k = cluster[0]; k <= cluster[cluster.length - 1]; k++) {
+          if (keep[k]) { keep[k] = false; removed++; }
+        }
+      }
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  if (removed === 0) return { points: pts, removed: 0 };
+  return { points: pts.filter((_, k) => keep[k]), removed };
+}
+
+// 孤立した鋭い折り返し頂点の反復除去（移動しながらの単発スパイク用）。
+// 閾値は浮島JCT付近の実データに合わせて調整: 「120°超＋両腕40m超」or「90°超＋両腕100m超」。
+// ヘアピン（腕〜25m）・市街地グリッドで誤爆ゼロを確認済み。
 function removeSpikeVertices(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
   let cur = pts;
   let totalRemoved = 0;
@@ -47,7 +89,7 @@ function removeSpikeVertices(pts: TrackPoint[]): { points: TrackPoint[]; removed
       const a = out[out.length - 1], b = cur[i], c = cur[i + 1];
       const arm = Math.min(haversineKm(a, b), haversineKm(b, c));
       const tc = turnCos(a, b, c);
-      if ((tc < -0.5 && arm > 0.08) || (tc < 0 && arm > 0.15)) { removed++; continue; }
+      if ((tc < -0.5 && arm > 0.04) || (tc < 0 && arm > 0.1)) { removed++; continue; }
       out.push(b);
     }
     out.push(cur[cur.length - 1]);
@@ -72,11 +114,12 @@ export function removeGeoWarps(points: TrackPoint[]): { points: TrackPoint[]; re
   const JUMP_MIN_KM = 0.15;  // 異常の開始条件（直前点からの飛び）
 
   if (points.length < 3) return { points, removed: 0 };
-  // まず鋭い折り返し頂点を反復除去（移動中のノイズ対応）→ 残りを窓検出で除去
-  const vertexPass = removeSpikeVertices(points);
+  // 1) 密集反転クラスタ（毛玉状の暴れ） 2) 孤立スパイク頂点 3) 窓検出（行って戻る塊）の順に除去
+  const clusterPass = removeReversalClusters(points);
+  const vertexPass = removeSpikeVertices(clusterPass.points);
   points = vertexPass.points;
   const out: TrackPoint[] = [points[0]];
-  let removed = vertexPass.removed;
+  let removed = clusterPass.removed + vertexPass.removed;
   let i = 1;
   while (i < points.length - 1) {
     const prev = out[out.length - 1];

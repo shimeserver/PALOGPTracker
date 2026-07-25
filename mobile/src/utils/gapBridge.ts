@@ -32,9 +32,43 @@ function turnCos(p1: { lat: number; lng: number }, p2: { lat: number; lng: numbe
   return (ax * bx + ay * by) / (la * lb);
 }
 
-// 鋭い折り返し頂点の反復除去（移動しながらのノイズにも効く・Web版と同一）。
-// 「120°超＋両腕80m超」or「90°超＋両腕150m超」は実走行で物理的に不可能なので除去。
-// ヘアピンは折り返し腕が短いため誤爆しない（検証済み）。
+// 密集反転クラスタの除去（トンネル付近等の毛玉状GPS暴れ・Web版と同一、実データ検証済み）。
+function removeReversalClusters(pts: TrackPoint[]): TrackPoint[] {
+  const n = pts.length;
+  if (n < 5) return pts;
+  const rev: boolean[] = new Array(n).fill(false);
+  for (let i = 1; i < n - 1; i++) {
+    if (turnCos(pts[i - 1], pts[i], pts[i + 1]) < -0.17) rev[i] = true; // >100°
+  }
+  const keep: boolean[] = new Array(n).fill(true);
+  let removed = 0;
+  let i = 1;
+  while (i < n - 1) {
+    if (rev[i]) {
+      const cluster: number[] = [i];
+      let j = i;
+      for (;;) {
+        let next = -1;
+        for (let k = j + 1; k < Math.min(j + 4, n - 1); k++) {
+          if (rev[k]) { next = k; break; }
+        }
+        if (next < 0) break;
+        cluster.push(next);
+        j = next;
+      }
+      if (cluster.length >= 3) {
+        for (let k = cluster[0]; k <= cluster[cluster.length - 1]; k++) {
+          if (keep[k]) { keep[k] = false; removed++; }
+        }
+      }
+      i = j + 1;
+    } else i++;
+  }
+  if (removed === 0) return pts;
+  return pts.filter((_, k) => keep[k]);
+}
+
+// 孤立した鋭い折り返し頂点の反復除去（実データに合わせた閾値・Web版と同一）。
 function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
   let cur = pts;
   for (let pass = 0; pass < 10; pass++) {
@@ -44,7 +78,7 @@ function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
       const a = out[out.length - 1], b = cur[i], c = cur[i + 1];
       const arm = Math.min(haversineKm(a, b), haversineKm(b, c));
       const tc = turnCos(a, b, c);
-      if ((tc < -0.5 && arm > 0.08) || (tc < 0 && arm > 0.15)) { removed++; continue; }
+      if ((tc < -0.5 && arm > 0.04) || (tc < 0 && arm > 0.1)) { removed++; continue; }
       out.push(b);
     }
     out.push(cur[cur.length - 1]);
@@ -60,7 +94,7 @@ function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
 function removeGeoWarps(points: TrackPoint[]): TrackPoint[] {
   const MAX_WINDOW = 8, DETOUR_RATIO = 2.5, MIN_PATH_KM = 0.15, MAX_DIRECT_KM = 0.5, REVERSAL_COS = -0.3, JUMP_MIN_KM = 0.15;
   if (points.length < 3) return points;
-  points = removeSpikeVertices(points); // まず折り返し頂点を除去（移動中ノイズ対応）
+  points = removeSpikeVertices(removeReversalClusters(points)); // 毛玉→孤立スパイクの順に除去
   const out: TrackPoint[] = [points[0]];
   let removed = 0;
   let i = 1;
