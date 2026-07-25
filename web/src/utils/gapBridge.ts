@@ -33,6 +33,31 @@ function turnCos(p1: LL, p2: LL, p3: LL): number {
   return (ax * bx + ay * by) / (la * lb);
 }
 
+// 鋭い折り返し頂点の反復除去（移動しながらのノイズにも効く）。
+// 段階閾値: 「120°超の折り返し＋両腕80m超」or「90°超＋両腕150m超」は
+// 3秒サンプリングの実走行では物理的に不可能（150m/3s=180km/hで90°旋回は不可能）なので除去。
+// つづら折り・ヘアピンは折り返し時の腕が短い（〜25m）ため誤爆しない（検証済み）。
+function removeSpikeVertices(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
+  let cur = pts;
+  let totalRemoved = 0;
+  for (let pass = 0; pass < 10; pass++) {
+    const out: TrackPoint[] = [cur[0]];
+    let removed = 0;
+    for (let i = 1; i < cur.length - 1; i++) {
+      const a = out[out.length - 1], b = cur[i], c = cur[i + 1];
+      const arm = Math.min(haversineKm(a, b), haversineKm(b, c));
+      const tc = turnCos(a, b, c);
+      if ((tc < -0.5 && arm > 0.08) || (tc < 0 && arm > 0.15)) { removed++; continue; }
+      out.push(b);
+    }
+    out.push(cur[cur.length - 1]);
+    totalRemoved += removed;
+    cur = out;
+    if (removed === 0) break;
+  }
+  return { points: cur, removed: totalRemoved };
+}
+
 // GPSノイズ除去（単発スパイク＋複数点のジグザグ暴れの両対応）。
 // 判定: ①直前点から150m以上飛んで始まり ②少ない直行距離に対し道のりが2.5倍超の寄り道で
 // ③鋭い折り返し（ほぼ反転）を含む —— 3条件が揃った塊だけ除去する。
@@ -47,8 +72,11 @@ export function removeGeoWarps(points: TrackPoint[]): { points: TrackPoint[]; re
   const JUMP_MIN_KM = 0.15;  // 異常の開始条件（直前点からの飛び）
 
   if (points.length < 3) return { points, removed: 0 };
+  // まず鋭い折り返し頂点を反復除去（移動中のノイズ対応）→ 残りを窓検出で除去
+  const vertexPass = removeSpikeVertices(points);
+  points = vertexPass.points;
   const out: TrackPoint[] = [points[0]];
-  let removed = 0;
+  let removed = vertexPass.removed;
   let i = 1;
   while (i < points.length - 1) {
     const prev = out[out.length - 1];
