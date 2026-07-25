@@ -65,91 +65,6 @@ function collapseStraightChords(pts: TrackPoint[]): { points: TrackPoint[]; remo
   return { points: pts.filter((_, k) => !remove[k]), removed };
 }
 
-// 点pから線分abへの概算垂直距離(km)
-function perpKm(p: LL, a: LL, b: LL): number {
-  const kx = 111.32 * Math.cos((a.lat * Math.PI) / 180), ky = 110.57;
-  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky;
-  const px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
-  const l2 = bx * bx + by * by;
-  if (l2 === 0) return Math.hypot(px, py);
-  let t = (px * bx + py * by) / l2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - t * bx, py - t * by);
-}
-
-// 完全直線区間の圧縮: 「弦から20m未満のまま1.2km以上一直線」の中間点を削除する。
-// 本物のGPS記録は直線道路でも横に揺れる/道路は微妙に曲がるため、km単位の完全直線は
-// 補間で作られた合成線（山手トンネルの斜め直線等）。点密度に関係なく検出できる。
-// 仮に本当に真っ直ぐな道路を巻き込んでも、後段のOSRM補間が同じ道をなぞるだけで無害。
-function collapsePerfectLines(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
-  const DEV_KM = 0.02, MIN_SPAN_KM = 1.2, MAX_SPAN_KM = 20;
-  const n = pts.length;
-  const remove: boolean[] = new Array(n).fill(false);
-  let removed = 0;
-  let i = 0;
-  while (i < n - 2) {
-    let best = -1;
-    let j = i + 2;
-    let path = haversineKm(pts[i], pts[i + 1]) + haversineKm(pts[i + 1], pts[i + 2]);
-    while (j < n && path <= MAX_SPAN_KM) {
-      let ok = true;
-      for (let k = i + 1; k < j; k++) {
-        if (perpKm(pts[k], pts[i], pts[j]) > DEV_KM) { ok = false; break; }
-      }
-      if (!ok) break;
-      if (haversineKm(pts[i], pts[j]) >= MIN_SPAN_KM) best = j;
-      if (j + 1 < n) path += haversineKm(pts[j], pts[j + 1]);
-      j++;
-    }
-    if (best > 0) {
-      for (let k = i + 1; k < best; k++) {
-        if (!remove[k]) { remove[k] = true; removed++; }
-      }
-      i = best;
-    } else i++;
-  }
-  if (removed === 0) return { points: pts, removed: 0 };
-  return { points: pts.filter((_, k) => !remove[k]), removed };
-}
-
-// バックトラック切除: 「300m以上進んで80m以内の元の場所へ戻り、途中に80°超の折れがあり、
-// 通過方向が変わらない」区間を除去する。過去の不具合で保存された“道なりに補間された行って戻り”
-// （点が10〜30m間隔と密なため、ジャンプ検出も反転密度検出も効かない）を捕まえる。
-// ・JCTループ: 折れが緩やか（<80°）→保護
-// ・同じ道を引き返す往復/寄り道: 戻り点で進行方向が逆 or 方向が変化→保護（検証済み）
-function removeBacktracks(pts: TrackPoint[]): { points: TrackPoint[]; removed: number } {
-  const RETURN_KM = 0.08, MIN_PATH_KM = 0.3, MAX_PATH_KM = 5, MIN_TURN_COS = Math.cos(80 * Math.PI / 180), HEADING_COS = 0.5;
-  const heading = (i: number): { x: number; y: number } => {
-    const a = pts[Math.max(0, i - 2)], b = pts[Math.min(pts.length - 1, i + 2)];
-    return { x: b.lng - a.lng, y: b.lat - a.lat };
-  };
-  const out: TrackPoint[] = [];
-  let removed = 0;
-  let i = 0;
-  while (i < pts.length) {
-    let cut = -1;
-    let path = 0;
-    for (let j = i + 1; j < pts.length; j++) {
-      path += haversineKm(pts[j - 1], pts[j]);
-      if (path > MAX_PATH_KM) break;
-      if (path > MIN_PATH_KM && haversineKm(pts[i], pts[j]) < RETURN_KM) {
-        let sharp = false;
-        for (let k = i + 1; k < j; k++) {
-          if (turnCos(pts[k - 1], pts[k], pts[k + 1]) < MIN_TURN_COS) { sharp = true; break; }
-        }
-        if (!sharp) continue;
-        const h1 = heading(i), h2 = heading(j);
-        const l1 = Math.hypot(h1.x, h1.y), l2 = Math.hypot(h2.x, h2.y);
-        if (l1 === 0 || l2 === 0) continue;
-        if ((h1.x * h2.x + h1.y * h2.y) / (l1 * l2) >= HEADING_COS) { cut = j; break; }
-      }
-    }
-    out.push(pts[i]);
-    if (cut > 0) { removed += cut - i - 1; i = cut; } else i++;
-  }
-  return { points: out, removed };
-}
-
 // 密集反転クラスタの除去（トンネル付近等の「毛玉」状GPS暴れ）。
 // 100°超の反転が3点以内の間隔で3回以上連続する帯は、実走行では発生しない
 // （ヘアピンは反転1回ごとに長い直線が挟まる／市街地の90°転回は100°未満）。
@@ -233,17 +148,17 @@ export function removeGeoWarps(points: TrackPoint[]): { points: TrackPoint[]; re
   if (points.length < 3) return { points, removed: 0 };
   const original = points;
   const origLen = points.length;
-  // 1) バックトラック 2) 反転クラスタ 3) 孤立スパイク 4) 直線チェーン圧縮 5) 完全直線圧縮 6) 窓検出
-  const backPass = removeBacktracks(points);
-  const clusterPass = removeReversalClusters(backPass.points);
+  // 1) 反転クラスタ 2) 孤立スパイク 3) 直線チェーン圧縮（まばら間隔のみ） 4) 窓検出
+  // 注: バックトラック切除と完全直線圧縮は、湾岸線・アクアライン・海ほたるPA等の
+  // 実走行データを破壊することが12/16の実ルート検証で判明したため自動処理から撤去した。
+  // （合成直線アーティファクトは幾何だけでは実在の直線高速と区別不能 → 手動の✂️区間修正で対応）
+  const clusterPass = removeReversalClusters(points);
   const vertexPass = removeSpikeVertices(clusterPass.points);
   const chordPass = collapseStraightChords(vertexPass.points);
-  const linePass = collapsePerfectLines(chordPass.points);
-  points = linePass.points;
+  points = chordPass.points;
   const out: TrackPoint[] = [points[0]];
-  // 直線圧縮（chord/line）は意図的な大量削除なので暴走ガードの対象外にする
-  let noiseRemoved = backPass.removed + clusterPass.removed + vertexPass.removed;
-  let removed = noiseRemoved + chordPass.removed + linePass.removed;
+  let noiseRemoved = clusterPass.removed + vertexPass.removed;
+  let removed = noiseRemoved + chordPass.removed;
   let i = 1;
   while (i < points.length - 1) {
     const prev = out[out.length - 1];

@@ -32,48 +32,6 @@ function turnCos(p1: { lat: number; lng: number }, p2: { lat: number; lng: numbe
   return (ax * bx + ay * by) / (la * lb);
 }
 
-// 点pから線分abへの概算垂直距離(km)
-function perpKm(p: { lat: number; lng: number }, a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const kx = 111.32 * Math.cos((a.lat * Math.PI) / 180), ky = 110.57;
-  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky;
-  const px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
-  const l2 = bx * bx + by * by;
-  if (l2 === 0) return Math.hypot(px, py);
-  let t = (px * bx + py * by) / l2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - t * bx, py - t * by);
-}
-
-// 完全直線区間の圧縮（弦から20m未満のまま1.2km以上＝合成直線・Web版と同一、検証済み）。
-function collapsePerfectLines(pts: TrackPoint[]): TrackPoint[] {
-  const DEV_KM = 0.02, MIN_SPAN_KM = 1.2, MAX_SPAN_KM = 20;
-  const n = pts.length;
-  const remove: boolean[] = new Array(n).fill(false);
-  let removed = 0;
-  let i = 0;
-  while (i < n - 2) {
-    let best = -1;
-    let j = i + 2;
-    let path = haversineKm(pts[i], pts[i + 1]) + haversineKm(pts[i + 1], pts[i + 2]);
-    while (j < n && path <= MAX_SPAN_KM) {
-      let ok = true;
-      for (let k = i + 1; k < j; k++) {
-        if (perpKm(pts[k], pts[i], pts[j]) > DEV_KM) { ok = false; break; }
-      }
-      if (!ok) break;
-      if (haversineKm(pts[i], pts[j]) >= MIN_SPAN_KM) best = j;
-      if (j + 1 < n) path += haversineKm(pts[j], pts[j + 1]);
-      j++;
-    }
-    if (best > 0) {
-      for (let k = i + 1; k < best; k++) { if (!remove[k]) { remove[k] = true; removed++; } }
-      i = best;
-    } else i++;
-  }
-  if (removed === 0) return pts;
-  return pts.filter((_, k) => !remove[k]);
-}
-
 // 直線チェーン圧縮（記録死亡区間のまばらな直線点列を1本のギャップに・Web版と同一、検証済み）。
 function collapseStraightChords(pts: TrackPoint[]): TrackPoint[] {
   const SEG_MIN_KM = 0.14, TURN_MAX_COS = Math.cos(5 * Math.PI / 180), RUN_MIN_KM = 1.0;
@@ -100,39 +58,6 @@ function collapseStraightChords(pts: TrackPoint[]): TrackPoint[] {
   }
   if (removed === 0) return pts;
   return pts.filter((_, k) => !remove[k]);
-}
-
-// バックトラック切除（密な“行って戻り”・Web版と同一、検証済み）。
-function removeBacktracks(pts: TrackPoint[]): TrackPoint[] {
-  const RETURN_KM = 0.08, MIN_PATH_KM = 0.3, MAX_PATH_KM = 5, MIN_TURN_COS = Math.cos(80 * Math.PI / 180), HEADING_COS = 0.5;
-  const heading = (i: number): { x: number; y: number } => {
-    const a = pts[Math.max(0, i - 2)], b = pts[Math.min(pts.length - 1, i + 2)];
-    return { x: b.lng - a.lng, y: b.lat - a.lat };
-  };
-  const out: TrackPoint[] = [];
-  let i = 0;
-  while (i < pts.length) {
-    let cut = -1;
-    let path = 0;
-    for (let j = i + 1; j < pts.length; j++) {
-      path += haversineKm(pts[j - 1], pts[j]);
-      if (path > MAX_PATH_KM) break;
-      if (path > MIN_PATH_KM && haversineKm(pts[i], pts[j]) < RETURN_KM) {
-        let sharp = false;
-        for (let k = i + 1; k < j; k++) {
-          if (turnCos(pts[k - 1], pts[k], pts[k + 1]) < MIN_TURN_COS) { sharp = true; break; }
-        }
-        if (!sharp) continue;
-        const h1 = heading(i), h2 = heading(j);
-        const l1 = Math.hypot(h1.x, h1.y), l2 = Math.hypot(h2.x, h2.y);
-        if (l1 === 0 || l2 === 0) continue;
-        if ((h1.x * h2.x + h1.y * h2.y) / (l1 * l2) >= HEADING_COS) { cut = j; break; }
-      }
-    }
-    out.push(pts[i]);
-    if (cut > 0) i = cut; else i++;
-  }
-  return out;
 }
 
 // 密集反転クラスタの除去（トンネル付近等の毛玉状GPS暴れ・Web版と同一、実データ検証済み）。
@@ -197,7 +122,7 @@ function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
 function removeGeoWarps(points: TrackPoint[]): TrackPoint[] {
   const MAX_WINDOW = 8, DETOUR_RATIO = 2.5, MIN_PATH_KM = 0.15, MAX_DIRECT_KM = 0.5, REVERSAL_COS = -0.3, JUMP_MIN_KM = 0.15;
   if (points.length < 3) return points;
-  points = collapsePerfectLines(collapseStraightChords(removeSpikeVertices(removeReversalClusters(removeBacktracks(points))))); // 戻り→毛玉→スパイク→直線圧縮×2
+  points = collapseStraightChords(removeSpikeVertices(removeReversalClusters(points))); // 毛玉→スパイク→まばら直線チェーン
   const out: TrackPoint[] = [points[0]];
   let removed = 0;
   let i = 1;
