@@ -183,10 +183,12 @@ export default function DensityOverlay({ map, routes }: Props) {
         ctx.lineWidth = lw;
         ctx.globalAlpha = 0.9;
 
-        // 低ズームでは点間隔がサブピクセルになるため間引く（見た目は不変・描画量削減）
-        const stride = zoom >= 13 ? 1 : zoom >= 11 ? 2 : zoom >= 9 ? 4 : 8;
+        // 超低ズームのみ点を間引く（z10以上はフル解像度＝カーブを削らない）
+        const stride = zoom >= 10 ? 1 : zoom >= 8 ? 4 : 8;
 
-        // 青(1回)→赤(多数)の順に重ねる
+        // 青(1回)→赤(多数)の順に重ねる。
+        // タイルに掛かる線は「全体」を描く（canvasが自動クリップするので正確。
+        // 点単位で切ると、タイルより長い線分が中間タイルで消える）。
         for (let ci = 0; ci < buckets.length; ci++) {
           const lines = buckets[ci];
           if (lines.length === 0) continue;
@@ -196,30 +198,13 @@ export default function DensityOverlay({ map, routes }: Props) {
           for (const line of lines) {
             if (line.maxX < wxMin || line.minX > wxMax || line.maxY < wyMin || line.minY > wyMax) continue;
             const pts = line.pts;
-            let penDown = false;
-            let prevIn = false;
-            for (let i = 0; i < pts.length; i += (i + stride < pts.length ? stride : 1)) {
-              const p = pts[i];
-              const inside = p.x >= wxMin && p.x <= wxMax && p.y >= wyMin && p.y <= wyMax;
-              if (!inside && !prevIn) { penDown = false; prevIn = false; continue; }
-              const x = (p.x - wx0) * scale, y = (p.y - wy0) * scale;
-              if (!penDown) {
-                // 範囲外→内に入った場合は直前点から線を引く（切れ目防止）
-                if (i > 0 && !prevIn) {
-                  const q = pts[i - 1];
-                  ctx.moveTo((q.x - wx0) * scale, (q.y - wy0) * scale);
-                  ctx.lineTo(x, y);
-                } else {
-                  ctx.moveTo(x, y);
-                }
-                penDown = true;
-              } else {
-                ctx.lineTo(x, y);
-              }
-              drew = true;
-              prevIn = inside;
-              if (!inside) penDown = false; // 内→外に出たら一旦切る（外側の点までは引いた）
+            ctx.moveTo((pts[0].x - wx0) * scale, (pts[0].y - wy0) * scale);
+            for (let i = 1; i < pts.length - 1; i += stride) {
+              ctx.lineTo((pts[i].x - wx0) * scale, (pts[i].y - wy0) * scale);
             }
+            const last = pts[pts.length - 1];
+            ctx.lineTo((last.x - wx0) * scale, (last.y - wy0) * scale);
+            drew = true;
           }
           if (drew) ctx.stroke();
         }
