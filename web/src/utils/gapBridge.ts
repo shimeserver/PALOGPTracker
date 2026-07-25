@@ -24,25 +24,59 @@ function haversineKm(a: LL, b: LL): number {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-// GPSワープ（飛び出して戻る孤立点）を位置ベースで除去する。
-// cur が prev/next 双方から大きく離れ、かつ prev と next は近い（実際は移動していない）なら飛びとみなす。
-// タイムスタンプに依存しないので、速度が壊れているルートでも効く。
-export function removeGeoWarps(points: TrackPoint[], spikeKm = 0.25, returnKm = 0.25): { points: TrackPoint[]; removed: number } {
+// p1→p2→p3 の進行方向変化のcos（-1に近いほど鋭い折り返し）
+function turnCos(p1: LL, p2: LL, p3: LL): number {
+  const ax = p2.lng - p1.lng, ay = p2.lat - p1.lat;
+  const bx = p3.lng - p2.lng, by = p3.lat - p2.lat;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (la === 0 || lb === 0) return 1;
+  return (ax * bx + ay * by) / (la * lb);
+}
+
+// GPSノイズ除去（単発スパイク＋複数点のジグザグ暴れの両対応）。
+// 判定: ①直前点から150m以上飛んで始まり ②少ない直行距離に対し道のりが2.5倍超の寄り道で
+// ③鋭い折り返し（ほぼ反転）を含む —— 3条件が揃った塊だけ除去する。
+// 「鋭い折り返し」条件により、JCTの本物のループランプ（緩やかな旋回）は誤爆しない（検証済み）。
+// タイムスタンプ非依存なので速度データが壊れたルートでも効く。
+export function removeGeoWarps(points: TrackPoint[]): { points: TrackPoint[]; removed: number } {
+  const MAX_WINDOW = 8;      // 除去する塊の最大点数
+  const DETOUR_RATIO = 2.5;  // 道のり/直行 がこれ超なら寄り道
+  const MIN_PATH_KM = 0.15;
+  const MAX_DIRECT_KM = 0.5; // 始点終点がこれ以上離れていたら実走とみなす
+  const REVERSAL_COS = -0.3; // 約107°超の折り返しをノイズの証拠とする
+  const JUMP_MIN_KM = 0.15;  // 異常の開始条件（直前点からの飛び）
+
   if (points.length < 3) return { points, removed: 0 };
   const out: TrackPoint[] = [points[0]];
   let removed = 0;
-  for (let i = 1; i < points.length - 1; i++) {
+  let i = 1;
+  while (i < points.length - 1) {
     const prev = out[out.length - 1];
-    const cur = points[i];
-    const next = points[i + 1];
-    const dOut = haversineKm(prev, cur);
-    const dBack = haversineKm(cur, next);
-    const dSkip = haversineKm(prev, next);
-    if (dOut > spikeKm && dBack > spikeKm && dSkip < returnKm) { removed++; continue; }
-    out.push(cur);
+    let cut = 0;
+    if (haversineKm(prev, points[i]) >= JUMP_MIN_KM) {
+      for (let w = 1; w <= MAX_WINDOW && i + w < points.length; w++) {
+        const next = points[i + w];
+        const direct = haversineKm(prev, next);
+        if (direct > MAX_DIRECT_KM) continue;
+        let path = haversineKm(prev, points[i]);
+        for (let k = i; k < i + w - 1; k++) path += haversineKm(points[k], points[k + 1]);
+        path += haversineKm(points[i + w - 1], next);
+        if (path < Math.max(MIN_PATH_KM, direct * DETOUR_RATIO)) continue;
+        const seq: LL[] = [prev, ...points.slice(i, i + w), next];
+        let rev = false;
+        for (let k = 1; k < seq.length - 1; k++) {
+          if (turnCos(seq[k - 1], seq[k], seq[k + 1]) < REVERSAL_COS) { rev = true; break; }
+        }
+        if (!rev) continue;
+        cut = w;
+        break;
+      }
+    }
+    if (cut > 0) { removed += cut; i += cut; }
+    else { out.push(points[i]); i++; }
   }
   out.push(points[points.length - 1]);
-  // 3割超を飛びと判定した場合はデータ自体が壊れている可能性が高いので、破壊を避けて元に戻す。
+  // 3割超を除去と判定した場合はデータ自体が壊れている可能性が高いので、破壊を避けて元に戻す。
   if (removed > points.length * 0.3) return { points, removed: 0 };
   return { points: out, removed };
 }
