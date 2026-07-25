@@ -32,6 +32,39 @@ function turnCos(p1: { lat: number; lng: number }, p2: { lat: number; lng: numbe
   return (ax * bx + ay * by) / (la * lb);
 }
 
+// バックトラック切除（密な“行って戻り”・Web版と同一、検証済み）。
+function removeBacktracks(pts: TrackPoint[]): TrackPoint[] {
+  const RETURN_KM = 0.08, MIN_PATH_KM = 0.3, MAX_PATH_KM = 5, MIN_TURN_COS = Math.cos(80 * Math.PI / 180), HEADING_COS = 0.5;
+  const heading = (i: number): { x: number; y: number } => {
+    const a = pts[Math.max(0, i - 2)], b = pts[Math.min(pts.length - 1, i + 2)];
+    return { x: b.lng - a.lng, y: b.lat - a.lat };
+  };
+  const out: TrackPoint[] = [];
+  let i = 0;
+  while (i < pts.length) {
+    let cut = -1;
+    let path = 0;
+    for (let j = i + 1; j < pts.length; j++) {
+      path += haversineKm(pts[j - 1], pts[j]);
+      if (path > MAX_PATH_KM) break;
+      if (path > MIN_PATH_KM && haversineKm(pts[i], pts[j]) < RETURN_KM) {
+        let sharp = false;
+        for (let k = i + 1; k < j; k++) {
+          if (turnCos(pts[k - 1], pts[k], pts[k + 1]) < MIN_TURN_COS) { sharp = true; break; }
+        }
+        if (!sharp) continue;
+        const h1 = heading(i), h2 = heading(j);
+        const l1 = Math.hypot(h1.x, h1.y), l2 = Math.hypot(h2.x, h2.y);
+        if (l1 === 0 || l2 === 0) continue;
+        if ((h1.x * h2.x + h1.y * h2.y) / (l1 * l2) >= HEADING_COS) { cut = j; break; }
+      }
+    }
+    out.push(pts[i]);
+    if (cut > 0) i = cut; else i++;
+  }
+  return out;
+}
+
 // 密集反転クラスタの除去（トンネル付近等の毛玉状GPS暴れ・Web版と同一、実データ検証済み）。
 function removeReversalClusters(pts: TrackPoint[]): TrackPoint[] {
   const n = pts.length;
@@ -94,7 +127,7 @@ function removeSpikeVertices(pts: TrackPoint[]): TrackPoint[] {
 function removeGeoWarps(points: TrackPoint[]): TrackPoint[] {
   const MAX_WINDOW = 8, DETOUR_RATIO = 2.5, MIN_PATH_KM = 0.15, MAX_DIRECT_KM = 0.5, REVERSAL_COS = -0.3, JUMP_MIN_KM = 0.15;
   if (points.length < 3) return points;
-  points = removeSpikeVertices(removeReversalClusters(points)); // 毛玉→孤立スパイクの順に除去
+  points = removeSpikeVertices(removeReversalClusters(removeBacktracks(points))); // 行って戻り→毛玉→孤立スパイクの順
   const out: TrackPoint[] = [points[0]];
   let removed = 0;
   let i = 1;
