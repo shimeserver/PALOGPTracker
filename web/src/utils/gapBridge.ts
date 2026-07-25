@@ -1,4 +1,5 @@
 import type { TrackPoint } from '../firebase/data';
+import { corridorRoute } from './osmCorridor';
 
 // GPSギャップ（トンネル・電波切れ）を道なりに補間する。
 // 判定は「距離」ベース（タイムスタンプが壊れたルートでも機能する）。
@@ -284,18 +285,22 @@ export async function snapWholeRoute(points: TrackPoint[], mode?: string): Promi
 
 export interface BridgeResult {
   points: TrackPoint[];
-  bridged: number;      // 実際に補間したギャップ数
+  bridged: number;      // 実際に補間したギャップ数（コリドー含む）
+  corridorBridged: number; // うち高速コリドー(OSM直読み)で補間した数
   detected: number;     // 検出したギャップ数
-  rejectedDetour: number; // 妥当な経路なし(直線の2.5倍超)で除外した数
-  failed: number;       // OSRM取得失敗（オフライン等）した数
+  rejectedDetour: number; // 妥当な経路なし(遠回り)で除外した数
+  failed: number;       // 経路取得失敗（オフライン等）した数
 }
 
+const MAX_CORRIDOR_CALLS = 5; // Overpass負荷を抑えるため1回のクリーンアップでの上限
+
 export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<BridgeResult> {
-  if (points.length < 2) return { points, bridged: 0, detected: 0, rejectedDetour: 0, failed: 0 };
+  if (points.length < 2) return { points, bridged: 0, corridorBridged: 0, detected: 0, rejectedDetour: 0, failed: 0 };
   const profile = mode === 'walk' ? 'foot' : mode === 'bicycle' ? 'cycling' : 'driving';
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const out: TrackPoint[] = [points[0]];
-  let bridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0;
+  let bridged = 0, corridorBridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0;
+  let corridorCalls = 0;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
@@ -305,31 +310,46 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string): Promise<B
     if (isGap) detected++;
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {
+      // まずOSRM。公開OSRMは有料道路を使わないため、拒否/遠回りになった1km以上のギャップは
+      // 高速コリドー（OSM直読み・osmCorridor）にフォールバックする（山手トンネル等の自動修復）。
+      let path: LL[] | null = null;
+      let viaCorridor = false;
       const coords = await osrmRoute(profile, prev, cur);
-      if (!coords) { fails++; failed++; }
       if (coords && coords.length >= 2) {
         fails = 0;
-        const path = coords.map(([lng, lat]) => ({ lat, lng }));
+        const p = coords.map(([lng, lat]) => ({ lat, lng }));
+        let total = 0;
+        for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
+        if (total >= distKm * 0.9 && total <= distKm * MAX_DETOUR_RATIO) path = p;
+      } else {
+        fails++;
+      }
+      if (!path && profile === 'driving' && distKm >= 1 && corridorCalls < MAX_CORRIDOR_CALLS) {
+        corridorCalls++;
+        const cc = await corridorRoute(prev, cur).catch(() => null);
+        if (cc && cc.length >= 2) { path = cc.map(([lng, lat]) => ({ lat, lng })); viaCorridor = true; }
+      }
+      if (path) {
         const segDist: number[] = [];
         let total = 0;
         for (let k = 1; k < path.length; k++) { const d = haversineKm(path[k - 1], path[k]); segDist.push(d); total += d; }
-        const detourRatio = distKm > 0 ? total / distKm : 1;
-        const implausible = detourRatio > MAX_DETOUR_RATIO;
-        if (implausible) rejectedDetour++;
-        if (total >= distKm * 0.9 && !implausible) {
-          bridged++;
-          // 端点を除く中間点を距離比例のタイムスタンプで挿入（速度は後段で再計算）
-          let cum = 0;
-          for (let k = 1; k < path.length - 1; k++) {
-            cum += segDist[k - 1];
-            const frac = total > 0 ? cum / total : 0;
-            const ts = Math.round(prev.timestamp + frac * (cur.timestamp - prev.timestamp));
-            out.push({ lat: path[k].lat, lng: path[k].lng, timestamp: ts, speed: 0 });
-          }
+        bridged++;
+        if (viaCorridor) corridorBridged++;
+        // 端点を除く中間点を距離比例のタイムスタンプで挿入（速度は後段で再計算）
+        let cum = 0;
+        for (let k = 1; k < path.length - 1; k++) {
+          cum += segDist[k - 1];
+          const frac = total > 0 ? cum / total : 0;
+          const ts = Math.round(prev.timestamp + frac * (cur.timestamp - prev.timestamp));
+          out.push({ lat: path[k].lat, lng: path[k].lng, timestamp: ts, speed: 0 });
         }
+      } else if (coords) {
+        rejectedDetour++; // OSRMは返したが遠回り、コリドーも不成立
+      } else {
+        failed++;
       }
     }
     out.push(cur);
   }
-  return { points: out, bridged, detected, rejectedDetour, failed };
+  return { points: out, bridged, corridorBridged, detected, rejectedDetour, failed };
 }

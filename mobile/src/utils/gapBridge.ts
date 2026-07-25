@@ -1,4 +1,5 @@
 import { TrackPoint } from '../types';
+import { corridorRoute } from './osmCorridor';
 
 // GPSギャップ（トンネル・電波切れ）を道なりに補間する。
 // 判定は「距離」ベース（タイムスタンプが壊れていても機能する）。
@@ -10,7 +11,7 @@ const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
 const GAP_MIN_DIST_KM = 0.3;  // 連続点がこれ以上離れていればギャップ（GPS喪失）とみなす
 const MAX_GAPS = 15;          // 1ルートで補間するギャップ数の上限（時間/負荷の保険）
 const CALL_TIMEOUT_MS = 6000; // OSRM1回あたりのタイムアウト
-const TOTAL_BUDGET_MS = 15000; // 補間全体の時間予算（保存がハングしないよう）
+const TOTAL_BUDGET_MS = 30000; // 補間全体の時間予算（コリドーフォールバック分を含む）
 const MAX_FAILS = 2;          // 連続失敗（=オフライン想定）でそれ以降の補間を諦める
 const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
 
@@ -182,6 +183,7 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
   const out: TrackPoint[] = [points[0]];
   let bridged = 0;
   let fails = 0;
+  let corridorCalls = 0;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
@@ -191,11 +193,25 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
 
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {
+      // まずOSRM。公開OSRMは有料道路（首都高・アクアライン等）を使わないため、
+      // 拒否/遠回りになった1km以上のギャップは高速コリドー（OSM直読み）にフォールバック。
+      let path: { lat: number; lng: number }[] | null = null;
       const coords = await osrmRoute(prev, cur);
       if (!coords) { fails++; }
       if (coords && coords.length >= 2) {
         fails = 0;
-        const path = coords.map(([lng, lat]) => ({ lat, lng }));
+        const p = coords.map(([lng, lat]) => ({ lat, lng }));
+        let total = 0;
+        for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
+        if (total <= distKm * MAX_DETOUR_RATIO && total >= distKm * 0.9) path = p;
+      }
+      // コリドーフォールバック（時間予算が10秒以上残っている場合のみ・最大2回）
+      if (!path && distKm >= 1 && corridorCalls < 2 && deadline - Date.now() > 10000) {
+        corridorCalls++;
+        const cc = await corridorRoute(prev, cur).catch(() => null);
+        if (cc && cc.length >= 2) path = cc.map(([lng, lat]) => ({ lat, lng }));
+      }
+      if (path) {
         const segDist: number[] = [];
         let total = 0;
         for (let k = 1; k < path.length; k++) {
@@ -203,17 +219,14 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
           segDist.push(d);
           total += d;
         }
-        const detourRatio = distKm > 0 ? total / distKm : 1;
-        if (detourRatio <= MAX_DETOUR_RATIO && total >= distKm * 0.9) {
-          bridged++;
-          // 端点を除く中間点を距離比例のタイムスタンプで挿入（速度は0=実測点のみで平均/最高を算出）
-          let cum = 0;
-          for (let k = 1; k < path.length - 1; k++) {
-            cum += segDist[k - 1];
-            const frac = total > 0 ? cum / total : 0;
-            const ts = Math.round(prev.timestamp + frac * (cur.timestamp - prev.timestamp));
-            out.push({ lat: path[k].lat, lng: path[k].lng, timestamp: ts, speed: 0 });
-          }
+        bridged++;
+        // 端点を除く中間点を距離比例のタイムスタンプで挿入（速度は0=実測点のみで平均/最高を算出）
+        let cum = 0;
+        for (let k = 1; k < path.length - 1; k++) {
+          cum += segDist[k - 1];
+          const frac = total > 0 ? cum / total : 0;
+          const ts = Math.round(prev.timestamp + frac * (cur.timestamp - prev.timestamp));
+          out.push({ lat: path[k].lat, lng: path[k].lng, timestamp: ts, speed: 0 });
         }
       }
     }
