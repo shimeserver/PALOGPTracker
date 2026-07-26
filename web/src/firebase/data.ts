@@ -99,7 +99,13 @@ const PTS_CHUNK = 1500;
 const CHUNKS_PER_COMMIT = 15;
 
 // 点列チャンクの書き込み共通処理。col='pts'（現行データ）/ 'bak'（修復前バックアップ1世代）
-async function writeChunkDocs(routeId: string, col: 'pts' | 'bak', points: TrackPoint[]): Promise<void> {
+// finalizeDoc を渡すと、最後のチャンクバッチと同一コミットで本体docを更新する。
+// メタ（フィンガープリント）は全チャンク書き込み成功と原子的に切り替わるため、
+// 「チャンクは新・メタは旧」のままローカルキャッシュが恒久的に古い点列を返す事故を防ぐ。
+async function writeChunkDocs(
+  routeId: string, col: 'pts' | 'bak', points: TrackPoint[],
+  finalizeDoc?: Record<string, unknown>
+): Promise<void> {
   // 既存チャンクを消してから書き直す（チャンク数が減るケースに対応）
   const old = await getDocs(collection(db, 'routes', routeId, col));
   if (!old.empty) {
@@ -110,10 +116,12 @@ async function writeChunkDocs(routeId: string, col: 'pts' | 'bak', points: Track
   const chunkCount = Math.ceil(points.length / PTS_CHUNK);
   for (let start = 0; start < chunkCount; start += CHUNKS_PER_COMMIT) {
     const batch = writeBatch(db);
+    const isLast = start + CHUNKS_PER_COMMIT >= chunkCount;
     for (let i = start; i < Math.min(start + CHUNKS_PER_COMMIT, chunkCount); i++) {
       batch.set(doc(db, 'routes', routeId, col, String(i).padStart(4, '0')),
         { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
     }
+    if (isLast && finalizeDoc) batch.update(doc(db, 'routes', routeId), finalizeDoc);
     await batch.commit();
   }
 }
@@ -148,7 +156,13 @@ export async function saveRouteChunked(route: Omit<Route, 'id'>): Promise<string
     ptsChunked: true,
     pointCount: points.length,
   });
-  await writeRoutePointChunks(docRef.id, points);
+  try {
+    await writeRoutePointChunks(docRef.id, points);
+  } catch (e) {
+    // 分割コミット途中の失敗で「メタあり・点列欠損」の壊れたルートを一覧に残さない
+    await deleteDoc(docRef).catch(() => {});
+    throw e;
+  }
   return docRef.id;
 }
 
@@ -292,9 +306,9 @@ export async function updateRoutePoints(routeId: string, points: TrackPoint[]): 
     }
   } catch { /* バックアップ失敗時は上書きのみ実行 */ }
   const { totalDistance, avgSpeed, maxSpeed, endTime } = computeRouteStats(points);
-  // pointsはチャンク側に保存し、本体からは除去（旧形式ルートもこの操作でチャンク化される）
-  await writeRoutePointChunks(routeId, points);
-  await updateDoc(doc(db, 'routes', routeId), {
+  // pointsはチャンク側に保存し、本体からは除去（旧形式ルートもこの操作でチャンク化される）。
+  // メタ更新は最終チャンクと同一コミット（キャッシュのフィンガープリント整合性のため）
+  await writeChunkDocs(routeId, 'pts', points, {
     points: deleteField(), ptsChunked: true, pointCount: points.length,
     totalDistance, avgSpeed, maxSpeed,
     endTime: Timestamp.fromMillis(endTime),
@@ -311,8 +325,7 @@ export async function restoreRoutePoints(routeId: string): Promise<TrackPoint[]>
   const current = await readCurrentPoints(routeId);
   const { totalDistance, avgSpeed, maxSpeed, endTime } = computeRouteStats(bakPoints);
   await writeChunkDocs(routeId, 'bak', current); // 現在値をbakへ（交換）
-  await writeRoutePointChunks(routeId, bakPoints);
-  await updateDoc(doc(db, 'routes', routeId), {
+  await writeChunkDocs(routeId, 'pts', bakPoints, {
     points: deleteField(), ptsChunked: true, pointCount: bakPoints.length,
     totalDistance, avgSpeed, maxSpeed,
     endTime: Timestamp.fromMillis(endTime),

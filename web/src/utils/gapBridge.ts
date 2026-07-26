@@ -378,17 +378,23 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
       // 超長距離ギャップ＝フェリー等の可能性が高い。誤って偽の陸路を描かないよう自動補間しない。
       sea++;
       markUnresolved('sea');
-    } else if (isGap && (bridged >= maxGaps || fails >= MAX_FAILS || Date.now() >= deadline)) {
-      markUnresolved('limit');
     } else if (isGap) {
       // 0) まず既知トンネル（山手・アクア・湾岸線・関越等）: 同梱ジオメトリで
-      //    決定論的に補間。オフラインでも動き、OSRMの有料道路回避問題も受けない。
+      //    決定論的に補間。オフライン・OSRM連続失敗・時間切れでも動くため、
+      //    上限ゲートより先に判定する（車モード限定: 徒歩/自転車=公共交通ルートの
+      //    ギャップを道路トンネルで埋めない。りんかい線等の並走鉄道の誤マッチ防止）。
+      const tm = profile === 'driving' ? findTunnelPath(prev, cur, distKm) : null;
+      if (!tm && (bridged >= maxGaps || fails >= MAX_FAILS || Date.now() >= deadline)) {
+        markUnresolved('limit');
+        opts?.onProgress?.(detected, totalGaps);
+        out.push(cur);
+        continue;
+      }
       let path: LL[] | null = null;
       let viaCorridor = false;
       let viaTunnel = false;
       let detourTotal = 0;
       let coords: [number, number][] | null = null;
-      const tm = findTunnelPath(prev, cur, distKm);
       if (tm) {
         path = tm.path;
         viaTunnel = true;

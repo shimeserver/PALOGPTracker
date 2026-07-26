@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Modal, TextInput, Alert, ScrollView, ActivityIndicator,
@@ -105,16 +105,19 @@ export default function LandmarksScreen() {
     }
   };
 
-  // 追加モーダルを開く: 現在地の近隣施設候補も取得（タップで名前・カテゴリ自動入力）
+  // 追加モーダルを開く: 現在地の近隣施設候補も取得（タップで名前・カテゴリ自動入力）。
+  // モーダルを閉じて開き直した場合に古いレスポンスで上書きしないようトークンで守る
+  const poiReqIdRef = useRef(0);
   const openAddModal = async () => {
     setShowAdd(true);
     setNearbyPois([]);
+    const reqId = ++poiReqIdRef.current;
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
       const loc = await Location.getCurrentPositionAsync({});
       const pois = await fetchNearbyPois(loc.coords.latitude, loc.coords.longitude);
-      setNearbyPois(pois);
+      if (poiReqIdRef.current === reqId) setNearbyPois(pois);
     } catch { /* 候補なしでも手入力できるので黙って続行 */ }
   };
 

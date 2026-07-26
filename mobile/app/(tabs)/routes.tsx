@@ -49,7 +49,7 @@ export default function RoutesScreen() {
   );
 
   const filteredRoutes = useMemo(() => routes.filter(r =>
-    (!search || r.name.toLowerCase().includes(search.toLowerCase())) &&
+    (!search || (r.name ?? '').toLowerCase().includes(search.toLowerCase())) &&
     (!carTagFilter || (r.tags ?? []).includes(carTagFilter)) &&
     (!yearFilter || new Date(r.startTime).getFullYear() === yearFilter)
   ), [routes, search, carTagFilter, yearFilter]);

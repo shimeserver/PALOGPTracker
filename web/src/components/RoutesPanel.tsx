@@ -108,7 +108,8 @@ export default function RoutesPanel({
   };
 
   const handleAssignTag = async (tag: TagDef) => {
-    const targets = routes.filter(r => selectedIds.has(r.id!));
+    // 検索で非表示中のルートに誤ってタグを付けないよう、表示中(filtered)のみを対象にする
+    const targets = filtered.filter(r => selectedIds.has(r.id!));
     await Promise.all(targets.map(r => {
       if (r.tags.includes(tag.id!)) return Promise.resolve();
       const newTags = [...r.tags, tag.id!];
@@ -118,8 +119,9 @@ export default function RoutesPanel({
   };
 
   const handleClearTags = async () => {
-    if (!confirm(`${selectedIds.size}件のルートからタグをすべて削除しますか？`)) return;
-    const targets = routes.filter(r => selectedIds.has(r.id!));
+    const targets = filtered.filter(r => selectedIds.has(r.id!));
+    if (targets.length === 0) return;
+    if (!confirm(`${targets.length}件のルートからタグをすべて削除しますか？`)) return;
     await Promise.all(targets.map(r =>
       updateRouteTags(r.id!, []).then(() => onUpdateRoute({ ...r, tags: [] }))
     ));

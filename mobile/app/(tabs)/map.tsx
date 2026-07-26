@@ -71,10 +71,11 @@ var initialized = false;
 
 var locIcon = L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function makeLandmarkIcon(name, emoji, color){
   var short = name.length > 8 ? name.slice(0,8)+'…' : name;
   var c = color || '#f59e0b';
-  var html = '<div class="lm-pin"><div class="lm-pin-dot" style="background:'+c+'">'+(emoji||'★')+'</div><div class="lm-pin-tail" style="background:'+c+'"></div><div class="lm-label">'+short+'</div></div>';
+  var html = '<div class="lm-pin"><div class="lm-pin-dot" style="background:'+c+'">'+(emoji||'★')+'</div><div class="lm-pin-tail" style="background:'+c+'"></div><div class="lm-label">'+esc(short)+'</div></div>';
   return L.divIcon({html:html,iconSize:[90,52],iconAnchor:[45,40],className:''});
 }
 
@@ -125,8 +126,8 @@ window.setLandmarks = function(landmarks){
   landmarks.forEach(function(lm){
     var m = L.marker([lm.lat,lm.lng],{icon:makeLandmarkIcon(lm.name,lm.emoji,lm.color),zIndexOffset:500}).addTo(map);
     m.bindPopup(
-      '<div style="line-height:1.6"><b style="font-size:14px">'+lm.name+'</b><br>'+
-      '<span style="color:#2563eb;font-size:11px">'+lm.category+'</span>'+
+      '<div style="line-height:1.6"><b style="font-size:14px">'+esc(lm.name)+'</b><br>'+
+      '<span style="color:#2563eb;font-size:11px">'+esc(lm.category)+'</span>'+
       '<span style="color:#f59e0b;font-weight:700;margin-left:8px">'+lm.visitCount+'回</span></div>',
       {maxWidth:200}
     );

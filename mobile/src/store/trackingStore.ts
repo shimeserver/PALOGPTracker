@@ -120,7 +120,6 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         reentryRejects++;
         continue;
       }
-      reentryRejects = 0;
       const pt: TrackPoint = {
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
@@ -140,6 +139,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
           if (distKm / dtH > MODE_MAX_KMH[get().trackingMode]) continue;
         }
       }
+      reentryRejects = 0; // 採用が確定した点のみカウンタをリセット（ジャンプ棄却点では再武装しない）
       newPoints.push(pt);
     }
     if (newPoints.length === 0) return;

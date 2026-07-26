@@ -74,6 +74,7 @@ window.initRoute = function(points) {
   }
 };
 
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 window.setLandmarks = function(landmarks) {
   lmMarkers.forEach(function(m){map.removeLayer(m);});
   lmMarkers = [];
@@ -82,7 +83,7 @@ window.setLandmarks = function(landmarks) {
     var emoji = lm.emoji || '★';
     var dotCls = 'pin-lm-dot' + (isFuel ? ' pin-lm-fuel' : '');
     var short = lm.name.length > 8 ? lm.name.slice(0,8)+'…' : lm.name;
-    var html = '<div class="pin-lm"><div class="'+dotCls+'">'+emoji+'</div><div class="pin-lm-label">'+short+'</div></div>';
+    var html = '<div class="pin-lm"><div class="'+dotCls+'">'+emoji+'</div><div class="pin-lm-label">'+escHtml(short)+'</div></div>';
     var icon = L.divIcon({html:html,className:'',iconSize:[80,42],iconAnchor:[40,34]});
     var m = L.marker([lm.lat,lm.lng],{icon:icon}).addTo(map);
     m.on('click',function(){
@@ -168,6 +169,7 @@ export default function RouteDetailScreen() {
   const [newSpotCategory, setNewSpotCategory] = useState('その他');
   const [saving, setSaving] = useState(false);
   const [nearbyPois, setNearbyPois] = useState<NearbyPoi[]>([]);
+  const poiReqIdRef = useRef(0);
 
   // 名前変更
   const [renameModal, setRenameModal] = useState(false);
@@ -245,9 +247,13 @@ export default function RouteDetailScreen() {
         setAddStopModal({ lat: msg.lat, lng: msg.lng, durationMs: msg.durationMs });
         setNewSpotName('');
         setNewSpotCategory('その他');
-        // 近隣施設候補を取得（タップで名前・カテゴリ自動入力）
+        // 近隣施設候補を取得（タップで名前・カテゴリ自動入力）。
+        // 別の停車ピンを素早くタップした場合に古いレスポンスで上書きしないようトークンで守る
+        const reqId = ++poiReqIdRef.current;
         setNearbyPois([]);
-        fetchNearbyPois(msg.lat, msg.lng).then(setNearbyPois).catch(() => {});
+        fetchNearbyPois(msg.lat, msg.lng)
+          .then(pois => { if (poiReqIdRef.current === reqId) setNearbyPois(pois); })
+          .catch(() => {});
       } else if (msg.type === 'tapLandmark' && msg.category === 'ガソリンスタンド' && route) {
         openFuelModal(msg);
       }

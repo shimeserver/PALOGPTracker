@@ -22,7 +22,10 @@ export interface TunnelMatch { name: string; path: LL[]; lenKm: number }
 
 // ギャップ（prev→cur）が既知トンネルの線形に沿うなら、その区間の実ジオメトリを返す。
 // 途中でGPSが切れた/復帰したケースにも対応するため、端点を線形上に射影して部分区間を使う。
+// 上下線は別線形として収録されているため、全候補から「進行方向が順方向」を優先し、
+// 同着なら端点距離の小さい方（=正しい車線）を選ぶ。配列順で決めると反対車線に化ける。
 export function findTunnelPath(prev: LL, cur: LL, gapKm: number): TunnelMatch | null {
+  let best: (TunnelMatch & { forward: boolean; endDist: number }) | null = null;
   for (const t of TUNNELS) {
     // 粗いバウンディングボックスで即除外（全国データでも高速）
     let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
@@ -44,13 +47,15 @@ export function findTunnelPath(prev: LL, cur: LL, gapKm: number): TunnelMatch | 
       if (dc < jDist) { jDist = dc; jBest = k; }
     }
     if (iDist > MATCH_KM || jDist > MATCH_KM) continue;
-    // 順方向はそのまま、逆方向は反転して使う（対面通行トンネル=飛騨等への対応。
-    // 上下線が別線形のトンネルは正方向の線形が先にマッチするため実害なし）
+    // 順方向はそのまま、逆方向は反転して使う（対面通行トンネル=飛騨等への対応）
     let sub: LL[];
+    let forward: boolean;
     if (jBest > iBest) {
       sub = t.path.slice(iBest, jBest + 1).map(([lng, lat]) => ({ lat, lng }));
+      forward = true;
     } else if (iBest > jBest) {
       sub = t.path.slice(jBest, iBest + 1).map(([lng, lat]) => ({ lat, lng })).reverse();
+      forward = false;
     } else {
       continue; // 同一頂点
     }
@@ -59,7 +64,13 @@ export function findTunnelPath(prev: LL, cur: LL, gapKm: number): TunnelMatch | 
     if (len < MIN_SUB_KM) continue;
     // トンネルはほぼ直線なので、ギャップ直線距離と大きく乖離する切り出しは誤マッチとして棄却
     if (len > gapKm * 1.6 + 1) continue;
-    return { name: t.name, path: sub, lenKm: len };
+    const endDist = iDist + jDist;
+    const cand = { name: t.name, path: sub, lenKm: len, forward, endDist };
+    if (!best
+      || (cand.forward && !best.forward)
+      || (cand.forward === best.forward && cand.endDist < best.endDist)) {
+      best = cand;
+    }
   }
-  return null;
+  return best ? { name: best.name, path: best.path, lenKm: best.lenKm } : null;
 }

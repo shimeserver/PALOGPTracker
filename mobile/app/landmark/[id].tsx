@@ -15,6 +15,11 @@ import { useAuthStore } from '../../src/store/authStore';
 import { Landmark, Visit } from '../../src/types';
 import { SPOT_CATEGORIES, categorizeByName } from '../../src/utils/spotCategory';
 
+// <script>ブロック内に埋め込むため、"</script>" によるスクリプト脱出とpopupへの
+// HTML注入を防ぐ（スポット名はOverpass由来・自由編集可能=信頼できない文字列）
+const htmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const jsSafe = (s: string) => JSON.stringify(htmlEsc(s)).replace(/</g, '\\u003c');
+
 const LANDMARK_MAP_HTML = (lat: number, lng: number, name: string) => `<!DOCTYPE html>
 <html>
 <head>
@@ -31,7 +36,7 @@ var map = L.map('map',{zoomControl:false}).setView([${lat},${lng}],15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
   attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19
 }).addTo(map);
-L.marker([${lat},${lng}]).addTo(map).bindPopup(${JSON.stringify(name)});
+L.marker([${lat},${lng}]).addTo(map).bindPopup(${jsSafe(name)});
 </script>
 </body>
 </html>`;

@@ -51,7 +51,14 @@ export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
     ptsChunked: true,
     pointCount: points.length,
   });
-  await writePointChunks(docRef.id, points);
+  try {
+    await writePointChunks(docRef.id, points);
+  } catch (e) {
+    // 分割コミット途中の失敗で「メタあり・点列欠損」の壊れたルートを一覧に残さない
+    // （保存自体は呼び出し側の再送キューが再試行する）
+    await deleteDoc(docRef).catch(() => {});
+    throw e;
+  }
   return docRef.id;
 }
 

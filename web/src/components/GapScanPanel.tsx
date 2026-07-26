@@ -48,9 +48,9 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
   const [batchStatus, setBatchStatus] = useState('');
   const [lastResult, setLastResult] = useState<Record<string, string>>({});
 
-  // points 未ロード（チャンク補充中）のルート数
+  // points 未ロード（チャンク補充中）のルート数。点が本当に無いルートは対象外
   const loadingCount = useMemo(
-    () => routes.filter(r => (!r.points || r.points.length === 0)).length,
+    () => routes.filter(r => (!r.points || r.points.length === 0) && (r.pointCount ?? 0) > 0).length,
     [routes]
   );
 

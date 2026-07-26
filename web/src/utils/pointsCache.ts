@@ -21,6 +21,8 @@ function openDb(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+  // 失敗したPromiseを保持し続けると全セッションでキャッシュ不能になるため、次回は再試行する
+  dbPromise.catch(() => { dbPromise = null; });
   return dbPromise;
 }
 

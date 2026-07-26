@@ -372,8 +372,9 @@ export async function importRouteHistoryCsv(
       // チャンク保存（routes/{id}/pts/{i}）になったため実質上限なし。
       // 旧上限3000点は4000km級の統合ルートを1.5km間隔に間引いてカクカクにしていた。
       const maxPts = 120000;
+      const step = Math.ceil(pts.length / maxPts);
       const sampledPts = pts.length > maxPts
-        ? pts.filter((_, idx) => idx % Math.ceil(pts.length / maxPts) === 0)
+        ? pts.filter((_, idx) => idx % step === 0 || idx === pts.length - 1) // 終点は必ず残す（endTime整合）
         : pts;
 
       let totalDist = 0;

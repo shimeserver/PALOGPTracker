@@ -357,12 +357,14 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints([...route.points]);
       setEditMode(true);
       setPlayback(false);
+      setUnresolvedGaps([]); // 前回クリーンアップの⚠マーカーを持ち越さない
     };
 
     const cancelEditMode = () => {
       setEditMode(false); setEditPoints([]);
       setHasUndo(false);
       setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
+      setUnresolvedGaps([]);
       prevEditPointsRef.current = [];
     };
 
@@ -482,15 +484,23 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     }, []);
 
+    // 編集配列が置き換わる操作では、旧配列のインデックスを持つ区間修正候補を必ず破棄する
+    // （古いa/b indexで applySectionGeometry すると別区間を壊す/範囲外エラーになるため）
+    const invalidateSectionState = () => {
+      setSectionCandidates(null); setSectionMode(false); setSectionStart(null);
+    };
+
     const saveUndo = (pts: TrackPoint[]) => {
       prevEditPointsRef.current = pts;
       setHasUndo(true);
+      invalidateSectionState();
     };
 
     const applyUndo = () => {
       setEditPoints(prevEditPointsRef.current);
       prevEditPointsRef.current = [];
       setHasUndo(false);
+      invalidateSectionState();
     };
 
 
@@ -550,6 +560,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const pts = await restoreRoutePoints(route.id);
         setEditPoints(pts);
         setUnresolvedGaps([]);
+        invalidateSectionState();
         const speeds = pts.map(p => p.speed).filter(s => s > 0 && s <= 300);
         let totalDist = 0;
         for (let i = 1; i < pts.length; i++) totalDist += haversineKm(pts[i-1], pts[i]);
@@ -557,6 +568,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           ...route, points: pts, totalDistance: totalDist,
           avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
           maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
+          endTime: pts[pts.length - 1].timestamp,
+          hasBackup: true, backupAt: Date.now(),
         });
         alert('修復前の状態に戻しました。');
       } catch (e) {
@@ -582,6 +595,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           totalDistance: totalDist,
           avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
           maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
+          endTime: fixed[fixed.length - 1].timestamp,
+          // updateRoutePoints がバックアップを作るので「↩ 修復前に戻す」を即座に出せるようにする
+          hasBackup: true, backupAt: Date.now(),
         };
         onUpdateRoute?.(updatedRoute);
         setEditMode(false);
