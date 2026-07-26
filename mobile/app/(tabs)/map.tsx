@@ -5,13 +5,31 @@ import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
 import { useTrackingStore } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { Landmark } from '../../src/types';
 import HelpModal from '../../src/components/HelpModal';
+import { categoryEmoji } from '../../src/utils/spotCategory';
+
+// スポットカテゴリのフィルタグループ（Web版と同じ体系）
+type SpotCatKey = 'conv' | 'gas' | 'sapa' | 'other';
+const SPOT_CAT_CHIPS: { key: SpotCatKey; icon: string }[] = [
+  { key: 'conv', icon: '🏪' }, { key: 'gas', icon: '⛽' }, { key: 'sapa', icon: '🅿️' }, { key: 'other', icon: '★' },
+];
+const SPOT_CAT_DEFAULT: Record<SpotCatKey, boolean> = { conv: true, gas: true, sapa: true, other: true };
+const SPOT_CAT_STORE_KEY = 'palogp_map_spot_cats';
+function spotCatKey(category: string): SpotCatKey {
+  if (category === 'コンビニ') return 'conv';
+  if (category === 'ガソリンスタンド') return 'gas';
+  if (category === 'SA/PA') return 'sapa';
+  return 'other';
+}
+const SPOT_CAT_COLORS: Record<SpotCatKey, string> = { conv: '#0284c7', gas: '#16a34a', sapa: '#7c3aed', other: '#f59e0b' };
 
 const MAP_HELP = [
   { q: 'マップの見方は？', a: '青い点が現在地、黄色ピンがスポット、青いラインが現在の記録ルートです。' },
   { q: 'スポットをタップすると？', a: 'スポット名・カテゴリ・来訪回数がポップアップ表示されます。' },
+  { q: 'スポットの絞り込みは？', a: '右側の★ボタンで 🏪コンビニ / ⛽ガソリンスタンド / 🅿️SA・PA / ★その他 の表示切り替えができます。' },
   { q: '記録中バッジの意味は？', a: '「記録中 ○pt」は現在のルート記録ポイント数です。記録タブで停止できます。' },
   { q: 'マップが動かない？', a: 'インターネット接続を確認してください。地図タイルはOpenStreetMapを使用しています。' },
 ];
@@ -53,9 +71,10 @@ var initialized = false;
 
 var locIcon = L.divIcon({html:'<div class="loc-pulse"></div>',iconSize:[18,18],iconAnchor:[9,9],className:''});
 
-function makeLandmarkIcon(name){
+function makeLandmarkIcon(name, emoji, color){
   var short = name.length > 8 ? name.slice(0,8)+'…' : name;
-  var html = '<div class="lm-pin"><div class="lm-pin-dot">★</div><div class="lm-pin-tail"></div><div class="lm-label">'+short+'</div></div>';
+  var c = color || '#f59e0b';
+  var html = '<div class="lm-pin"><div class="lm-pin-dot" style="background:'+c+'">'+(emoji||'★')+'</div><div class="lm-pin-tail" style="background:'+c+'"></div><div class="lm-label">'+short+'</div></div>';
   return L.divIcon({html:html,iconSize:[90,52],iconAnchor:[45,40],className:''});
 }
 
@@ -104,7 +123,7 @@ window.setLandmarks = function(landmarks){
   landmarkMarkers.forEach(function(m){map.removeLayer(m);}); landmarkMarkers=[];
   if(!landmarks) return;
   landmarks.forEach(function(lm){
-    var m = L.marker([lm.lat,lm.lng],{icon:makeLandmarkIcon(lm.name),zIndexOffset:500}).addTo(map);
+    var m = L.marker([lm.lat,lm.lng],{icon:makeLandmarkIcon(lm.name,lm.emoji,lm.color),zIndexOffset:500}).addTo(map);
     m.bindPopup(
       '<div style="line-height:1.6"><b style="font-size:14px">'+lm.name+'</b><br>'+
       '<span style="color:#2563eb;font-size:11px">'+lm.category+'</span>'+
@@ -150,6 +169,10 @@ export default function MapScreen() {
   const showHelp = helpTarget === 'map';
   const [following, setFollowing] = useState(false);
   const [headingMode, setHeadingMode] = useState(false);
+  // スポットカテゴリフィルタ（設定は端末に保存）
+  const [spotCats, setSpotCats] = useState<Record<SpotCatKey, boolean>>(SPOT_CAT_DEFAULT);
+  const spotCatsRef = useRef(spotCats);
+  const [showCatChips, setShowCatChips] = useState(false);
   const headingSubRef = useRef<Location.LocationSubscription | null>(null);
   const mapContainerRef = useRef<View>(null);
   const { width: screenW, height: screenH } = useWindowDimensions();
@@ -177,6 +200,41 @@ export default function MapScreen() {
     return () => { cancelled = true; sub?.remove(); };
   }, [isTracking]);
 
+  // フィルタ適用済みのランドマーク送信ペイロードを作る
+  const lmPayload = (data: Landmark[], cats: Record<SpotCatKey, boolean>) =>
+    data
+      .filter(lm => cats[spotCatKey(lm.category)])
+      .map(lm => ({
+        lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount,
+        emoji: categoryEmoji(lm.category), color: SPOT_CAT_COLORS[spotCatKey(lm.category)],
+      }));
+
+  const pushLandmarks = (cats: Record<SpotCatKey, boolean>) => {
+    if (!initialized.current) return;
+    webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lmPayload(landmarksRef.current, cats))});true;`);
+  };
+
+  // 保存済みフィルタ設定を復元
+  useEffect(() => {
+    AsyncStorage.getItem(SPOT_CAT_STORE_KEY).then(v => {
+      if (!v) return;
+      try {
+        const parsed = { ...SPOT_CAT_DEFAULT, ...JSON.parse(v) };
+        setSpotCats(parsed);
+        spotCatsRef.current = parsed;
+        pushLandmarks(parsed);
+      } catch {}
+    }).catch(() => {});
+  }, []);
+
+  const toggleSpotCat = (key: SpotCatKey) => {
+    const next = { ...spotCats, [key]: !spotCats[key] };
+    setSpotCats(next);
+    spotCatsRef.current = next;
+    AsyncStorage.setItem(SPOT_CAT_STORE_KEY, JSON.stringify(next)).catch(() => {});
+    pushLandmarks(next);
+  };
+
   useEffect(() => {
     if (!user) return;
     // UID が変わった（アカウント切替）ときはキャッシュをクリアして再フェッチ
@@ -186,10 +244,7 @@ export default function MapScreen() {
     getUserLandmarks(user.uid).then(data => {
       setLandmarks(data);
       landmarksRef.current = data;
-      if (initialized.current) {
-        const lms = data.map(lm => ({ lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount }));
-        webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lms)});true;`);
-      }
+      pushLandmarks(spotCatsRef.current);
     });
   }, [user]);
 
@@ -242,7 +297,7 @@ export default function MapScreen() {
     const lat = currentLocation?.lat ?? 35.681236;
     const lng = currentLocation?.lng ?? 139.767125;
     const route = currentPoints.map(p => [p.lat, p.lng]);
-    const lms = landmarksRef.current.map(lm => ({ lat: lm.lat, lng: lm.lng, name: lm.name, category: lm.category, visitCount: lm.visitCount }));
+    const lms = lmPayload(landmarksRef.current, spotCatsRef.current);
     webviewRef.current?.injectJavaScript(
       `window.initMap(${lat},${lng},${JSON.stringify(route)},${JSON.stringify(lms)});true;`
     );
@@ -314,6 +369,25 @@ export default function MapScreen() {
         bounces={false}
       />
         </View>
+      </View>
+
+      {/* スポットカテゴリフィルタ（★ボタンで展開） */}
+      <View style={styles.catRow}>
+        {showCatChips && SPOT_CAT_CHIPS.map(c => (
+          <TouchableOpacity
+            key={c.key}
+            style={[styles.catChip, !spotCats[c.key] && styles.catChipOff]}
+            onPress={() => toggleSpotCat(c.key)}
+          >
+            <Text style={[styles.catChipText, !spotCats[c.key] && { opacity: 0.35 }]}>{c.icon}</Text>
+          </TouchableOpacity>
+        ))}
+        <TouchableOpacity
+          style={[styles.catToggleBtn, showCatChips && styles.catToggleBtnActive]}
+          onPress={() => setShowCatChips(v => !v)}
+        >
+          <Text style={{ fontSize: 15 }}>{showCatChips ? '✕' : '★'}</Text>
+        </TouchableOpacity>
       </View>
 
       {/* 主観モードボタン（常時表示） */}
@@ -392,4 +466,10 @@ const styles = StyleSheet.create({
   },
   recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22c55e', marginRight: 8 },
   recordingText: { color: '#1f2937', fontSize: 13, fontWeight: '600' },
+  catRow: { position: 'absolute', bottom: 180, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  catToggleBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+  catToggleBtnActive: { backgroundColor: '#fef3c7' },
+  catChip: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 3 },
+  catChipOff: { backgroundColor: '#f3f4f6' },
+  catChipText: { fontSize: 15 },
 });

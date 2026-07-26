@@ -13,6 +13,7 @@ import {
 } from '../../src/firebase/landmarks';
 import { useAuthStore } from '../../src/store/authStore';
 import { Landmark, Visit } from '../../src/types';
+import { SPOT_CATEGORIES, categorizeByName } from '../../src/utils/spotCategory';
 
 const LANDMARK_MAP_HTML = (lat: number, lng: number, name: string) => `<!DOCTYPE html>
 <html>
@@ -44,6 +45,11 @@ export default function LandmarkDetailScreen() {
   const [showVisitModal, setShowVisitModal] = useState(false);
   const [visitNote, setVisitNote] = useState('');
   const [saving, setSaving] = useState(false);
+  // 名前・カテゴリ編集
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editCategory, setEditCategory] = useState('その他');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const load = async () => {
     if (!id || !user) return;
@@ -78,6 +84,21 @@ export default function LandmarkDetailScreen() {
     }
   };
 
+  const handleSaveEdit = async () => {
+    if (!id || !landmark) return;
+    const name = editName.trim() || landmark.name;
+    setSavingEdit(true);
+    try {
+      await updateLandmark(id, { name, category: editCategory });
+      setLandmark({ ...landmark, name, category: editCategory });
+      setShowEditModal(false);
+    } catch (e: any) {
+      Alert.alert('エラー', e.message ?? '保存に失敗しました');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleAddPhoto = async () => {
     if (!user || !id || !landmark) return;
     const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7 });
@@ -107,7 +128,13 @@ export default function LandmarkDetailScreen() {
 
       {/* ヘッダー */}
       <View style={styles.header}>
-        <Text style={styles.name}>{landmark.name}</Text>
+        <TouchableOpacity
+          onPress={() => { setEditName(landmark.name); setEditCategory(landmark.category || 'その他'); setShowEditModal(true); }}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+        >
+          <Text style={[styles.name, { flexShrink: 1 }]}>{landmark.name}</Text>
+          <Text style={{ color: '#4fc3f7', fontSize: 15 }}>✏️</Text>
+        </TouchableOpacity>
         <Text style={styles.category}>{landmark.category}</Text>
         <Text style={styles.visits}>来訪 {landmark.visitCount}回</Text>
         {landmark.lastVisit && (
@@ -158,6 +185,45 @@ export default function LandmarkDetailScreen() {
         ))}
         {visits.length === 0 && <Text style={styles.noData}>来訪履歴なし</Text>}
       </View>
+
+      {/* 名前・カテゴリ編集モーダル */}
+      <Modal visible={showEditModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>スポットを編集</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="スポット名"
+              placeholderTextColor="#555"
+              value={editName}
+              onChangeText={(v) => { setEditName(v); const c = categorizeByName(v); if (c) setEditCategory(c); }}
+            />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+              {SPOT_CATEGORIES.map(c => (
+                <TouchableOpacity
+                  key={c}
+                  onPress={() => setEditCategory(c)}
+                  style={{
+                    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, marginRight: 8,
+                    backgroundColor: editCategory === c ? '#4fc3f7' : '#0f3460',
+                  }}
+                >
+                  <Text style={{ color: editCategory === c ? '#1a1a2e' : '#ccc', fontSize: 13, fontWeight: editCategory === c ? '700' : '400' }}>{c}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={[styles.modalBtn, (savingEdit || !editName.trim()) && { opacity: 0.6 }]}
+              onPress={handleSaveEdit} disabled={savingEdit || !editName.trim()}
+            >
+              <Text style={styles.modalBtnText}>{savingEdit ? '保存中...' : '保存する'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowEditModal(false)}>
+              <Text style={styles.modalCancel}>キャンセル</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* 来訪記録モーダル */}
       <Modal visible={showVisitModal} transparent animationType="slide">

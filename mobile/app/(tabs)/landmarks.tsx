@@ -17,16 +17,18 @@ import { deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../src/firebase/config';
 import HelpModal from '../../src/components/HelpModal';
 import { useUiStore } from '../../src/store/uiStore';
+import { SPOT_CATEGORIES, categorizeByName } from '../../src/utils/spotCategory';
+import { fetchNearbyPois, NearbyPoi } from '../../src/utils/nearbyPoi';
 
 const LANDMARKS_HELP = [
-  { q: 'スポットの追加方法は？', a: '「＋ 現在地にスポットを追加」ボタンで現在地にスポットを登録できます。' },
+  { q: 'スポットの追加方法は？', a: '「＋ 現在地にスポットを追加」ボタンで現在地にスポットを登録できます。近くの施設が候補に出るので、タップすると名前とカテゴリが自動入力されます。' },
+  { q: '名前・カテゴリの変更は？', a: 'スポット詳細画面の ✏️ をタップすると編集できます。' },
+  { q: '🪄 自動分類とは？', a: '名前からコンビニ・ガソリンスタンド・SA/PAを判定して一括でカテゴリを付けます。手動で設定したカテゴリは変更しません。' },
   { q: '来訪回数を増やすには？', a: 'スポット詳細画面の「来訪を記録」ボタンを押すと来訪回数が増えます。' },
   { q: 'スポットを削除するには？', a: 'リスト右のゴミ箱アイコンをタップすると削除できます。' },
-  { q: '写真はどこに保存される？', a: '写真はFirebase Storageに保存され、永続的に表示されます。' },
-  { q: 'カテゴリの変更は？', a: 'スポット詳細画面から編集できます。' },
 ];
 
-const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
+const CATEGORIES = SPOT_CATEGORIES;
 type SortKey = 'visitCount' | 'category' | 'lastVisit';
 
 export default function LandmarksScreen() {
@@ -41,6 +43,8 @@ export default function LandmarksScreen() {
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [nearbyPois, setNearbyPois] = useState<NearbyPoi[]>([]);
+  const [autoCategorizing, setAutoCategorizing] = useState(false);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'landmarks';
 
@@ -101,6 +105,52 @@ export default function LandmarksScreen() {
     }
   };
 
+  // 追加モーダルを開く: 現在地の近隣施設候補も取得（タップで名前・カテゴリ自動入力）
+  const openAddModal = async () => {
+    setShowAdd(true);
+    setNearbyPois([]);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const loc = await Location.getCurrentPositionAsync({});
+      const pois = await fetchNearbyPois(loc.coords.latitude, loc.coords.longitude);
+      setNearbyPois(pois);
+    } catch { /* 候補なしでも手入力できるので黙って続行 */ }
+  };
+
+  // 名前からコンビニ/ガソスタ/SA・PAを一括分類（判定と一致済みのものは触らない）
+  const handleAutoCategorize = () => {
+    const targets = landmarks
+      .map(lm => ({ lm, cat: categorizeByName(lm.name) }))
+      .filter((x): x is { lm: Landmark; cat: string } => x.cat != null && x.lm.category !== x.cat);
+    if (targets.length === 0) {
+      Alert.alert('自動分類', '分類できるスポットはありませんでした。\n（名前からコンビニ・ガソリンスタンド・SA/PAと判定できるものが対象です）');
+      return;
+    }
+    const counts: Record<string, number> = {};
+    targets.forEach(t => { counts[t.cat] = (counts[t.cat] ?? 0) + 1; });
+    const summary = Object.entries(counts).map(([c, n]) => `${c}: ${n}件`).join(' / ');
+    Alert.alert('自動分類', `${targets.length}件を分類します。\n${summary}`, [
+      { text: 'キャンセル', style: 'cancel' },
+      {
+        text: '実行', onPress: async () => {
+          setAutoCategorizing(true);
+          try {
+            for (const { lm, cat } of targets) {
+              await updateLandmark(lm.id!, { category: cat });
+              setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, category: cat } : x));
+            }
+            Alert.alert('完了', `${targets.length}件を分類しました`);
+          } catch {
+            Alert.alert('エラー', '分類中にエラーが発生しました');
+          } finally {
+            setAutoCategorizing(false);
+          }
+        },
+      },
+    ]);
+  };
+
   const handleDelete = (lm: Landmark) => {
     Alert.alert('削除確認', `「${lm.name}」を削除しますか？`, [
       { text: 'キャンセル', style: 'cancel' },
@@ -152,7 +202,7 @@ export default function LandmarksScreen() {
   return (
     <View style={styles.container}>
       <HelpModal visible={showHelp} onClose={() => setHelpTarget(null)} title="スポット画面の使い方" items={LANDMARKS_HELP} />
-      <TouchableOpacity style={styles.addButton} onPress={() => setShowAdd(true)}>
+      <TouchableOpacity style={styles.addButton} onPress={openAddModal}>
         <Text style={styles.addButtonText}>＋ 現在地にスポットを追加</Text>
       </TouchableOpacity>
 
@@ -169,6 +219,14 @@ export default function LandmarksScreen() {
             </Text>
           </TouchableOpacity>
         ))}
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          style={[styles.sortBtn, autoCategorizing && { opacity: 0.5 }]}
+          onPress={handleAutoCategorize}
+          disabled={autoCategorizing}
+        >
+          <Text style={styles.sortBtnText}>{autoCategorizing ? '分類中…' : '🪄'}</Text>
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -196,8 +254,27 @@ export default function LandmarksScreen() {
             </TouchableOpacity>
           </View>
 
+          {nearbyPois.length > 0 && (
+            <View style={{ marginBottom: 16 }}>
+              <Text style={styles.label}>📍 近くの施設（タップで自動入力）</Text>
+              <View style={{ backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#e8eaed' }}>
+                {nearbyPois.map((p, i) => (
+                  <TouchableOpacity
+                    key={`${p.name}-${i}`}
+                    onPress={() => { setName(p.name); setCategory(p.category); }}
+                    style={{ paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: i < nearbyPois.length - 1 ? 1 : 0, borderBottomColor: '#f3f4f6', backgroundColor: name === p.name ? '#eff6ff' : 'transparent' }}
+                  >
+                    <Text style={{ fontSize: 14, color: '#1f2937' }}>
+                      {p.name} <Text style={{ color: '#9ca3af', fontSize: 11 }}>{p.category}・{p.distM}m</Text>
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
           <Text style={styles.label}>スポット名</Text>
-          <TextInput style={styles.input} value={name} onChangeText={setName}
+          <TextInput style={styles.input} value={name}
+            onChangeText={(v) => { setName(v); const c = categorizeByName(v); if (c) setCategory(c); }}
             placeholder="例: お気に入りのカフェ" placeholderTextColor="#9ca3af" />
 
           <Text style={styles.label}>カテゴリ</Text>

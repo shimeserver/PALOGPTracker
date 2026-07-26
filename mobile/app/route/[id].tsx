@@ -8,6 +8,8 @@ import { saveLandmark, getUserLandmarks, recordVisit, recordVisitOnly } from '..
 import { Route, TrackingMode } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
 import { detectStops, matchStopsToLandmarks, StopCluster } from '../../src/utils/visitDetection';
+import { SPOT_CATEGORIES, categorizeByName, categoryEmoji } from '../../src/utils/spotCategory';
+import { fetchNearbyPois, NearbyPoi } from '../../src/utils/nearbyPoi';
 
 function formatDate(ms: number) {
   return new Date(ms).toLocaleString('ja-JP');
@@ -18,7 +20,7 @@ function formatDuration(startMs: number, endMs: number) {
   return `${Math.floor(mins / 60)}時間${mins % 60}分`;
 }
 
-const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
+const CATEGORIES = SPOT_CATEGORIES;
 
 const MAP_HTML = `<!DOCTYPE html>
 <html>
@@ -77,7 +79,7 @@ window.setLandmarks = function(landmarks) {
   lmMarkers = [];
   landmarks.forEach(function(lm){
     var isFuel = lm.category === 'ガソリンスタンド';
-    var emoji = isFuel ? '⛽' : '★';
+    var emoji = lm.emoji || '★';
     var dotCls = 'pin-lm-dot' + (isFuel ? ' pin-lm-fuel' : '');
     var short = lm.name.length > 8 ? lm.name.slice(0,8)+'…' : lm.name;
     var html = '<div class="pin-lm"><div class="'+dotCls+'">'+emoji+'</div><div class="pin-lm-label">'+short+'</div></div>';
@@ -165,6 +167,12 @@ export default function RouteDetailScreen() {
   const [newSpotName, setNewSpotName] = useState('');
   const [newSpotCategory, setNewSpotCategory] = useState('その他');
   const [saving, setSaving] = useState(false);
+  const [nearbyPois, setNearbyPois] = useState<NearbyPoi[]>([]);
+
+  // 名前変更
+  const [renameModal, setRenameModal] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [savingRename, setSavingRename] = useState(false);
 
   // 給油モーダル
   const [fuelModal, setFuelModal] = useState<{ name: string; lat: number; lng: number } | null>(null);
@@ -205,7 +213,7 @@ export default function RouteDetailScreen() {
         }
       }
       // ランドマーク表示
-      const lmData = landmarks.map(lm => ({ id: lm.id, name: lm.name, category: lm.category, lat: lm.lat, lng: lm.lng }));
+      const lmData = landmarks.map(lm => ({ id: lm.id, name: lm.name, category: lm.category, lat: lm.lat, lng: lm.lng, emoji: categoryEmoji(lm.category) }));
       if (initialized.current) {
         webviewRef.current?.injectJavaScript(`window.setLandmarks(${JSON.stringify(lmData)});true;`);
       }
@@ -237,6 +245,9 @@ export default function RouteDetailScreen() {
         setAddStopModal({ lat: msg.lat, lng: msg.lng, durationMs: msg.durationMs });
         setNewSpotName('');
         setNewSpotCategory('その他');
+        // 近隣施設候補を取得（タップで名前・カテゴリ自動入力）
+        setNearbyPois([]);
+        fetchNearbyPois(msg.lat, msg.lng).then(setNearbyPois).catch(() => {});
       } else if (msg.type === 'tapLandmark' && msg.category === 'ガソリンスタンド' && route) {
         openFuelModal(msg);
       }
@@ -300,6 +311,22 @@ export default function RouteDetailScreen() {
       Alert.alert('エラー', e.message ?? '保存に失敗しました');
     } finally {
       setSavingFuel(false);
+    }
+  };
+
+  const handleSaveRename = async () => {
+    if (!route?.id) return;
+    const name = renameValue.trim();
+    if (!name) return;
+    setSavingRename(true);
+    try {
+      await updateRoute(route.id, { name });
+      setRoute(r => r ? { ...r, name } : r);
+      setRenameModal(false);
+    } catch {
+      Alert.alert('エラー', '名前の変更に失敗しました');
+    } finally {
+      setSavingRename(false);
     }
   };
 
@@ -425,7 +452,10 @@ export default function RouteDetailScreen() {
       )}
 
       <View style={styles.panel}>
-        <Text style={styles.routeName}>{route.name}</Text>
+        <TouchableOpacity onPress={() => { setRenameValue(route.name); setRenameModal(true); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={styles.routeName} numberOfLines={1}>{route.name}</Text>
+          <Text style={{ color: '#4fc3f7', fontSize: 14 }}>✏️</Text>
+        </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, gap: 10 }}>
           <Text style={styles.routeDate}>{formatDate(route.startTime)}</Text>
           <TouchableOpacity onPress={handleOpenEditMode} style={{ backgroundColor: '#1e3a5f', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3 }}>
@@ -481,11 +511,32 @@ export default function RouteDetailScreen() {
             {addStopModal && (
               <Text style={styles.modalSub}>{Math.round(addStopModal.durationMs / 60000)}分滞在したエリア</Text>
             )}
+            {nearbyPois.length > 0 && (
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: '#9ca3af', fontSize: 11, fontWeight: '600', marginBottom: 6 }}>📍 近くの施設（タップで自動入力）</Text>
+                <View style={{ maxHeight: 130, borderWidth: 1, borderColor: '#f3f4f6', borderRadius: 8 }}>
+                  <ScrollView>
+                    {nearbyPois.map((p, i) => (
+                      <TouchableOpacity
+                        key={`${p.name}-${i}`}
+                        onPress={() => { setNewSpotName(p.name); setNewSpotCategory(p.category); }}
+                        style={{ paddingVertical: 8, paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', backgroundColor: newSpotName === p.name ? '#eff6ff' : '#fff' }}
+                      >
+                        <Text style={{ fontSize: 13, color: '#1f2937' }}>
+                          {categoryEmoji(p.category)} {p.name}
+                          <Text style={{ color: '#9ca3af', fontSize: 11 }}>  {p.distM}m</Text>
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+            )}
             <TextInput
               style={styles.input}
               placeholder="スポット名"
               value={newSpotName}
-              onChangeText={setNewSpotName}
+              onChangeText={(v) => { setNewSpotName(v); const c = categorizeByName(v); if (c) setNewSpotCategory(c); }}
               autoFocus
             />
             <Text style={styles.catLabel}>カテゴリ</Text>
@@ -586,6 +637,34 @@ export default function RouteDetailScreen() {
               </TouchableOpacity>
             </View>
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* 名前変更モーダル */}
+      <Modal visible={renameModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>ルート名を変更</Text>
+            <TextInput
+              style={styles.input}
+              value={renameValue}
+              onChangeText={setRenameValue}
+              placeholder="ルート名"
+              autoFocus
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setRenameModal(false)}>
+                <Text style={styles.cancelBtnText}>キャンセル</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.saveBtn, (!renameValue.trim() || savingRename) && styles.saveBtnDisabled]}
+                onPress={handleSaveRename}
+                disabled={!renameValue.trim() || savingRename}
+              >
+                <Text style={styles.saveBtnText}>{savingRename ? '保存中...' : '保存'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 

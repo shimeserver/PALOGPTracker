@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, TextInput, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
 import { getUserRoutesMetadata, getUserRoutesMetadataSince, deleteRoute, RouteMetadata } from '../../src/firebase/routes';
+import { getUserCars } from '../../src/firebase/cars';
 import { loadCachedRoutes, saveRoutesCache, clearRoutesCache, mergeRoutes } from '../../src/utils/routeCache';
 import HelpModal from '../../src/components/HelpModal';
 import { useUiStore } from '../../src/store/uiStore';
@@ -10,7 +11,8 @@ import { useUiStore } from '../../src/store/uiStore';
 const ROUTES_HELP = [
   { q: 'ルートの見方は？', a: 'タップすると詳細マップが開きます。長押しで削除できます。' },
   { q: 'アイコンの意味は？', a: '🚗 車での記録、🚶 徒歩・公共交通での記録です。' },
-  { q: 'ルート名を変えるには？', a: '詳細画面から編集できます。' },
+  { q: 'ルート名を変えるには？', a: '詳細画面のルート名の横にある ✏️ をタップすると変更できます。' },
+  { q: '絞り込みは？', a: '検索欄で名前検索、その下のチップで車両・年の絞り込みができます。' },
   { q: 'ルートが消えてしまった？', a: '引っ張って更新（プルダウン）してみてください。Firebaseと同期します。' },
 ];
 
@@ -30,6 +32,27 @@ export default function RoutesScreen() {
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'routes';
   const loadedUidRef = useRef<string | null>(null);
+  // 検索・絞り込み（車両=タグID、年）
+  const [search, setSearch] = useState('');
+  const [carTagFilter, setCarTagFilter] = useState<string | null>(null);
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  const [cars, setCars] = useState<{ id?: string; nickname: string; tagId?: string }[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    getUserCars(user.uid).then(setCars).catch(() => {});
+  }, [user?.uid]);
+
+  const years = useMemo(
+    () => Array.from(new Set(routes.map(r => new Date(r.startTime).getFullYear()))).sort((a, b) => b - a),
+    [routes]
+  );
+
+  const filteredRoutes = useMemo(() => routes.filter(r =>
+    (!search || r.name.toLowerCase().includes(search.toLowerCase())) &&
+    (!carTagFilter || (r.tags ?? []).includes(carTagFilter)) &&
+    (!yearFilter || new Date(r.startTime).getFullYear() === yearFilter)
+  ), [routes, search, carTagFilter, yearFilter]);
 
   // 起動時 / アカウント切替時: キャッシュを即表示 → 差分フェッチ
   useEffect(() => {
@@ -156,18 +179,52 @@ export default function RoutesScreen() {
           <Text style={styles.syncText}>同期中...</Text>
         </View>
       )}
+      {/* 検索・絞り込み */}
+      <View style={styles.filterArea}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="ルート名で検索..."
+          placeholderTextColor="#9ca3af"
+          value={search}
+          onChangeText={setSearch}
+        />
+        {(cars.some(c => c.tagId) || years.length > 1) && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+            {cars.filter(c => c.tagId).map(c => (
+              <TouchableOpacity
+                key={c.id}
+                style={[styles.filterChip, carTagFilter === c.tagId && styles.filterChipActive]}
+                onPress={() => setCarTagFilter(carTagFilter === c.tagId ? null : c.tagId!)}
+              >
+                <Text style={[styles.filterChipText, carTagFilter === c.tagId && styles.filterChipTextActive]}>🚗 {c.nickname}</Text>
+              </TouchableOpacity>
+            ))}
+            {years.map(y => (
+              <TouchableOpacity
+                key={y}
+                style={[styles.filterChip, yearFilter === y && styles.filterChipActive]}
+                onPress={() => setYearFilter(yearFilter === y ? null : y)}
+              >
+                <Text style={[styles.filterChipText, yearFilter === y && styles.filterChipTextActive]}>{y}年</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+      </View>
       {loading ? (
         <ActivityIndicator color="#2563eb" style={{ marginTop: 64 }} />
       ) : (
         <FlatList
-          data={routes}
+          data={filteredRoutes}
           renderItem={renderItem}
           keyExtractor={item => item.id!}
           contentContainerStyle={{ padding: 16 }}
           onRefresh={loadRoutes}
           refreshing={syncing}
           ListEmptyComponent={
-            <Text style={styles.empty}>ルートがありません{'\n'}記録タブから記録を開始してください</Text>
+            <Text style={styles.empty}>
+              {routes.length > 0 ? '条件に合うルートがありません' : 'ルートがありません\n記録タブから記録を開始してください'}
+            </Text>
           }
         />
       )}
@@ -181,6 +238,12 @@ const styles = StyleSheet.create({
   syncText: { fontSize: 12, color: '#2563eb' },
   helpBtn: { position: 'absolute', top: 12, right: 16, zIndex: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
   helpBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '700', lineHeight: 16 },
+  filterArea: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e8eaed' },
+  searchInput: { backgroundColor: '#f3f4f6', color: '#1f2937', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14 },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e8eaed', marginRight: 8, marginBottom: 6 },
+  filterChipActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  filterChipText: { fontSize: 12, color: '#6b7280', fontWeight: '500' },
+  filterChipTextActive: { color: '#fff', fontWeight: '700' },
   card: {
     backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 10,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
