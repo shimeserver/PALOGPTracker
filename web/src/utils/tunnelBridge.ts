@@ -44,9 +44,16 @@ export function findTunnelPath(prev: LL, cur: LL, gapKm: number): TunnelMatch | 
       if (dc < jDist) { jDist = dc; jBest = k; }
     }
     if (iDist > MATCH_KM || jDist > MATCH_KM) continue;
-    if (jBest <= iBest + 1) continue; // 逆方向 or 同一地点
-
-    const sub = t.path.slice(iBest, jBest + 1).map(([lng, lat]) => ({ lat, lng }));
+    // 順方向はそのまま、逆方向は反転して使う（対面通行トンネル=飛騨等への対応。
+    // 上下線が別線形のトンネルは正方向の線形が先にマッチするため実害なし）
+    let sub: LL[];
+    if (jBest > iBest) {
+      sub = t.path.slice(iBest, jBest + 1).map(([lng, lat]) => ({ lat, lng }));
+    } else if (iBest > jBest) {
+      sub = t.path.slice(jBest, iBest + 1).map(([lng, lat]) => ({ lat, lng })).reverse();
+    } else {
+      continue; // 同一頂点
+    }
     let len = 0;
     for (let k = 1; k < sub.length; k++) len += haversineKm(sub[k - 1], sub[k]);
     if (len < MIN_SUB_KM) continue;

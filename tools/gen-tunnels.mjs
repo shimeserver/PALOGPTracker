@@ -19,17 +19,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 名前regex/等値クエリはOverpassが混雑時に処理しきれないため、
 // 「狭いbbox + tunnel + motorway」の軽量クエリで取得し、名前はクライアント側で照合する。
 // bbox は s,w,n,e。トンネル位置を広めに覆っていれば良い（名前照合で他は落ちる）。
+// match: name / tunnel:name に含まれていれば採用する部分文字列（省略時はlabel）
+// アクアラインのトンネル部は name="東京湾アクアライン;東京湾横断・木更津東金道路" で
+// tunnel:name が無いため「アクアライン」で照合する（bbox内のアクアラインのトンネル=海底部のみ）。
+// 川崎航路・空港北トンネルはOSM上で無名（name/tunnel:nameなし）のため対象外
+// （2km級で短く、OSRM/コリドー/直線処理で十分）。
 const TUNNELS = [
   { label: '山手トンネル', bbox: [35.63, 139.64, 35.76, 139.73] },       // 首都高C2 18.2km
-  { label: 'アクアトンネル', bbox: [35.40, 139.74, 35.56, 139.93] },     // アクアライン 9.6km 海底
+  { label: 'アクアトンネル', bbox: [35.40, 139.74, 35.56, 139.93], match: ['アクアトンネル', 'アクアライン'] }, // 9.6km 海底
   { label: '東京港トンネル', bbox: [35.57, 139.72, 35.64, 139.79] },     // 湾岸線 海底
   { label: '多摩川トンネル', bbox: [35.50, 139.73, 35.57, 139.81] },     // 湾岸線 河口部
-  { label: '川崎航路トンネル', bbox: [35.45, 139.68, 35.54, 139.82] },   // 湾岸線 海底
-  { label: '空港北トンネル', bbox: [35.53, 139.72, 35.58, 139.80] },     // 湾岸線 羽田
   { label: '横浜北トンネル', bbox: [35.45, 139.55, 35.56, 139.68] },     // K7 8.2km
   { label: '関越トンネル', bbox: [36.72, 138.80, 36.94, 139.05] },       // 関越道 11.0km
   { label: '恵那山トンネル', bbox: [35.38, 137.42, 35.64, 137.70] },     // 中央道 8.6km
-  { label: '飛騨トンネル', bbox: [36.08, 136.82, 36.32, 137.18] },       // 東海北陸道 10.7km
+  { label: '飛騨トンネル', bbox: [36.08, 136.82, 36.32, 137.18], match: ['飛騨トンネル', '飛驒トンネル'] }, // 東海北陸道 10.7km（OSMは旧字体「驒」・対面通行）
 ];
 
 const MIN_LEN_KM = 1.2;   // これ未満の成分（ランプ等）は捨てる
@@ -126,7 +129,7 @@ function simplify(pts) {
 }
 
 const result = [];
-for (const { label: name, bbox } of TUNNELS) {
+for (const { label: name, bbox, match } of TUNNELS) {
   const q = `[out:json][timeout:30];way["highway"~"^(motorway|motorway_link)$"]["tunnel"](${bbox.join(',')});(._;>;);out body;`;
   let data;
   try {
@@ -137,10 +140,17 @@ for (const { label: name, bbox } of TUNNELS) {
   }
   // 名前照合はクライアント側で行う。首都高等は way の name が路線名（中央環状線等）で
   // トンネル名は tunnel:name に入ることがあるため両方を見る。
+  const matchers = match ?? [name];
+  const wayNameOf = (el) => `${el.tags?.name ?? ''}|${el.tags?.['tunnel:name'] ?? ''}`;
+  const allWays = data.elements.filter(el => el.type === 'way');
   data.elements = data.elements.filter(el =>
-    el.type === 'node' ||
-    (el.type === 'way' && (`${el.tags?.name ?? ''}${el.tags?.['tunnel:name'] ?? ''}`.includes(name)))
+    el.type === 'node' || (el.type === 'way' && matchers.some(m => wayNameOf(el).includes(m)))
   );
+  if (!data.elements.some(el => el.type === 'way')) {
+    const names = [...new Set(allWays.map(wayNameOf))].slice(0, 10).join(' / ');
+    console.error(`✗ ${name}: 一致するwayなし。bbox内のトンネル名: ${names}`);
+    continue;
+  }
   const idMap = new Map();
   const coords = [];
   for (const el of data.elements) {
@@ -199,7 +209,16 @@ for (const { label: name, bbox } of TUNNELS) {
         if (i === j) continue;
         const a = cands[i], b = cands[j];
         const gap = haversineKm(a.pts[a.pts.length - 1], b.pts[0]);
-        if (gap < 0.3) {
+        // 方向連続性: 接合点でUターンになる連結（=反対車線との誤連結）は拒否する
+        const a2 = a.pts[a.pts.length - 2] ?? a.pts[a.pts.length - 1];
+        const a1 = a.pts[a.pts.length - 1];
+        const b1 = b.pts[0];
+        const b2 = b.pts[1] ?? b.pts[0];
+        const ax = a1.lng - a2.lng, ay = a1.lat - a2.lat;
+        const bx = b2.lng - b1.lng, by = b2.lat - b1.lat;
+        const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+        const cont = (la && lb) ? (ax * bx + ay * by) / (la * lb) : 1;
+        if (gap < 0.3 && cont > 0) {
           cands[i] = { len: a.len + gap + b.len, pts: [...a.pts, ...b.pts] };
           cands.splice(j, 1);
           changed = true;
