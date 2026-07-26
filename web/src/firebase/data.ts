@@ -69,6 +69,7 @@ export interface Route {
   gapsOk?: boolean; // true = 残ギャップは意図的な直線（フェリー等）としてギャップ点検の対象外にする
   hasBackup?: boolean; // true = 修復前の点列バックアップ(bakチャンク)が存在し「元に戻す」が可能
   backupAt?: number;   // バックアップ作成時刻(Unix ms)
+  pointCount?: number; // チャンク形式の総点数（点列キャッシュのフィンガープリントに使用）
 }
 export interface TagDef {
   id?: string; userId: string; name: string; color: string;
@@ -185,7 +186,15 @@ export async function getUserRoutes(userId: string): Promise<Route[]> {
 }
 
 // points未ロード（チャンク形式）のルートに点列を順次補充する。1件ロードするごとにcbを呼ぶ。
-export async function hydrateRoutePoints(routes: Route[], cb: (routeId: string, points: TrackPoint[]) => void): Promise<void> {
+// cacheGet/cachePut を渡すとローカルキャッシュ優先（フィンガープリント一致時はFirestore読み取りゼロ）。
+export async function hydrateRoutePoints(
+  routes: Route[],
+  cb: (routeId: string, points: TrackPoint[]) => void,
+  cache?: {
+    get: (route: Route) => Promise<TrackPoint[] | null>;
+    put: (route: Route, points: TrackPoint[]) => Promise<void>;
+  }
+): Promise<void> {
   const targets = routes.filter(r => r.id && (!r.points || r.points.length === 0));
   const CONCURRENCY = 4;
   let idx = 0;
@@ -193,8 +202,15 @@ export async function hydrateRoutePoints(routes: Route[], cb: (routeId: string, 
     while (idx < targets.length) {
       const r = targets[idx++];
       try {
+        if (cache) {
+          const cached = await cache.get(r);
+          if (cached && cached.length > 0) { cb(r.id!, cached); continue; }
+        }
         const pts = await loadRoutePoints(r.id!);
-        if (pts.length > 0) cb(r.id!, pts);
+        if (pts.length > 0) {
+          cb(r.id!, pts);
+          if (cache) cache.put(r, pts).catch(() => {});
+        }
       } catch { /* 個別失敗は無視 */ }
     }
   }));

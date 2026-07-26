@@ -84,7 +84,7 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
     onUpdateRoute({ ...route, points: fixed, ...statsOf(fixed), hasBackup: true, backupAt: Date.now() });
     const parts: string[] = [];
     if (cleaned.removed > 0) parts.push(`飛び${cleaned.removed}点除去`);
-    if (r.bridged > 0) parts.push(`${r.bridged}か所補間`);
+    if (r.bridged > 0) parts.push(`${r.bridged}か所補間${r.tunnelBridged > 0 ? `（トンネル${r.tunnelBridged}）` : ''}`);
     if (r.sea > 0) parts.push(`海上${r.sea}か所は直線のまま`);
     if (r.rejectedDetour > 0) parts.push(`遠回り不採用${r.rejectedDetour}`);
     if (r.failed > 0) parts.push(`失敗${r.failed}`);

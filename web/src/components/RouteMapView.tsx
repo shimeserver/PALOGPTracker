@@ -521,7 +521,12 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(r.points)));
         const msgs: string[] = [];
         if (cleaned.removed > 0) msgs.push(`GPSの飛び ${cleaned.removed}点を除去`);
-        if (r.bridged > 0) msgs.push(`GPS喪失区間 ${r.bridged}か所を道なりに補間${r.corridorBridged > 0 ? `（うち高速コリドー${r.corridorBridged}）` : ''}`);
+        if (r.bridged > 0) {
+          const via: string[] = [];
+          if (r.tunnelBridged > 0) via.push(`既知トンネル${r.tunnelBridged}`);
+          if (r.corridorBridged > 0) via.push(`高速コリドー${r.corridorBridged}`);
+          msgs.push(`GPS喪失区間 ${r.bridged}か所を道なりに補間${via.length ? `（うち${via.join('・')}）` : ''}`);
+        }
         if (r.sea > 0) msgs.push(`海上・フェリー航路とみなし直線のまま ${r.sea}か所`);
         if (r.rejectedDetour > 0) msgs.push(`回り道になる補間は不採用（直線のまま）${r.rejectedDetour}か所`);
         if (r.failed > 0) msgs.push(`経路取得失敗 ${r.failed}か所`);

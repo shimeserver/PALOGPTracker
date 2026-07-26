@@ -1,5 +1,6 @@
 import type { TrackPoint } from '../firebase/data';
 import { corridorRoute } from './osmCorridor';
+import { findTunnelPath } from './tunnelBridge';
 
 // GPSギャップ（トンネル・電波切れ）を道なりに補間する。
 // 判定は「距離」ベース（タイムスタンプが壊れたルートでも機能する）。
@@ -303,6 +304,7 @@ export interface BridgeResult {
   bridged: number;      // 実際に補間したギャップ数（コリドー含む）
   corridorBridged: number; // うち高速コリドー(OSM直読み)で補間した数
   detected: number;     // 検出したギャップ数
+  tunnelBridged: number; // うち既知トンネルジオメトリで補間した数（オフライン可・決定論的）
   rejectedDetour: number; // 妥当な経路なし(遠回り)で除外した数
   failed: number;       // 経路取得失敗（オフライン等）した数
   sea: number;          // 海上・航路とみなして残した数
@@ -353,7 +355,7 @@ export function recalcSpeeds(points: TrackPoint[]): TrackPoint[] {
 const MAX_CORRIDOR_CALLS = 5; // Overpass負荷を抑えるため1回のクリーンアップでの上限
 
 export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: BridgeOptions): Promise<BridgeResult> {
-  const empty: BridgeResult = { points, bridged: 0, corridorBridged: 0, detected: 0, rejectedDetour: 0, failed: 0, sea: 0, unresolved: [] };
+  const empty: BridgeResult = { points, bridged: 0, corridorBridged: 0, detected: 0, tunnelBridged: 0, rejectedDetour: 0, failed: 0, sea: 0, unresolved: [] };
   if (points.length < 2) return empty;
   const profile = mode === 'walk' ? 'foot' : mode === 'bicycle' ? 'cycling' : 'driving';
   const maxGaps = opts?.maxGaps ?? DEFAULT_MAX_GAPS;
@@ -361,7 +363,7 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
   const totalGaps = routeGapStats(points).count;
   const out: TrackPoint[] = [points[0]];
   const unresolved: UnresolvedGap[] = [];
-  let bridged = 0, corridorBridged = 0, fails = 0, detected = 0, rejectedDetour = 0, failed = 0, sea = 0;
+  let bridged = 0, corridorBridged = 0, fails = 0, detected = 0, tunnelBridged = 0, rejectedDetour = 0, failed = 0, sea = 0;
   let corridorCalls = 0;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
@@ -379,21 +381,31 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
     } else if (isGap && (bridged >= maxGaps || fails >= MAX_FAILS || Date.now() >= deadline)) {
       markUnresolved('limit');
     } else if (isGap) {
-      // まずOSRM。公開OSRMは有料道路を使わないため、拒否/遠回りになった1km以上のギャップは
-      // 高速コリドー（OSM直読み・osmCorridor）にフォールバックする（山手トンネル等の自動修復）。
+      // 0) まず既知トンネル（山手・アクア・湾岸線・関越等）: 同梱ジオメトリで
+      //    決定論的に補間。オフラインでも動き、OSRMの有料道路回避問題も受けない。
       let path: LL[] | null = null;
       let viaCorridor = false;
+      let viaTunnel = false;
       let detourTotal = 0;
-      const coords = await osrmRoute(profile, prev, cur);
-      if (coords && coords.length >= 2) {
-        fails = 0;
-        const p = coords.map(([lng, lat]) => ({ lat, lng }));
-        let total = 0;
-        for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
-        detourTotal = total;
-        if (total >= distKm * 0.9 && total <= distKm * MAX_DETOUR_RATIO) path = p;
+      let coords: [number, number][] | null = null;
+      const tm = findTunnelPath(prev, cur, distKm);
+      if (tm) {
+        path = tm.path;
+        viaTunnel = true;
       } else {
-        fails++;
+        // 1) OSRM。公開OSRMは有料道路を使わないため、拒否/遠回りになった1km以上のギャップは
+        //    高速コリドー（OSM直読み・osmCorridor）にフォールバックする。
+        coords = await osrmRoute(profile, prev, cur);
+        if (coords && coords.length >= 2) {
+          fails = 0;
+          const p = coords.map(([lng, lat]) => ({ lat, lng }));
+          let total = 0;
+          for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
+          detourTotal = total;
+          if (total >= distKm * 0.9 && total <= distKm * MAX_DETOUR_RATIO) path = p;
+        } else {
+          fails++;
+        }
       }
       // 海上判定: 一定以上のギャップで道路経路が直線の3倍超＝湾・海峡を回り込む＝航路とみなす
       const isSea = !path && coords != null && distKm >= SEA_MIN_KM && detourTotal > distKm * SEA_DETOUR_RATIO;
@@ -408,6 +420,7 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
         for (let k = 1; k < path.length; k++) { const d = haversineKm(path[k - 1], path[k]); segDist.push(d); total += d; }
         bridged++;
         if (viaCorridor) corridorBridged++;
+        if (viaTunnel) tunnelBridged++;
         // 端点を除く中間点を距離比例のタイムスタンプで挿入（速度は後段で再計算）
         let cum = 0;
         for (let k = 1; k < path.length - 1; k++) {
@@ -430,5 +443,5 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
     if (isGap) opts?.onProgress?.(detected, totalGaps);
     out.push(cur);
   }
-  return { points: out, bridged, corridorBridged, detected, rejectedDetour, failed, sea, unresolved };
+  return { points: out, bridged, corridorBridged, detected, tunnelBridged, rejectedDetour, failed, sea, unresolved };
 }

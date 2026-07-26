@@ -1,5 +1,6 @@
 import { TrackPoint } from '../types';
 import { corridorRoute } from './osmCorridor';
+import { findTunnelPath } from './tunnelBridge';
 
 // GPSギャップ（トンネル・電波切れ）を道なりに補間する。
 // 判定は「距離」ベース（タイムスタンプが壊れていても機能する）。
@@ -195,11 +196,15 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
 
     const canBridge = isGap && bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline;
     if (canBridge) {
-      // まずOSRM。公開OSRMは有料道路（首都高・アクアライン等）を使わないため、
-      // 拒否/遠回りになった1km以上のギャップは高速コリドー（OSM直読み）にフォールバック。
+      // 0) 既知トンネル（山手・アクア・湾岸線・関越等）は同梱ジオメトリで決定論的に補間
+      //    （オフラインでも動く・OSRMの有料道路回避問題も受けない）。
+      // 1) 次にOSRM。公開OSRMは有料道路を使わないため、
+      //    拒否/遠回りになった1km以上のギャップは高速コリドー（OSM直読み）にフォールバック。
       let path: { lat: number; lng: number }[] | null = null;
-      const coords = await osrmRoute(prev, cur);
-      if (!coords) { fails++; }
+      const tm = findTunnelPath(prev, cur, distKm);
+      if (tm) path = tm.path;
+      const coords = path ? null : await osrmRoute(prev, cur);
+      if (!path && !coords) { fails++; }
       if (coords && coords.length >= 2) {
         fails = 0;
         const p = coords.map(([lng, lat]) => ({ lat, lng }));

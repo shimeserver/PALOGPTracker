@@ -10,6 +10,7 @@ import ActivityPanel from '../components/ActivityPanel';
 import PrefectureMapPanel from '../components/PrefectureMapPanel';
 import GapScanPanel from '../components/GapScanPanel';
 import { getUserRoutes, deleteRoute, getUserTags, hydrateRoutePoints, getUserCars } from '../firebase/data';
+import { routeFingerprint, getCachedPoints, putCachedPoints, deleteCachedPoints, clearPointsCache } from '../utils/pointsCache';
 import type { Route, TagDef, Car } from '../firebase/data';
 import type { MapSettings } from '../components/SettingsPanel';
 import type { RouteMapViewHandle } from '../components/RouteMapView';
@@ -46,11 +47,15 @@ export default function MainPage({ user }: Props) {
   const [pinDragMode, setPinDragMode] = useState<{ id: string; originalLat: number; originalLng: number; onDragEnd: (lat: number, lng: number) => void } | null>(null);
   const mapViewRef = useRef<RouteMapViewHandle>(null);
 
-  // チャンク形式ルートの points をバックグラウンドで補充（一覧表示は先に出す）
+  // チャンク形式ルートの points をバックグラウンドで補充（一覧表示は先に出す）。
+  // IndexedDBキャッシュ優先: 点列が変わっていないルートはFirestore読み取りゼロで即復元。
   const hydrate = (list: Route[]) => {
     hydrateRoutePoints(list, (routeId, points) => {
       setRoutes(prev => prev.map(r => r.id === routeId ? { ...r, points } : r));
       setSelectedRoute(prev => prev?.id === routeId ? { ...prev, points } : prev);
+    }, {
+      get: r => getCachedPoints(r.id!, routeFingerprint(r)),
+      put: (r, points) => putCachedPoints(r.id!, routeFingerprint(r), points),
     }).catch(() => {});
   };
 
@@ -91,6 +96,7 @@ export default function MainPage({ user }: Props) {
   const handleDelete = async (route: Route) => {
     if (!confirm(`「${route.name || '（無名）'}」を削除しますか？`)) return;
     await deleteRoute(route.id!);
+    deleteCachedPoints(route.id!).catch(() => {});
     setRoutes(r => r.filter(x => x.id !== route.id));
     if (selectedRoute?.id === route.id) setSelectedRoute(null);
   };
@@ -98,6 +104,11 @@ export default function MainPage({ user }: Props) {
   const handleUpdateRoute = (route: Route) => {
     setRoutes(prev => prev.map(r => r.id === route.id ? route : r));
     if (selectedRoute?.id === route.id) setSelectedRoute(route);
+    // 修復・区間修正後の点列をキャッシュにも反映（次回起動時の再フェッチを防ぐ）
+    if (route.id && route.points.length > 0) {
+      const endTime = route.points[route.points.length - 1].timestamp;
+      putCachedPoints(route.id, routeFingerprint({ ...route, pointCount: route.points.length, endTime }), route.points).catch(() => {});
+    }
   };
 
   const handleFocusLandmark = (lm: Landmark) => {
@@ -220,7 +231,7 @@ export default function MainPage({ user }: Props) {
         userId={user.uid}
         routeCount={routes.length}
         landmarkCount={landmarkCount}
-        onDeleteAllRoutes={() => { setRoutes([]); setSelectedRoute(null); setShowAllRoutes(false); }}
+        onDeleteAllRoutes={() => { setRoutes([]); setSelectedRoute(null); setShowAllRoutes(false); clearPointsCache().catch(() => {}); }}
         onDeleteAllLandmarks={() => setLandmarkCount(0)}
         onImportDone={reloadRoutes}
         getPlacesService={getPlacesService}
