@@ -79,6 +79,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
   const [sortKey, setSortKey]       = useState<'visitCount' | 'category' | 'year'>('visitCount');
   const [sortAsc, setSortAsc]       = useState(false);
   const [filterYear, setFilterYear] = useState<number | null>(null);
+  const [filterCategory, setFilterCategory] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName]   = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -541,11 +542,21 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     landmarks.filter(l => l.lastVisit).map(l => new Date(l.lastVisit!).getFullYear())
   )).sort((a, b) => b - a);
 
+  // 実際に使われているカテゴリと件数（絞り込みセレクト用・件数降順）
+  const usedCategories = Object.entries(
+    landmarks.reduce<Record<string, number>>((acc, l) => {
+      const c = l.category || 'その他';
+      acc[c] = (acc[c] ?? 0) + 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b[1] - a[1]);
+
   const filtered = landmarks
     .filter(l =>
       (l.name.toLowerCase().includes(search.toLowerCase()) ||
        l.category.toLowerCase().includes(search.toLowerCase())) &&
-      (filterYear === null || (l.lastVisit ? new Date(l.lastVisit).getFullYear() === filterYear : false))
+      (filterYear === null || (l.lastVisit ? new Date(l.lastVisit).getFullYear() === filterYear : false)) &&
+      (filterCategory === null || (l.category || 'その他') === filterCategory)
     )
     .slice()
     .sort((a, b) => {
@@ -820,6 +831,20 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
               <option value=''>全年</option>
               {years.map(y => <option key={y} value={y}>{y}年</option>)}
             </select>
+          )}
+          <select
+            value={filterCategory ?? ''}
+            onChange={e => setFilterCategory(e.target.value || null)}
+            style={{ background: filterCategory ? '#eff6ff' : '#f3f4f6', color: filterCategory ? '#1d4ed8' : '#6b7280', border: 'none', borderRadius: 20, padding: '4px 10px', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
+          >
+            <option value=''>全カテゴリ</option>
+            {usedCategories.map(([c, n]) => <option key={c} value={c}>{c}（{n}）</option>)}
+          </select>
+          {(filterYear !== null || filterCategory !== null) && (
+            <button
+              onClick={() => { setFilterYear(null); setFilterCategory(null); }}
+              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '2px 4px' }}
+            >✕ 解除</button>
           )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
