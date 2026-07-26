@@ -14,9 +14,12 @@ function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): numb
 }
 
 function placeTypeToCategory(types: string[]): string {
+  // コンビニ・ガソスタを先に判定する。コンビニは食品を扱うため types に 'food' が
+  // 含まれることが多く、グルメ判定を先にすると全部グルメに化ける。
+  if (types.includes('convenience_store')) return 'コンビニ';
+  if (types.includes('gas_station')) return 'ガソリンスタンド';
   if (types.includes('restaurant') || types.includes('food') || types.includes('bakery') || types.includes('meal_takeaway')) return 'グルメ';
   if (types.includes('cafe')) return 'カフェ';
-  if (types.includes('convenience_store')) return 'コンビニ';
   if (types.includes('tourist_attraction') || types.includes('museum') || types.includes('amusement_park') || types.includes('shrine') || types.includes('temple')) return '観光';
   if (types.includes('park') || types.includes('campground')) return '公園';
   if (types.includes('shopping_mall') || types.includes('store') || types.includes('clothing_store') || types.includes('department_store')) return 'ショッピング';
@@ -185,21 +188,22 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     });
   };
 
-  // 「その他」のままのスポットを名前からコンビニ/ガソスタ/SA・PAに一括分類。
-  // 手動で設定済みのカテゴリは上書きしない。
+  // 名前からコンビニ/ガソスタ/SA・PAと判定できるスポットを一括分類。
+  // チェーン名の名前判定は確度が高いため、Places由来の誤分類（コンビニがtypes:foodで
+  // グルメに化ける等）も対象にして上書きする。判定と一致済みのものは触らない。
   const handleAutoCategorize = async () => {
     if (autoCategorizing) return;
     const targets = landmarks
-      .map(lm => ({ lm, cat: (!lm.category || lm.category === 'その他') ? categorizeByName(lm.name) : null }))
-      .filter((x): x is { lm: Landmark; cat: string } => x.cat != null);
+      .map(lm => ({ lm, cat: categorizeByName(lm.name) }))
+      .filter((x): x is { lm: Landmark; cat: string } => x.cat != null && x.lm.category !== x.cat);
     if (targets.length === 0) {
-      alert('自動分類できるスポットはありませんでした。\n（「その他」のスポットのうち、名前からコンビニ・ガソリンスタンド・SA/PAと判定できるものが対象です）');
+      alert('自動分類できるスポットはありませんでした。\n（名前からコンビニ・ガソリンスタンド・SA/PAと判定できるものが対象です）');
       return;
     }
     const counts: Record<string, number> = {};
-    targets.forEach(t => { counts[t.cat] = (counts[t.cat] ?? 0) + 1; });
-    const summary = Object.entries(counts).map(([c, n]) => `${c}: ${n}件`).join(' / ');
-    if (!confirm(`${targets.length}件のスポットを自動分類します。\n${summary}\n\n（手動設定済みのカテゴリは変更しません）`)) return;
+    targets.forEach(t => { const key = `${t.lm.category || 'その他'} → ${t.cat}`; counts[key] = (counts[key] ?? 0) + 1; });
+    const summary = Object.entries(counts).map(([c, n]) => `${c}: ${n}件`).join('\n');
+    if (!confirm(`${targets.length}件のスポットを自動分類します。\n${summary}`)) return;
     setAutoCategorizing(true);
     try {
       let done = 0;
@@ -824,7 +828,7 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
             <button
               onClick={handleAutoCategorize}
               disabled={autoCategorizing}
-              title="名前からコンビニ・ガソリンスタンド・SA/PAを自動分類（「その他」のスポットのみ対象）"
+              title="名前からコンビニ・ガソリンスタンド・SA/PAを自動分類（誤分類の修正も含む・実行前に内訳を確認できます）"
               style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #bfdbfe', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap', opacity: autoCategorizing ? 0.6 : 1 }}
             >
               {autoCategorizing ? '分類中...' : '🪄 自動分類'}
