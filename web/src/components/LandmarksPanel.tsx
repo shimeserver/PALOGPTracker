@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getUserLandmarks, getVisits, deleteLandmark, updateLandmark, mergeLandmarks, deleteVisit, uploadLandmarkPhotoFromUrl } from '../firebase/data';
-import { categorizeByName } from '../utils/spotCategory';
+import { categorizeByName, placeTypeToCategory, SPOT_CATEGORIES } from '../utils/spotCategory';
 import type { Landmark, Visit } from '../firebase/data';
 
 const NO_PHOTO_PLACEHOLDER = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='90' viewBox='0 0 120 90'%3E%3Crect width='120' height='90' fill='%23f3f4f6'/%3E%3Ccircle cx='60' cy='34' r='14' fill='%23d1d5db'/%3E%3Cellipse cx='60' cy='68' rx='24' ry='14' fill='%23d1d5db'/%3E%3C/svg%3E`;
@@ -12,22 +12,6 @@ function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): numb
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
-
-function placeTypeToCategory(types: string[]): string {
-  // コンビニ・ガソスタを先に判定する。コンビニは食品を扱うため types に 'food' が
-  // 含まれることが多く、グルメ判定を先にすると全部グルメに化ける。
-  if (types.includes('convenience_store')) return 'コンビニ';
-  if (types.includes('gas_station')) return 'ガソリンスタンド';
-  if (types.includes('restaurant') || types.includes('food') || types.includes('bakery') || types.includes('meal_takeaway')) return 'グルメ';
-  if (types.includes('cafe')) return 'カフェ';
-  if (types.includes('tourist_attraction') || types.includes('museum') || types.includes('amusement_park') || types.includes('shrine') || types.includes('temple')) return '観光';
-  if (types.includes('park') || types.includes('campground')) return '公園';
-  if (types.includes('shopping_mall') || types.includes('store') || types.includes('clothing_store') || types.includes('department_store')) return 'ショッピング';
-  if (types.includes('gas_station')) return 'ガソリンスタンド';
-  if (types.includes('parking')) return '駐車場';
-  return 'その他';
-}
-
 
 interface Props {
   userId: string;
@@ -43,7 +27,7 @@ interface Props {
   activePinDragId: string | null;
 }
 
-const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', 'SA/PA', '駐車場'];
+const CATEGORIES = SPOT_CATEGORIES;
 
 // 自己修復イメージ: Google Placesの一時URL（storagePath空で保存されたもの）は期限切れで
 // 表示に失敗することがある。エラー時に placeId から新しいURLを取り直して表示し直す。
@@ -72,6 +56,7 @@ function HealableImg({ lm, heal, style }: {
 export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition, activePinDragId }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
   const [autoCategorizing, setAutoCategorizing] = useState(false);
+  const [editCategory, setEditCategory] = useState('その他');
   const [selected, setSelected]   = useState<Landmark | null>(null);
   const [visits, setVisits]       = useState<Visit[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -470,15 +455,17 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
 
   const startInlineEdit = (lm: Landmark, e: React.MouseEvent) => {
     e.stopPropagation(); setEditingId(lm.id!); setEditName(lm.name);
+    setEditCategory(lm.category || 'その他');
     setTimeout(() => editInputRef.current?.focus(), 50);
   };
 
   const saveInlineEdit = async (lm: Landmark) => {
-    const name = editName.trim();
-    if (name && name !== lm.name) {
-      await updateLandmark(lm.id!, { name });
-      setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, name } : x));
-      if (selected?.id === lm.id) setSelected(s => s ? { ...s, name } : s);
+    const name = editName.trim() || lm.name;
+    const category = editCategory;
+    if (name !== lm.name || category !== lm.category) {
+      await updateLandmark(lm.id!, { name, category });
+      setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, name, category } : x));
+      if (selected?.id === lm.id) setSelected(s => s ? { ...s, name, category } : s);
     }
     setEditingId(null);
   };
@@ -897,19 +884,38 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     {editingId === lm.id ? (
                       <input ref={editInputRef} value={editName} onChange={e => setEditName(e.target.value)}
-                        onBlur={() => saveInlineEdit(lm)}
                         onKeyDown={e => { if (e.key === 'Enter') saveInlineEdit(lm); if (e.key === 'Escape') setEditingId(null); }}
                         onClick={e => e.stopPropagation()} style={s.inlineInput} />
                     ) : (
                       <span style={{ color: '#1f2937', fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: 4 }}>{lm.name}</span>
                     )}
                     <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexShrink: 0 }}>
-                      <span style={{ color: '#f59e0b', fontSize: 12, fontWeight: 700 }}>{lm.visitCount}回</span>
-                      <button onClick={e => startInlineEdit(lm, e)} style={s.iconBtn} title="名前を編集">✏️</button>
-                      <button onClick={e => handleDelete(lm, e)} style={s.iconBtn} title="削除">🗑</button>
+                      {editingId === lm.id ? (
+                        <>
+                          <button onClick={e => { e.stopPropagation(); saveInlineEdit(lm); }} style={{ ...s.iconBtn, color: '#16a34a', fontWeight: 700 }} title="保存">✓</button>
+                          <button onClick={e => { e.stopPropagation(); setEditingId(null); }} style={s.iconBtn} title="キャンセル">✕</button>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ color: '#f59e0b', fontSize: 12, fontWeight: 700 }}>{lm.visitCount}回</span>
+                          <button onClick={e => startInlineEdit(lm, e)} style={s.iconBtn} title="名前・カテゴリを編集">✏️</button>
+                          <button onClick={e => handleDelete(lm, e)} style={s.iconBtn} title="削除">🗑</button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <span style={{ color: '#2563eb', fontSize: 11, background: '#eff6ff', borderRadius: 4, padding: '1px 6px', fontWeight: 500 }}>{lm.category}</span>
+                  {editingId === lm.id ? (
+                    <select
+                      value={editCategory}
+                      onChange={e => setEditCategory(e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #bfdbfe', borderRadius: 6, padding: '2px 6px', fontSize: 12, cursor: 'pointer' }}
+                    >
+                      {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  ) : (
+                    <span style={{ color: '#2563eb', fontSize: 11, background: '#eff6ff', borderRadius: 4, padding: '1px 6px', fontWeight: 500 }}>{lm.category}</span>
+                  )}
                   {lm.description && (
                     <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lm.description}</p>
                   )}

@@ -33,6 +33,24 @@ const SAPA_SUFFIX = /(PA|SA)([\s（(]|$)/;
 
 export const AUTO_CATEGORIES = ['コンビニ', 'ガソリンスタンド', 'SA/PA'] as const;
 
+// アプリ全体で使うスポットカテゴリの正準リスト
+export const SPOT_CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', 'SA/PA', '駐車場'];
+
+// Google Places の types からカテゴリを判定。
+// コンビニ・ガソスタを先に判定する（コンビニは types に 'food' を含むことが多く、
+// グルメ判定を先にすると全部グルメに化ける）。
+export function placeTypeToCategory(types: string[]): string {
+  if (types.includes('convenience_store')) return 'コンビニ';
+  if (types.includes('gas_station')) return 'ガソリンスタンド';
+  if (types.includes('restaurant') || types.includes('food') || types.includes('bakery') || types.includes('meal_takeaway')) return 'グルメ';
+  if (types.includes('cafe')) return 'カフェ';
+  if (types.includes('tourist_attraction') || types.includes('museum') || types.includes('amusement_park') || types.includes('shrine') || types.includes('temple')) return '観光';
+  if (types.includes('park') || types.includes('campground')) return '公園';
+  if (types.includes('shopping_mall') || types.includes('store') || types.includes('clothing_store') || types.includes('department_store')) return 'ショッピング';
+  if (types.includes('parking')) return '駐車場';
+  return 'その他';
+}
+
 export function categorizeByName(name: string): string | null {
   const n = name.toLowerCase();
   if (CONVENIENCE.some(k => n.includes(k.toLowerCase()))) return 'コンビニ';

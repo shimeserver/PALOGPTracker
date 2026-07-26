@@ -7,6 +7,7 @@ import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
 import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
 import type { UnresolvedGap } from '../utils/gapBridge';
+import { categorizeByName, placeTypeToCategory, SPOT_CATEGORIES } from '../utils/spotCategory';
 import { corridorRoute } from '../utils/osmCorridor';
 import ElevationProfile, { hasElevationData } from './ElevationProfile';
 import DensityOverlay from './DensityOverlay';
@@ -127,6 +128,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [addStopModal, setAddStopModal] = useState<StopCluster | null>(null);
     const [newSpotName, setNewSpotName] = useState('');
     const [newSpotCategory, setNewSpotCategory] = useState('その他');
+    const [newSpotPlaceId, setNewSpotPlaceId] = useState<string | null>(null);
+    // 停車地点の近隣施設候補（Places nearbySearch）。クリックで名前・カテゴリを自動入力
+    const [nearbySpots, setNearbySpots] = useState<{ name: string; placeId?: string; types: string[] }[]>([]);
     const [savingSpot, setSavingSpot] = useState(false);
     const [editMode, setEditMode] = useState(false);
     const [editPoints, setEditPoints] = useState<TrackPoint[]>([]);
@@ -220,6 +224,31 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
     }, [playback, playSpeed, route?.id, route?.points.length]);
 
+    // モーダルが開いたら近隣施設を検索して候補を出す（クリックで名前・カテゴリを自動入力）
+    useEffect(() => {
+      setNearbySpots([]);
+      setNewSpotPlaceId(null);
+      if (!addStopModal || !mapRef.current || !window.google?.maps?.places) return;
+      const svc = new google.maps.places.PlacesService(mapRef.current);
+      svc.nearbySearch(
+        { location: { lat: addStopModal.lat, lng: addStopModal.lng }, radius: 150 },
+        (results, status) => {
+          if (status !== google.maps.places.PlacesServiceStatus.OK || !results) return;
+          const EXCLUDE = ['political', 'route', 'plus_code', 'locality', 'sublocality', 'postal_code', 'premise', 'neighborhood'];
+          setNearbySpots(results
+            .filter(r => r.name && !(r.types ?? []).some(t => EXCLUDE.includes(t)))
+            .slice(0, 6)
+            .map(r => ({ name: r.name!, placeId: r.place_id, types: r.types ?? [] })));
+        }
+      );
+    }, [addStopModal]);
+
+    const pickNearbySpot = (c: { name: string; placeId?: string; types: string[] }) => {
+      setNewSpotName(c.name);
+      setNewSpotPlaceId(c.placeId ?? null);
+      setNewSpotCategory(categorizeByName(c.name) ?? placeTypeToCategory(c.types));
+    };
+
     const handleSaveStop = async () => {
       if (!addStopModal || !newSpotName.trim()) return;
       setSavingSpot(true);
@@ -237,11 +266,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           firstVisit: addStopModal.startTime,
           lastVisit: addStopModal.startTime,
           createdAt: now,
+          ...(newSpotPlaceId ? { placeId: newSpotPlaceId } : {}),
         });
         const newLm: Landmark = {
           id, userId, name: newSpotName.trim(), category: newSpotCategory,
           lat: addStopModal.lat, lng: addStopModal.lng, description: '', photos: [],
           visitCount: 1, firstVisit: addStopModal.startTime, lastVisit: addStopModal.startTime, createdAt: now,
+          ...(newSpotPlaceId ? { placeId: newSpotPlaceId } : {}),
         };
         setLandmarks(prev => [...prev, newLm]);
         setAddStopModal(null);
@@ -805,16 +836,36 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>
                 停車 {Math.round(addStopModal.durationMs / 60000)}分
               </div>
+              {nearbySpots.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 6 }}>📍 近くの施設から選択（名前・カテゴリを自動入力）</div>
+                  <div style={{ maxHeight: 130, overflowY: 'auto', border: '1px solid #f3f4f6', borderRadius: 8 }}>
+                    {nearbySpots.map((c, i) => (
+                      <button
+                        key={c.placeId ?? i}
+                        onClick={() => pickNearbySpot(c)}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', fontSize: 13, cursor: 'pointer',
+                          background: newSpotName === c.name ? '#eff6ff' : '#fff', color: '#1f2937',
+                          border: 'none', borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        {categorizeByName(c.name) === 'コンビニ' || c.types.includes('convenience_store') ? '🏪'
+                          : categorizeByName(c.name) === 'ガソリンスタンド' || c.types.includes('gas_station') ? '⛽'
+                          : categorizeByName(c.name) === 'SA/PA' ? '🅿️' : '📍'} {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <input
                 autoFocus
                 value={newSpotName}
                 onChange={e => setNewSpotName(e.target.value)}
-                placeholder="スポット名"
+                placeholder="スポット名（上の候補から選ぶか手入力）"
                 style={{ width: '100%', boxSizing: 'border-box', border: '1.5px solid #e8eaed', borderRadius: 8, padding: '8px 12px', fontSize: 14, marginBottom: 12, outline: 'none' }}
                 onKeyDown={e => { if (e.key === 'Enter' && newSpotName.trim()) handleSaveStop(); }}
               />
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-                {['その他', 'グルメ', 'コンビニ', 'ガソリンスタンド', '観光', 'ショッピング'].map(cat => (
+                {SPOT_CATEGORIES.map(cat => (
                   <button key={cat} onClick={() => setNewSpotCategory(cat)}
                     style={{ padding: '4px 10px', borderRadius: 20, border: '1.5px solid', fontSize: 12, cursor: 'pointer', borderColor: newSpotCategory === cat ? '#3b82f6' : '#e8eaed', background: newSpotCategory === cat ? '#3b82f6' : '#fff', color: newSpotCategory === cat ? '#fff' : '#374151' }}>
                     {cat}
