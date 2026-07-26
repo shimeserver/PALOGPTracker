@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { GoogleMap, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
-import { getUserLandmarks, saveLandmark, updateRoutePoints, addFuelLog, getUserCars } from '../firebase/data';
+import { getUserLandmarks, saveLandmark, updateRoutePoints, restoreRoutePoints, addFuelLog, getUserCars } from '../firebase/data';
 import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data';
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
@@ -20,6 +20,22 @@ function haversineKm(a: TrackPoint, b: TrackPoint): number {
 }
 
 const MAX_REALISTIC_KMH = 300; // これ超は物理的にありえない＝異常値としてクリップ
+
+// 全ルート表示時のスポットカテゴリフィルタ用グループ
+type SpotCatKey = 'conv' | 'gas' | 'sapa' | 'other';
+const SPOT_CAT_DEFAULT: Record<SpotCatKey, boolean> = { conv: true, gas: true, sapa: true, other: true };
+const SPOT_CAT_CHIPS: { key: SpotCatKey; icon: string; label: string }[] = [
+  { key: 'conv',  icon: '🏪', label: 'コンビニ' },
+  { key: 'gas',   icon: '⛽', label: 'ガソリンスタンド' },
+  { key: 'sapa',  icon: '🅿️', label: 'SA/PA' },
+  { key: 'other', icon: '★',  label: 'その他' },
+];
+function spotCatKey(category: string): SpotCatKey {
+  if (category === 'コンビニ') return 'conv';
+  if (category === 'ガソリンスタンド') return 'gas';
+  if (category === 'SA/PA') return 'sapa';
+  return 'other';
+}
 
 // 前後1点と比較して3倍超なら外れ値（例: 40→300→40はNG、40→100→180はOK）
 // 加えて、絶対値300km/h超はすべて0に落とす（連続スパイクや端点も救済）。
@@ -126,6 +142,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [elevIdx, setElevIdx] = useState<number | null>(null);
     // 全ルート表示時のスポットマーカー表示切替（設定はブラウザに保存）
     const [showSpotsAllMode, setShowSpotsAllMode] = useState(() => localStorage.getItem('palogp_allmode_spots') !== '0');
+    // 全ルート表示時のカテゴリ別フィルタ（🏪/⛽/🅿️/★、設定はブラウザに保存）
+    const [spotCats, setSpotCats] = useState<Record<SpotCatKey, boolean>>(() => {
+      try { return { ...SPOT_CAT_DEFAULT, ...JSON.parse(localStorage.getItem('palogp_spot_cats') || '{}') }; }
+      catch { return SPOT_CAT_DEFAULT; }
+    });
+    const toggleSpotCat = (key: SpotCatKey) => setSpotCats(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem('palogp_spot_cats', JSON.stringify(next));
+      return next;
+    });
     // クリーンアップ後に直線のまま残ったギャップ（⚠マーカーで可視化）
     const [unresolvedGaps, setUnresolvedGaps] = useState<UnresolvedGap[]>([]);
     // 密度オーバーレイに渡すためのリアクティブなmap参照
@@ -479,6 +505,31 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     };
 
+    // 「修復前に戻す」= 保存済みバックアップと現在値を交換（もう一度実行で修復後に戻る）
+    const restoreFromBackup = async () => {
+      if (!route?.id) return;
+      if (!confirm('このルートを修復前の状態に戻しますか？\n（交換式なので、もう一度実行すると修復後の状態に戻せます）')) return;
+      setSavingEdit(true);
+      try {
+        const pts = await restoreRoutePoints(route.id);
+        setEditPoints(pts);
+        setUnresolvedGaps([]);
+        const speeds = pts.map(p => p.speed).filter(s => s > 0 && s <= 300);
+        let totalDist = 0;
+        for (let i = 1; i < pts.length; i++) totalDist += haversineKm(pts[i-1], pts[i]);
+        onUpdateRoute?.({
+          ...route, points: pts, totalDistance: totalDist,
+          avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
+          maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
+        });
+        alert('修復前の状態に戻しました。');
+      } catch (e) {
+        alert(`復元失敗: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSavingEdit(false);
+      }
+    };
+
     const saveEditedRoute = async () => {
       if (!route?.id || editPoints.length < 2) return;
       setSavingEdit(true);
@@ -620,14 +671,17 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             />
           )}
 
-          {/* ランドマーク */}
-          {(!isAllMode || showSpotsAllMode) && landmarks.map(lm => {
+          {/* ランドマーク（全ルート表示時はカテゴリフィルタ適用） */}
+          {landmarks.filter(lm => !isAllMode || (showSpotsAllMode && spotCats[spotCatKey(lm.category)])).map(lm => {
             const isDragTarget = pinDragMode?.id === lm.id;
+            const catKey = spotCatKey(lm.category);
+            const icon = catKey === 'gas' ? '⛽' : catKey === 'conv' ? '🏪' : catKey === 'sapa' ? '🅿️' : '★';
+            const iconColor = catKey === 'gas' ? '#16a34a' : catKey === 'conv' ? '#0284c7' : catKey === 'sapa' ? '#7c3aed' : '#f59e0b';
             return (
               <Marker
                 key={lm.id}
                 position={{ lat: lm.lat, lng: lm.lng }}
-                label={{ text: isDragTarget ? '✥' : lm.category === 'ガソリンスタンド' ? '⛽' : '★', color: isDragTarget ? '#ef4444' : lm.category === 'ガソリンスタンド' ? '#16a34a' : '#f59e0b', fontSize: isDragTarget ? '20px' : '16px' }}
+                label={{ text: isDragTarget ? '✥' : icon, color: isDragTarget ? '#ef4444' : iconColor, fontSize: isDragTarget ? '20px' : '16px' }}
                 clickable={!onMapRightClick && !isDragTarget}
                 draggable={isDragTarget}
                 onClick={() => {
@@ -997,6 +1051,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
                 {savingEdit ? '保存中...' : '💾 保存'}
               </button>
+              {route?.hasBackup && (
+                <button onClick={restoreFromBackup} disabled={savingEdit}
+                  title="修復前の点列に戻す（もう一度実行すると修復後に戻る）"
+                  style={{ padding:'7px 12px', fontSize:13, background:'#fff7ed', border:'1.5px solid #fed7aa', borderRadius:6, cursor:'pointer', color:'#c2410c', fontWeight:600 }}>
+                  ↩ 修復前に戻す
+                </button>
+              )}
               <button onClick={cancelEditMode} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
                 キャンセル
               </button>
@@ -1022,6 +1083,20 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             >
               ★ スポット{showSpotsAllMode ? '' : '非表示'}
             </button>
+            {showSpotsAllMode && SPOT_CAT_CHIPS.map(c => (
+              <button
+                key={c.key}
+                onClick={() => toggleSpotCat(c.key)}
+                title={`${c.label}の表示/非表示`}
+                style={{ marginLeft: 4, padding: '3px 8px', fontSize: 12, borderRadius: 6, cursor: 'pointer',
+                  background: spotCats[c.key] ? '#eff6ff' : '#f3f4f6',
+                  color: spotCats[c.key] ? '#1d4ed8' : '#9ca3af',
+                  border: spotCats[c.key] ? '1.5px solid #bfdbfe' : '1.5px solid #e8eaed',
+                  opacity: spotCats[c.key] ? 1 : 0.6 }}
+              >
+                {c.icon}
+              </button>
+            ))}
           </div>
         )}
 

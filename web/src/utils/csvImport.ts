@@ -1,6 +1,7 @@
 import { collection, addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { saveRouteChunked } from '../firebase/data';
+import { categorizeByName } from './spotCategory';
 import type { TrackPoint } from '../firebase/data';
 
 export interface DetectedStop {
@@ -185,7 +186,7 @@ export async function saveDetectedSpots(
       const landmarkRef = await addDoc(collection(db, 'landmarks'), {
         userId,
         name,
-        category: 'その他',
+        category: categorizeByName(name) ?? 'その他',
         lat: spot.lat,
         lng: spot.lng,
         description: `平均滞在 ${Math.round(spot.totalMinutes / spot.visitCount)}分`,

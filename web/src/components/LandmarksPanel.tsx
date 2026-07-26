@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getUserLandmarks, getVisits, deleteLandmark, updateLandmark, mergeLandmarks, deleteVisit, uploadLandmarkPhotoFromUrl } from '../firebase/data';
+import { categorizeByName } from '../utils/spotCategory';
 import type { Landmark, Visit } from '../firebase/data';
 
 const NO_PHOTO_PLACEHOLDER = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='90' viewBox='0 0 120 90'%3E%3Crect width='120' height='90' fill='%23f3f4f6'/%3E%3Ccircle cx='60' cy='34' r='14' fill='%23d1d5db'/%3E%3Cellipse cx='60' cy='68' rx='24' ry='14' fill='%23d1d5db'/%3E%3C/svg%3E`;
@@ -39,7 +40,7 @@ interface Props {
   activePinDragId: string | null;
 }
 
-const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', '駐車場'];
+const CATEGORIES = ['その他', 'グルメ', 'カフェ', 'コンビニ', '観光', '公園', 'ショッピング', 'ガソリンスタンド', 'SA/PA', '駐車場'];
 
 // 自己修復イメージ: Google Placesの一時URL（storagePath空で保存されたもの）は期限切れで
 // 表示に失敗することがある。エラー時に placeId から新しいURLを取り直して表示し直す。
@@ -67,6 +68,7 @@ function HealableImg({ lm, heal, style }: {
 
 export default function LandmarksPanel({ userId, active, onFocus, onCountChange, getPlacesService, startMapPickMode, stopMapPickMode, startPinDragMode, stopPinDragMode, revertLandmarkPosition, activePinDragId }: Props) {
   const [landmarks, setLandmarks] = useState<Landmark[]>([]);
+  const [autoCategorizing, setAutoCategorizing] = useState(false);
   const [selected, setSelected]   = useState<Landmark | null>(null);
   const [visits, setVisits]       = useState<Visit[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -183,6 +185,37 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     });
   };
 
+  // 「その他」のままのスポットを名前からコンビニ/ガソスタ/SA・PAに一括分類。
+  // 手動で設定済みのカテゴリは上書きしない。
+  const handleAutoCategorize = async () => {
+    if (autoCategorizing) return;
+    const targets = landmarks
+      .map(lm => ({ lm, cat: (!lm.category || lm.category === 'その他') ? categorizeByName(lm.name) : null }))
+      .filter((x): x is { lm: Landmark; cat: string } => x.cat != null);
+    if (targets.length === 0) {
+      alert('自動分類できるスポットはありませんでした。\n（「その他」のスポットのうち、名前からコンビニ・ガソリンスタンド・SA/PAと判定できるものが対象です）');
+      return;
+    }
+    const counts: Record<string, number> = {};
+    targets.forEach(t => { counts[t.cat] = (counts[t.cat] ?? 0) + 1; });
+    const summary = Object.entries(counts).map(([c, n]) => `${c}: ${n}件`).join(' / ');
+    if (!confirm(`${targets.length}件のスポットを自動分類します。\n${summary}\n\n（手動設定済みのカテゴリは変更しません）`)) return;
+    setAutoCategorizing(true);
+    try {
+      let done = 0;
+      for (const { lm, cat } of targets) {
+        await updateLandmark(lm.id!, { category: cat });
+        setLandmarks(prev => prev.map(x => x.id === lm.id ? { ...x, category: cat } : x));
+        done++;
+      }
+      alert(`${done}件を分類しました。\n${summary}`);
+    } catch (e) {
+      alert(`分類中にエラー: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAutoCategorizing(false);
+    }
+  };
+
   const handleConfirmPlace = async (forceMerge = false) => {
     if (!selected || !pendingPlace) return;
 
@@ -199,7 +232,8 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
     const newLng = pendingPlace.geometry?.location?.lng();
     const patch: Parameters<typeof updateLandmark>[1] = {
       name: pendingPlace.name || selected.name,
-      category: placeTypeToCategory(pendingPlace.types || []),
+      // 名前ベースの自動分類を優先（SA/PAはPlaces typesでは判別できないため）、次にPlaces types
+      category: categorizeByName(pendingPlace.name || selected.name) ?? placeTypeToCategory(pendingPlace.types || []),
       placeId: pid,
     };
     // Google Places の一時URLをFirebase Storageに永続保存（既存写真は保持）
@@ -787,6 +821,14 @@ export default function LandmarksPanel({ userId, active, onFocus, onCountChange,
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
           <p style={{ color: '#9ca3af', fontSize: 12 }}>{filtered.length}件のスポット</p>
           <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={handleAutoCategorize}
+              disabled={autoCategorizing}
+              title="名前からコンビニ・ガソリンスタンド・SA/PAを自動分類（「その他」のスポットのみ対象）"
+              style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #bfdbfe', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap', opacity: autoCategorizing ? 0.6 : 1 }}
+            >
+              {autoCategorizing ? '分類中...' : '🪄 自動分類'}
+            </button>
             <button
               onClick={openMergePreview}
               style={{ background: '#fff7ed', color: '#c2410c', border: '1.5px solid #fed7aa', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}

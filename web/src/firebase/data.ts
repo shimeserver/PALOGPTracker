@@ -67,6 +67,8 @@ export interface Route {
   avgSpeed: number; maxSpeed: number; points: TrackPoint[];
   source: 'recorded' | 'imported'; mode?: TrackingMode; createdAt: number;
   gapsOk?: boolean; // true = 残ギャップは意図的な直線（フェリー等）としてギャップ点検の対象外にする
+  hasBackup?: boolean; // true = 修復前の点列バックアップ(bakチャンク)が存在し「元に戻す」が可能
+  backupAt?: number;   // バックアップ作成時刻(Unix ms)
 }
 export interface TagDef {
   id?: string; userId: string; name: string; color: string;
@@ -95,9 +97,10 @@ const PTS_CHUNK = 1500;
 // 1チャンク(1500点)はエンコード後 約250KB になるため、まとめすぎると超過して保存が丸ごと失敗する。
 const CHUNKS_PER_COMMIT = 15;
 
-export async function writeRoutePointChunks(routeId: string, points: TrackPoint[]): Promise<void> {
+// 点列チャンクの書き込み共通処理。col='pts'（現行データ）/ 'bak'（修復前バックアップ1世代）
+async function writeChunkDocs(routeId: string, col: 'pts' | 'bak', points: TrackPoint[]): Promise<void> {
   // 既存チャンクを消してから書き直す（チャンク数が減るケースに対応）
-  const old = await getDocs(collection(db, 'routes', routeId, 'pts'));
+  const old = await getDocs(collection(db, 'routes', routeId, col));
   if (!old.empty) {
     const delBatch = writeBatch(db);
     old.docs.forEach(d => delBatch.delete(d.ref));
@@ -107,11 +110,15 @@ export async function writeRoutePointChunks(routeId: string, points: TrackPoint[
   for (let start = 0; start < chunkCount; start += CHUNKS_PER_COMMIT) {
     const batch = writeBatch(db);
     for (let i = start; i < Math.min(start + CHUNKS_PER_COMMIT, chunkCount); i++) {
-      batch.set(doc(db, 'routes', routeId, 'pts', String(i).padStart(4, '0')),
+      batch.set(doc(db, 'routes', routeId, col, String(i).padStart(4, '0')),
         { i, points: points.slice(i * PTS_CHUNK, (i + 1) * PTS_CHUNK) });
     }
     await batch.commit();
   }
+}
+
+export async function writeRoutePointChunks(routeId: string, points: TrackPoint[]): Promise<void> {
+  await writeChunkDocs(routeId, 'pts', points);
 }
 
 export async function loadRoutePoints(routeId: string): Promise<TrackPoint[]> {
@@ -120,11 +127,13 @@ export async function loadRoutePoints(routeId: string): Promise<TrackPoint[]> {
 }
 
 async function deleteRoutePointChunks(routeId: string): Promise<void> {
-  const snap = await getDocs(collection(db, 'routes', routeId, 'pts'));
-  if (snap.empty) return;
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
+  for (const col of ['pts', 'bak'] as const) {
+    const snap = await getDocs(collection(db, 'routes', routeId, col));
+    if (snap.empty) continue;
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
 }
 
 // ルート新規保存（チャンク形式）
@@ -237,21 +246,63 @@ function haversineKm(p1: TrackPoint, p2: TrackPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export async function updateRoutePoints(routeId: string, points: TrackPoint[]): Promise<void> {
+function computeRouteStats(points: TrackPoint[]) {
   let totalDistance = 0;
   for (let i = 1; i < points.length; i++) totalDistance += haversineKm(points[i - 1], points[i]);
   // 300km/h超は異常値として集計から除外（高度混入や微小dt由来のスパイク対策）
   const speeds = points.map(p => p.speed).filter(s => s > 0 && s <= 300);
   const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0;
   const maxSpeed = speeds.reduce((m, s) => s > m ? s : m, 0);
-  const endTime = points[points.length - 1].timestamp;
+  return { totalDistance, avgSpeed, maxSpeed, endTime: points[points.length - 1].timestamp };
+}
+
+// 現在の点列（チャンク or 旧形式本体）を読み出す。バックアップ・復元共用
+async function readCurrentPoints(routeId: string): Promise<TrackPoint[]> {
+  const points = await loadRoutePoints(routeId);
+  if (points.length > 0) return points;
+  const snap = await getDoc(doc(db, 'routes', routeId));
+  return (snap.data()?.points ?? []) as TrackPoint[];
+}
+
+export async function updateRoutePoints(routeId: string, points: TrackPoint[]): Promise<void> {
+  // 上書き前に現在の点列を1世代だけバックアップ（「修復前に戻す」用）。
+  // バックアップ失敗は本処理を止めない（hasBackupが立たないだけ）。
+  let backedUp = false;
+  try {
+    const current = await readCurrentPoints(routeId);
+    if (current.length >= 2) {
+      await writeChunkDocs(routeId, 'bak', current);
+      backedUp = true;
+    }
+  } catch { /* バックアップ失敗時は上書きのみ実行 */ }
+  const { totalDistance, avgSpeed, maxSpeed, endTime } = computeRouteStats(points);
   // pointsはチャンク側に保存し、本体からは除去（旧形式ルートもこの操作でチャンク化される）
   await writeRoutePointChunks(routeId, points);
   await updateDoc(doc(db, 'routes', routeId), {
     points: deleteField(), ptsChunked: true, pointCount: points.length,
     totalDistance, avgSpeed, maxSpeed,
     endTime: Timestamp.fromMillis(endTime),
+    ...(backedUp ? { hasBackup: true, backupAt: Date.now() } : {}),
   });
+}
+
+// 「修復前に戻す」: 現在の点列とバックアップを入れ替える。
+// 交換式なのでもう一度実行すると修復後の状態に戻れる（押し間違いも安全）。
+export async function restoreRoutePoints(routeId: string): Promise<TrackPoint[]> {
+  const bakSnap = await getDocs(query(collection(db, 'routes', routeId, 'bak'), orderBy('i')));
+  const bakPoints = bakSnap.docs.flatMap(d => (d.data().points ?? []) as TrackPoint[]);
+  if (bakPoints.length < 2) throw new Error('バックアップがありません');
+  const current = await readCurrentPoints(routeId);
+  const { totalDistance, avgSpeed, maxSpeed, endTime } = computeRouteStats(bakPoints);
+  await writeChunkDocs(routeId, 'bak', current); // 現在値をbakへ（交換）
+  await writeRoutePointChunks(routeId, bakPoints);
+  await updateDoc(doc(db, 'routes', routeId), {
+    points: deleteField(), ptsChunked: true, pointCount: bakPoints.length,
+    totalDistance, avgSpeed, maxSpeed,
+    endTime: Timestamp.fromMillis(endTime),
+    hasBackup: true, backupAt: Date.now(),
+  });
+  return bakPoints;
 }
 
 export async function deleteAllUserLandmarks(userId: string): Promise<number> {

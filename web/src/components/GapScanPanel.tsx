@@ -1,8 +1,27 @@
 import { useMemo, useState } from 'react';
-import type { Route } from '../firebase/data';
-import { updateRoutePoints, updateRouteGapsOk } from '../firebase/data';
+import type { Route, TrackPoint } from '../firebase/data';
+import { updateRoutePoints, updateRouteGapsOk, restoreRoutePoints } from '../firebase/data';
 import { routeGapStats, bridgeGaps, removeGeoWarps, recalcSpeeds } from '../utils/gapBridge';
 import type { GapStats } from '../utils/gapBridge';
+
+function haversineKm(a: TrackPoint, b: TrackPoint): number {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+// updateRoutePoints/restoreRoutePoints と同じ計算でローカル状態のstatsを更新する
+function statsOf(points: TrackPoint[]) {
+  let totalDistance = 0;
+  for (let i = 1; i < points.length; i++) totalDistance += haversineKm(points[i - 1], points[i]);
+  const speeds = points.map(p => p.speed).filter(s => s > 0 && s <= 300);
+  return {
+    totalDistance,
+    avgSpeed: speeds.length ? speeds.reduce((s, v) => s + v) / speeds.length : 0,
+    maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
+  };
+}
 
 // 全ルートを走査して「飛び（ギャップ）が残っているルート」を一覧化し、
 // 個別/一括の自動修復・「直線でOK」マークができる点検パネル。
@@ -62,20 +81,7 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
     }
     const fixed = recalcSpeeds(r.points);
     await updateRoutePoints(route.id!, fixed);
-    // ローカル状態も更新（stats は updateRoutePoints と同じ計算）
-    let totalDist = 0;
-    for (let i = 1; i < fixed.length; i++) {
-      const R = 6371, a = fixed[i - 1], b = fixed[i];
-      const dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
-      const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-      totalDist += R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-    }
-    const speeds = fixed.map(p => p.speed).filter(s => s > 0 && s <= 300);
-    onUpdateRoute({
-      ...route, points: fixed, totalDistance: totalDist,
-      avgSpeed: speeds.length ? speeds.reduce((s, v) => s + v) / speeds.length : 0,
-      maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
-    });
+    onUpdateRoute({ ...route, points: fixed, ...statsOf(fixed), hasBackup: true, backupAt: Date.now() });
     const parts: string[] = [];
     if (cleaned.removed > 0) parts.push(`飛び${cleaned.removed}点除去`);
     if (r.bridged > 0) parts.push(`${r.bridged}か所補間`);
@@ -119,6 +125,21 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
       setBatchStatus('一括修復が完了しました');
     } finally {
       setBatchRunning(false);
+    }
+  };
+
+  const handleRestore = async (route: Route) => {
+    if (repairingId || batchRunning) return;
+    if (!confirm(`「${route.name || '（無名）'}」を修復前の状態に戻しますか？\n（交換式なので、もう一度押すと修復後の状態に戻せます）`)) return;
+    setRepairingId(route.id!);
+    try {
+      const pts = await restoreRoutePoints(route.id!);
+      onUpdateRoute({ ...route, points: pts, ...statsOf(pts), hasBackup: true, backupAt: Date.now() });
+      setLastResult(prev => ({ ...prev, [route.id!]: '修復前の状態に戻しました' }));
+    } catch (e) {
+      setLastResult(prev => ({ ...prev, [route.id!]: `エラー: ${e instanceof Error ? e.message : String(e)}` }));
+    } finally {
+      setRepairingId(null);
     }
   };
 
@@ -191,6 +212,16 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
                 >
                   {repairingId === route.id ? '修復中...' : '🔧 修復'}
                 </button>
+                {route.hasBackup && (
+                  <button
+                    onClick={() => handleRestore(route)}
+                    disabled={batchRunning || repairingId != null}
+                    title="修復前の点列に戻す（もう一度押すと修復後に戻る）"
+                    style={{ padding: '5px 10px', fontSize: 12, background: '#fff7ed', color: '#c2410c', border: '1.5px solid #fed7aa', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    ↩ 戻す
+                  </button>
+                )}
                 <button
                   onClick={() => { onSelectRoute(route); onClose(); }}
                   title="地図で開く"
