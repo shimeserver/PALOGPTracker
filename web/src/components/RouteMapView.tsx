@@ -158,6 +158,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     });
     // クリーンアップ後に直線のまま残ったギャップ（⚠マーカーで可視化）
     const [unresolvedGaps, setUnresolvedGaps] = useState<UnresolvedGap[]>([]);
+    // タイムマシン: 全ルート表示を「この日時までの記録」に絞る（▶で時系列リプレイ）
+    const [timeCut, setTimeCut] = useState<number | null>(null);
+    const [timePlaying, setTimePlaying] = useState(false);
+    const timePlayRef = useRef<ReturnType<typeof setInterval> | null>(null);
     // 密度オーバーレイに渡すためのリアクティブなmap参照
     const [mapObj, setMapObj] = useState<google.maps.Map | null>(null);
     const sectionModeRef = useRef(false);
@@ -351,6 +355,39 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         setSavingFuel(false);
       }
     };
+
+    // タイムマシン: 全ルートの記録開始日の範囲
+    const timeRange = useMemo(() => {
+      if (allRoutes.length < 2) return null;
+      let min = Infinity, max = -Infinity;
+      for (const r of allRoutes) { if (r.startTime < min) min = r.startTime; if (r.startTime > max) max = r.startTime; }
+      return min < max ? { min, max } : null;
+    }, [allRoutes]);
+
+    const stopTimePlay = () => {
+      if (timePlayRef.current) clearInterval(timePlayRef.current);
+      timePlayRef.current = null;
+      setTimePlaying(false);
+    };
+
+    const toggleTimePlay = () => {
+      if (timePlaying) { stopTimePlay(); return; }
+      if (!timeRange) return;
+      const span = timeRange.max - timeRange.min;
+      const STEPS = 80;
+      setTimeCut(timeRange.min);
+      setTimePlaying(true);
+      timePlayRef.current = setInterval(() => {
+        setTimeCut(prev => {
+          const next = (prev ?? timeRange.min) + span / STEPS;
+          if (next >= timeRange.max) { stopTimePlay(); return null; } // 完走したら全表示へ
+          return next;
+        });
+      }, 300);
+    };
+
+    useEffect(() => () => stopTimePlay(), []);
+    useEffect(() => { if (!isAllMode) { stopTimePlay(); setTimeCut(null); } }, [isAllMode]);
 
     const startEditMode = () => {
       if (!route) return;
@@ -680,7 +717,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           }}
         >
           {/* 全ルート表示: 通過回数の密度オーバーレイ（1回=青 → 回数が増えるほど赤へ） */}
-          {isAllMode && <DensityOverlay map={mapObj} routes={allRoutes} />}
+          {isAllMode && <DensityOverlay map={mapObj} routes={timeCut == null ? allRoutes : allRoutes.filter(r => r.startTime <= timeCut)} />}
 
           {/* 単一ルート：単色（編集モード中は非表示）。巨大ルートでは速度カラーは重すぎるため単色に落とす */}
           {!isAllMode && !editMode && (colorMode === 'solid' || displayed.length > 20000) && displayed.length > 1 && (
@@ -1169,6 +1206,37 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 {c.icon}
               </button>
             ))}
+            {/* タイムマシン: この日までの記録だけを表示（▶で時系列リプレイ） */}
+            {timeRange && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, paddingTop: 8, borderTop: '1px solid #e8eaed' }}>
+                <button
+                  onClick={toggleTimePlay}
+                  title="記録の時系列リプレイ"
+                  style={{ padding: '3px 10px', fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: 'pointer', border: 'none',
+                    background: timePlaying ? '#ef4444' : '#2563eb', color: '#fff' }}
+                >
+                  {timePlaying ? '■' : '▶'}
+                </button>
+                <input
+                  type="range"
+                  min={timeRange.min}
+                  max={timeRange.max}
+                  step={(timeRange.max - timeRange.min) / 200}
+                  value={timeCut ?? timeRange.max}
+                  onChange={e => {
+                    stopTimePlay();
+                    const v = Number(e.target.value);
+                    setTimeCut(v >= timeRange.max ? null : v);
+                  }}
+                  style={{ flex: 1, minWidth: 160, accentColor: '#2563eb', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>
+                  {timeCut == null
+                    ? '全期間'
+                    : `〜${new Date(timeCut).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short' })}（${allRoutes.filter(r => r.startTime <= timeCut).length}件)`}
+                </span>
+              </div>
+            )}
           </div>
         )}
 

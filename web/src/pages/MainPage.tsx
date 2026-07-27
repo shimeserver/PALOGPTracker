@@ -9,6 +9,7 @@ import CarsPanel from '../components/CarsPanel';
 import ActivityPanel from '../components/ActivityPanel';
 import PrefectureMapPanel from '../components/PrefectureMapPanel';
 import GapScanPanel from '../components/GapScanPanel';
+import StatsPanel from '../components/StatsPanel';
 import { getUserRoutes, deleteRoute, getUserTags, hydrateRoutePoints, getUserCars } from '../firebase/data';
 import { routeFingerprint, getCachedPoints, putCachedPoints, deleteCachedPoints, clearPointsCache } from '../utils/pointsCache';
 import type { Route, TagDef, Car } from '../firebase/data';
@@ -34,6 +35,7 @@ export default function MainPage({ user }: Props) {
   const [activityOpen, setActivityOpen]     = useState(false);
   const [prefsOpen, setPrefsOpen]           = useState(false);
   const [gapScanOpen, setGapScanOpen]       = useState(false);
+  const [statsOpen, setStatsOpen]           = useState(false);
   // ルート絞り込み（車両・日付）。一覧と「全ルート表示」の両方に効く
   const [carFilter, setCarFilter]           = useState<string>('');   // Car.id
   const [dateFrom, setDateFrom]             = useState<string>('');   // YYYY-MM-DD
@@ -175,6 +177,7 @@ export default function MainPage({ user }: Props) {
               onOpenActivity={() => setActivityOpen(true)}
               onOpenPrefs={() => setPrefsOpen(true)}
               onOpenGapScan={() => setGapScanOpen(true)}
+              onOpenStats={() => setStatsOpen(true)}
               tags={tags}
               onUpdateRoute={handleUpdateRoute}
               onTagsChange={reloadTags}
@@ -256,6 +259,14 @@ export default function MainPage({ user }: Props) {
         routes={routes}
         onSelectRoute={r => { setSelectedRoute(r); setShowAllRoutes(false); setTab('routes'); }}
         onUpdateRoute={handleUpdateRoute}
+      />
+
+      <StatsPanel
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        routes={routes}
+        cars={cars}
+        tags={tags}
       />
 
       <CarsPanel

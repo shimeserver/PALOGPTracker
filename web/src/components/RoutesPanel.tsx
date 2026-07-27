@@ -20,6 +20,7 @@ interface Props {
   onOpenActivity: () => void;
   onOpenPrefs: () => void;
   onOpenGapScan: () => void;
+  onOpenStats: () => void;
   carWarning?: boolean;
   tags: TagDef[];
   onUpdateRoute: (route: Route) => void;
@@ -45,7 +46,7 @@ function formatDuration(start: number, end: number) {
 
 export default function RoutesPanel({
   userId, routes, loading, selectedRoute, showAllRoutes,
-  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity, onOpenPrefs, onOpenGapScan,
+  onSelect, onDelete, onShowAll, onOpenSettings, onOpenCars, onOpenActivity, onOpenPrefs, onOpenGapScan, onOpenStats,
   tags, onUpdateRoute, onTagsChange, activeCar, carWarning,
   cars, carFilter, dateFrom, dateTo, onCarFilter, onDateFrom, onDateTo,
 }: Props) {
@@ -185,6 +186,7 @@ export default function RoutesPanel({
           </span>
         )}
         {!activeCar && <div style={{ flex: 1 }} />}
+        <button style={styles.iconBtn} onClick={onOpenStats} title="走行ダッシュボード（高速走破率・カレンダー・時間帯・車種別）">📊</button>
         <button style={styles.iconBtn} onClick={onOpenGapScan} title="ギャップ点検（飛びが残っているルートを一覧・一括修復）">🩹</button>
         <button style={styles.iconBtn} onClick={onOpenActivity} title="活動統計">🏃</button>
         <button style={styles.iconBtn} onClick={onOpenPrefs} title="都道府県制覇マップ">🗾</button>
