@@ -41,3 +41,4 @@ mobile/.expo-shared/
 mobile/android_secrets*.zip
 mobile/android_min.zip
 mobile/android_min.b64
+tools/.overpass-query.tmp
