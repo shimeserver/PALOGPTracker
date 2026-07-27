@@ -197,7 +197,7 @@ export async function bridgeGaps(rawPoints: TrackPoint[]): Promise<TrackPoint[]>
     // 0) 既知トンネル（山手・アクア・湾岸線・関越等）は同梱ジオメトリで決定論的に補間。
     //    オフライン・OSRM連続失敗・時間切れでも動くため、上限ゲートに関係なく判定する
     //    （この関数は車モードの保存時のみ呼ばれる）。
-    const tm = isGap ? findTunnelPath(prev, cur, distKm) : null;
+    const tm = isGap ? await findTunnelPath(prev, cur, distKm) : null;
     const canBridge = isGap && (tm != null || (bridged < MAX_GAPS && fails < MAX_FAILS && Date.now() < deadline));
     if (canBridge) {
       // 1) 次にOSRM。公開OSRMは有料道路を使わないため、

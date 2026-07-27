@@ -131,28 +131,27 @@ describe('recalcSpeeds', () => {
 });
 
 describe('findTunnelPath — 既知トンネル補間', () => {
-  it.skipIf(TUNNELS.length === 0)('各トンネルの両端ギャップに対して線形を返す', () => {
+  it.skipIf(TUNNELS.length === 0)('各トンネルの両端ギャップに対して線形を返す', async () => {
     for (const t of TUNNELS) {
       const s = { lat: t.path[0][1], lng: t.path[0][0] };
       const e = { lat: t.path[t.path.length - 1][1], lng: t.path[t.path.length - 1][0] };
       const gapKm = Math.max(0.5, t.lenKm * 0.9);
-      const m = findTunnelPath(s, e, gapKm);
+      const m = await findTunnelPath(s, e, gapKm);
       expect(m, t.name).not.toBeNull();
       expect(m!.lenKm).toBeGreaterThan(t.lenKm * 0.8);
     }
   });
 
-  it.skipIf(TUNNELS.length === 0)('逆方向のギャップにはマッチしない（上下線の取り違え防止）', () => {
+  it.skipIf(TUNNELS.length === 0)('逆方向のギャップは同名トンネル（反対車線）以外にマッチしない', async () => {
     const t = TUNNELS[0];
     const s = { lat: t.path[0][1], lng: t.path[0][0] };
     const e = { lat: t.path[t.path.length - 1][1], lng: t.path[t.path.length - 1][0] };
-    // 終点→始点（逆走）は同じ線形にはマッチしないはず（反対車線の線形が別途あればそちらに合う）
-    const m = findTunnelPath(e, s, t.lenKm);
+    const m = await findTunnelPath(e, s, t.lenKm);
     if (m) expect(m.name).toBe(t.name); // マッチするなら反対車線の同名トンネルのみ
   });
 
-  it('トンネルと無関係なギャップにはマッチしない', () => {
-    const m = findTunnelPath({ lat: 43.06, lng: 141.35 }, { lat: 43.07, lng: 141.36 }, 1.5); // 札幌市内
+  it('トンネルと無関係なギャップにはマッチしない', async () => {
+    const m = await findTunnelPath({ lat: 43.06, lng: 141.35 }, { lat: 43.07, lng: 141.36 }, 1.5); // 札幌市内(トンネルなし地点)
     expect(m).toBeNull();
   });
 });

@@ -1,8 +1,9 @@
-import { TUNNELS } from '../data/tunnels';
+import type { TunnelGeom } from '../data/tunnels';
 
-// 既知の長大トンネル（山手・アクア・湾岸線・関越等）のGPS喪失ギャップを
+// 既知の高速道路トンネル（全国466本・2km以上）のGPS喪失ギャップを
 // 同梱の実ジオメトリで決定論的に補間する。ネットワーク不要・オフラインでも動く。
 // OSRM（有料道路回避）やコリドー探索（Overpass負荷・不確実）より先に試す。
+// データ(約240KB)は初回の修復実行時に動的ロードする（初期バンドルに含めない）。
 
 interface LL { lat: number; lng: number }
 
@@ -18,24 +19,46 @@ function haversineKm(a: LL, b: LL): number {
 const MATCH_KM = 0.6;   // ギャップ端点がトンネル線形からこの距離以内なら「トンネル上」とみなす
 const MIN_SUB_KM = 0.5; // これ未満の切り出しは通常のギャップ処理に任せる
 
+interface Box { minLat: number; maxLat: number; minLng: number; maxLng: number }
+const PAD = 0.01; // ≈1km
+
+// データとバウンディングボックスは初回利用時に一度だけロード・計算する
+let TUNNELS: TunnelGeom[] = [];
+let BOXES: Box[] = [];
+let loadPromise: Promise<void> | null = null;
+
+function ensureLoaded(): Promise<void> {
+  if (!loadPromise) {
+    loadPromise = import('../data/tunnels').then(m => {
+      TUNNELS = m.TUNNELS;
+      BOXES = TUNNELS.map(t => {
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+        for (const [lng, lat] of t.path) {
+          if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+          if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+        }
+        return { minLat: minLat - PAD, maxLat: maxLat + PAD, minLng: minLng - PAD, maxLng: maxLng + PAD };
+      });
+    }).catch(() => { loadPromise = null; }); // 失敗時は次回再試行（トンネル補間なしで続行可能）
+  }
+  return loadPromise;
+}
+
 export interface TunnelMatch { name: string; path: LL[]; lenKm: number }
 
 // ギャップ（prev→cur）が既知トンネルの線形に沿うなら、その区間の実ジオメトリを返す。
 // 途中でGPSが切れた/復帰したケースにも対応するため、端点を線形上に射影して部分区間を使う。
 // 上下線は別線形として収録されているため、全候補から「進行方向が順方向」を優先し、
 // 同着なら端点距離の小さい方（=正しい車線）を選ぶ。配列順で決めると反対車線に化ける。
-export function findTunnelPath(prev: LL, cur: LL, gapKm: number): TunnelMatch | null {
+export async function findTunnelPath(prev: LL, cur: LL, gapKm: number): Promise<TunnelMatch | null> {
+  await ensureLoaded();
   let best: (TunnelMatch & { forward: boolean; endDist: number }) | null = null;
-  for (const t of TUNNELS) {
-    // 粗いバウンディングボックスで即除外（全国データでも高速）
-    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-    for (const [lng, lat] of t.path) {
-      if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
-      if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
-    }
-    const pad = 0.01; // ≈1km
-    if (prev.lat < minLat - pad || prev.lat > maxLat + pad || prev.lng < minLng - pad || prev.lng > maxLng + pad) continue;
-    if (cur.lat < minLat - pad || cur.lat > maxLat + pad || cur.lng < minLng - pad || cur.lng > maxLng + pad) continue;
+  for (let ti = 0; ti < TUNNELS.length; ti++) {
+    const t = TUNNELS[ti];
+    // 事前計算済みバウンディングボックスで即除外（全国数百本でも高速）
+    const b = BOXES[ti];
+    if (prev.lat < b.minLat || prev.lat > b.maxLat || prev.lng < b.minLng || prev.lng > b.maxLng) continue;
+    if (cur.lat < b.minLat || cur.lat > b.maxLat || cur.lng < b.minLng || cur.lng > b.maxLng) continue;
 
     // 端点に最も近い頂点を探す（片方向データなので i < j が進行方向一致の条件）
     let iBest = -1, iDist = Infinity, jBest = -1, jDist = Infinity;

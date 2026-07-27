@@ -383,7 +383,7 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
       //    決定論的に補間。オフライン・OSRM連続失敗・時間切れでも動くため、
       //    上限ゲートより先に判定する（車モード限定: 徒歩/自転車=公共交通ルートの
       //    ギャップを道路トンネルで埋めない。りんかい線等の並走鉄道の誤マッチ防止）。
-      const tm = profile === 'driving' ? findTunnelPath(prev, cur, distKm) : null;
+      const tm = profile === 'driving' ? await findTunnelPath(prev, cur, distKm) : null;
       if (!tm && (bridged >= maxGaps || fails >= MAX_FAILS || Date.now() >= deadline)) {
         markUnresolved('limit');
         opts?.onProgress?.(detected, totalGaps);
