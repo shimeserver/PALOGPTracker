@@ -230,19 +230,18 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
                         ))}
                       </div>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                       {partial.map(hw => (
-                        <div key={hw.name} title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                            <span style={{ color: '#1f2937', fontWeight: 600 }}>{hw.name}</span>
-                            <span style={{ color: '#9ca3af' }}>
-                              <span style={{ color: '#2563eb', fontWeight: 700 }}>{Math.round(hw.pct * 100)}%</span>
-                              {' '}{Math.round(hw.lenKm * hw.pct)}/{hw.lenKm}km
-                            </span>
-                          </div>
-                          <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                        <div key={hw.name} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}
+                          title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
+                          <span style={{ fontSize: 12, color: '#1f2937', fontWeight: 600, width: 128, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>{hw.name}</span>
+                          <div style={{ flex: 1, height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
                             <div style={{ width: `${Math.max(1.5, hw.pct * 100)}%`, height: '100%', background: '#2563eb', borderRadius: 3 }} />
                           </div>
+                          <span style={{ fontSize: 11, color: '#9ca3af', width: 96, textAlign: 'right', flexShrink: 0 }}>
+                            <span style={{ color: '#2563eb', fontWeight: 700, fontSize: 12 }}>{Math.round(hw.pct * 100)}%</span>
+                            {' '}{Math.round(hw.lenKm * hw.pct)}/{hw.lenKm}km
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -270,21 +269,25 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
                       {years.map(y => <option key={y} value={y}>{y}年</option>)}
                     </select>
                   </div>
-                  <div style={{ overflowX: 'auto', paddingBottom: 2 }}>
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {weeks.map((col, wi) => (
-                        <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          {col.map(c => (
-                            <div
-                              key={c.key}
-                              title={c.inYear ? `${c.key}: ${c.km > 0 ? c.km.toFixed(1) + 'km' : '走行なし'}` : ''}
-                              style={{ width: 9, height: 9, borderRadius: 2, background: c.inYear ? cellColor(c.km) : 'transparent' }}
-                            />
-                          ))}
-                        </div>
-                      ))}
+                  {/* 上半期/下半期の2段組み（横スクロールを出さずセルも大きく） */}
+                  {[weeks.slice(0, Math.ceil(weeks.length / 2)), weeks.slice(Math.ceil(weeks.length / 2))].map((half, hi) => (
+                    <div key={hi} style={{ marginBottom: hi === 0 ? 10 : 0 }}>
+                      <div style={{ fontSize: 10, color: '#c4c9d1', fontWeight: 600, marginBottom: 3 }}>{hi === 0 ? '1月〜6月' : '7月〜12月'}</div>
+                      <div style={{ display: 'flex', gap: 3 }}>
+                        {half.map((col, wi) => (
+                          <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {col.map(c => (
+                              <div
+                                key={c.key}
+                                title={c.inYear ? `${c.key}: ${c.km > 0 ? c.km.toFixed(1) + 'km' : '走行なし'}` : ''}
+                                style={{ width: 12, height: 12, borderRadius: 3, background: c.inYear ? cellColor(c.km) : 'transparent' }}
+                              />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  ))}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 11, color: '#9ca3af' }}>
                     少 {['#f3f4f6', '#bfdbfe', '#60a5fa', '#2563eb', '#1e3a8a'].map(c => (
                       <span key={c} style={{ width: 9, height: 9, borderRadius: 2, background: c, display: 'inline-block' }} />
