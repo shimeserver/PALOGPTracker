@@ -1,0 +1,26 @@
+name: Deploy Firestore Rules
+
+# 手動実行のみ（ルールは影響が大きいので自動デプロイしない）。
+# 事前に GitHub Secrets へ以下を登録すること:
+#   FIREBASE_TOKEN      … `firebase login:ci` で取得
+#   FIREBASE_PROJECT_ID … FirebaseプロジェクトID（webの VITE_FIREBASE_PROJECT_ID と同じ値）
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Deploy rules
+        run: npx firebase-tools deploy --only firestore:rules --project "$FIREBASE_PROJECT_ID"
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}

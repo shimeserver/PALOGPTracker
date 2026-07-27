@@ -1,41 +1,33 @@
-// 既知の長大トンネル（GPS完全喪失区間）の実ジオメトリを OSM から取得し、
-// web/mobile に同梱する静的データ tunnels.json を生成する。
+// 全国の高速道路トンネル（GPS喪失区間）の実ジオメトリを OSM から取得し、
+// web/mobile に同梱する静的データ tunnels.ts を生成する。
 //
 // 使い方: node tools/gen-tunnels.mjs
-// 出力: web/src/data/tunnels.json と mobile/src/data/tunnels.json（同一内容）
+// 出力: web/src/data/tunnels.ts と mobile/src/data/tunnels.ts（同一内容）
 //
-// 方式: トンネル名で motorway の way を検索 → 連結成分ごとに（上下線が別成分になる）
-// oneway を尊重した最長経路を求めて1本の折れ線にする。座標の手打ちをしないので確実。
+// 方式: 日本を経度帯で分割した各リージョンから motorway のトンネル way を全取得し、
+// 連結成分ごと（上下線は別成分になる）に oneway を尊重した最長経路を1本の折れ線にする。
+// 名前に依存しないため、無名トンネル（川崎航路等）や圏央道の中規模トンネルも拾える。
+// 連続するトンネル（短い明かり区間で分かれた山岳トンネル群）は方向連続なら連結する。
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 対象トンネル（車で走れるGPS喪失級の長大・海底トンネル）。
-// 青函トンネルは鉄道専用なので対象外。関門トンネル(国道2号)はmotorwayでないため対象外
-// （関門橋経由は地上なのでGPSが生きる）。
-// 名前regex/等値クエリはOverpassが混雑時に処理しきれないため、
-// 「狭いbbox + tunnel + motorway」の軽量クエリで取得し、名前はクライアント側で照合する。
-// bbox は s,w,n,e。トンネル位置を広めに覆っていれば良い（名前照合で他は落ちる）。
-// match: name / tunnel:name に含まれていれば採用する部分文字列（省略時はlabel）
-// アクアラインのトンネル部は name="東京湾アクアライン;東京湾横断・木更津東金道路" で
-// tunnel:name が無いため「アクアライン」で照合する（bbox内のアクアラインのトンネル=海底部のみ）。
-// 川崎航路・空港北トンネルはOSM上で無名（name/tunnel:nameなし）のため対象外
-// （2km級で短く、OSRM/コリドー/直線処理で十分）。
-const TUNNELS = [
-  { label: '山手トンネル', bbox: [35.63, 139.64, 35.76, 139.73] },       // 首都高C2 18.2km
-  { label: 'アクアトンネル', bbox: [35.40, 139.74, 35.56, 139.93], match: ['アクアトンネル', 'アクアライン'] }, // 9.6km 海底
-  { label: '東京港トンネル', bbox: [35.57, 139.72, 35.64, 139.79] },     // 湾岸線 海底
-  { label: '多摩川トンネル', bbox: [35.50, 139.73, 35.57, 139.81] },     // 湾岸線 河口部
-  { label: '横浜北トンネル', bbox: [35.45, 139.55, 35.56, 139.68] },     // K7 8.2km
-  { label: '関越トンネル', bbox: [36.72, 138.80, 36.94, 139.05] },       // 関越道 11.0km
-  { label: '恵那山トンネル', bbox: [35.38, 137.42, 35.64, 137.70] },     // 中央道 8.6km
-  { label: '飛騨トンネル', bbox: [36.08, 136.82, 36.32, 137.18], match: ['飛騨トンネル', '飛驒トンネル'] }, // 東海北陸道 10.7km（OSMは旧字体「驒」・対面通行）
+// 日本全域を経度帯で分割（境界またぎ対策で0.1度オーバーラップ・重複は後段でdedupe）
+const REGIONS = [
+  [24.0, 122.0, 46.5, 132.1],
+  [24.0, 131.9, 46.5, 135.1],
+  [24.0, 134.9, 46.5, 137.6],
+  [24.0, 137.4, 46.5, 139.6],
+  [24.0, 139.4, 46.5, 141.6],
+  [24.0, 141.4, 46.5, 146.0],
 ];
 
-const MIN_LEN_KM = 1.2;   // これ未満の成分（ランプ等）は捨てる
+const MIN_LEN_KM = 2.0;   // 収録する最小トンネル長（これ未満はOSRM/コリドー/直線処理で十分）
+const CHAIN_GAP_KM = 0.3; // 明かり区間がこれ未満で方向が連続なら1本に連結
 const SIMPLIFY_M = 40;    // 出力点間隔の下限（データサイズ削減）
 
 function haversineKm(a, b) {
@@ -45,35 +37,32 @@ function haversineKm(a, b) {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-import { execFileSync } from 'child_process';
-
-// Node fetch がこの環境で IPv6 起因の失敗をするため curl 経由で取得。
-// 日本語を argv で渡すと Windows で文字化けするため一時ファイル経由で渡す。
 const ENDPOINTS = [
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass-api.de/api/interpreter',
 ];
 
+// Node fetch がこの環境で IPv6 起因の失敗をするため curl 経由で取得。
+// 混雑時は「server too busy」を返し続けるため辛抱強くリトライする。
 function overpass(query) {
   const tmp = path.join(__dirname, '.overpass-query.tmp');
   fs.writeFileSync(tmp, `data=${encodeURIComponent(query)}`);
   try {
-    // Overpassは混雑時に「server too busy」を返し続けるため、辛抱強くリトライする
     let lastErr = null;
     for (let attempt = 0; attempt < 12; attempt++) {
       const ep = ENDPOINTS[attempt % ENDPOINTS.length];
       try {
         const out = execFileSync('curl', [
-          '-s', '-m', '120', '-A', 'PALOGPTracker/1.0 (tunnel geometry generator)',
+          '-s', '-m', '180', '-A', 'PALOGPTracker/1.0 (tunnel geometry generator)',
           '--data', `@${tmp}`, ep,
-        ], { maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' });
+        ], { maxBuffer: 256 * 1024 * 1024, encoding: 'utf-8' });
         const json = JSON.parse(out);
         if (json.remark?.includes('error')) throw new Error(json.remark);
         return json;
       } catch (e) {
         lastErr = e;
         console.error(`  … retry ${attempt + 1}/12 (${ep.split('/')[2]}): ${String(e.message).slice(0, 60)}`);
-        execFileSync(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)']); // 30秒待って再試行
+        execFileSync(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)']);
       }
     }
     throw lastErr;
@@ -82,11 +71,9 @@ function overpass(query) {
   }
 }
 
-// 有向グラフ上で「startから到達できる最遠ノードまでの最短路」を全startで試し、
-// 最長のものを本線経路として採用する（枝=出入口ランプは短いので負けて消える）。
+// 有向グラフ上で最長の最短路（=本線経路）を求める。枝=出入口ランプは短いので負ける
 function longestPath(coords, adj) {
   const n = coords.length;
-  // 入次数0のノード（=このトンネル方向の入口候補）を優先、なければ全ノード
   const indeg = new Array(n).fill(0);
   adj.forEach(edges => edges.forEach(([v]) => indeg[v]++));
   let starts = [];
@@ -97,7 +84,6 @@ function longestPath(coords, adj) {
     const dist = new Array(n).fill(Infinity);
     const prev = new Array(n).fill(-1);
     dist[s] = 0;
-    // トンネル成分は小さいので単純なDijkstra（配列走査）で十分
     const done = new Array(n).fill(false);
     for (;;) {
       let u = -1, du = Infinity;
@@ -128,27 +114,14 @@ function simplify(pts) {
   return out;
 }
 
-const result = [];
-for (const { label: name, bbox, match } of TUNNELS) {
-  const q = `[out:json][timeout:30];way["highway"~"^(motorway|motorway_link)$"]["tunnel"](${bbox.join(',')});(._;>;);out body;`;
+const all = []; // { name, len, pts }
+for (const bbox of REGIONS) {
+  const q = `[out:json][timeout:120];way["highway"~"^(motorway|motorway_link)$"]["tunnel"](${bbox.join(',')});(._;>;);out body;`;
   let data;
   try {
     data = await overpass(q);
   } catch (e) {
-    console.error(`✗ ${name}: ${e.message}`);
-    continue;
-  }
-  // 名前照合はクライアント側で行う。首都高等は way の name が路線名（中央環状線等）で
-  // トンネル名は tunnel:name に入ることがあるため両方を見る。
-  const matchers = match ?? [name];
-  const wayNameOf = (el) => `${el.tags?.name ?? ''}|${el.tags?.['tunnel:name'] ?? ''}`;
-  const allWays = data.elements.filter(el => el.type === 'way');
-  data.elements = data.elements.filter(el =>
-    el.type === 'node' || (el.type === 'way' && matchers.some(m => wayNameOf(el).includes(m)))
-  );
-  if (!data.elements.some(el => el.type === 'way')) {
-    const names = [...new Set(allWays.map(wayNameOf))].slice(0, 10).join(' / ');
-    console.error(`✗ ${name}: 一致するwayなし。bbox内のトンネル名: ${names}`);
+    console.error(`✗ region ${bbox.join(',')}: ${e.message}`);
     continue;
   }
   const idMap = new Map();
@@ -156,10 +129,10 @@ for (const { label: name, bbox, match } of TUNNELS) {
   for (const el of data.elements) {
     if (el.type === 'node') { idMap.set(el.id, coords.length); coords.push({ lat: el.lat, lng: el.lon }); }
   }
-  // 連結成分に分ける（無向で成分分割 → 各成分内で有向最長路）
+  const ways = data.elements.filter(e => e.type === 'way');
+  // 連結成分に分割
   const comp = new Array(coords.length).fill(-1);
   const undirected = coords.map(() => []);
-  const ways = data.elements.filter(e => e.type === 'way');
   for (const w of ways) {
     for (let i = 1; i < w.nodes.length; i++) {
       const u = idMap.get(w.nodes[i - 1]), v = idMap.get(w.nodes[i]);
@@ -177,73 +150,111 @@ for (const { label: name, bbox, match } of TUNNELS) {
     }
     nComp++;
   }
-  const cands = [];
+  // 成分ごとの最長路
+  const compWays = Array.from({ length: nComp }, () => []);
+  for (const w of ways) {
+    const c = comp[idMap.get(w.nodes[0]) ?? -1];
+    if (c >= 0) compWays[c].push(w);
+  }
+  let regionCount = 0;
   for (let c = 0; c < nComp; c++) {
     const localIdx = new Map();
     const localCoords = [];
     for (let i = 0; i < coords.length; i++) if (comp[i] === c) { localIdx.set(i, localCoords.length); localCoords.push(coords[i]); }
+    if (localCoords.length < 2 || localCoords.length > 4000) continue;
     const adj = localCoords.map(() => []);
-    for (const w of ways) {
+    for (const w of compWays[c]) {
       const oneway = w.tags?.oneway ?? 'yes';
       const rev = oneway === '-1';
       const bidir = oneway === 'no' || oneway === 'false' || oneway === '0';
       for (let i = 1; i < w.nodes.length; i++) {
         const gu = idMap.get(w.nodes[i - 1]), gv = idMap.get(w.nodes[i]);
-        if (gu == null || gv == null || comp[gu] !== c || comp[gv] !== c) continue;
+        if (gu == null || gv == null) continue;
         const u = localIdx.get(gu), v = localIdx.get(gv);
+        if (u == null || v == null) continue;
         const wt = haversineKm(localCoords[u], localCoords[v]);
         if (rev) adj[v].push([u, wt]); else adj[u].push([v, wt]);
         if (bidir) adj[v].push([u, wt]);
       }
     }
     const best = longestPath(localCoords, adj);
-    if (!best || best.len < 0.4) continue; // 断片は連結処理に回すので低めに拾う
-    cands.push({ len: best.len, pts: best.path.map(i => localCoords[i]) });
-  }
-  // OSM上で途切れて成分が分かれるケース: 端点同士が300m以内の経路を連結する
-  let changed = true;
-  while (changed) {
-    changed = false;
-    outer: for (let i = 0; i < cands.length; i++) {
-      for (let j = 0; j < cands.length; j++) {
-        if (i === j) continue;
-        const a = cands[i], b = cands[j];
-        const gap = haversineKm(a.pts[a.pts.length - 1], b.pts[0]);
-        // 方向連続性: 接合点でUターンになる連結（=反対車線との誤連結）は拒否する
-        const a2 = a.pts[a.pts.length - 2] ?? a.pts[a.pts.length - 1];
-        const a1 = a.pts[a.pts.length - 1];
-        const b1 = b.pts[0];
-        const b2 = b.pts[1] ?? b.pts[0];
-        const ax = a1.lng - a2.lng, ay = a1.lat - a2.lat;
-        const bx = b2.lng - b1.lng, by = b2.lat - b1.lat;
-        const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
-        const cont = (la && lb) ? (ax * bx + ay * by) / (la * lb) : 1;
-        if (gap < 0.3 && cont > 0) {
-          cands[i] = { len: a.len + gap + b.len, pts: [...a.pts, ...b.pts] };
-          cands.splice(j, 1);
-          changed = true;
-          break outer;
-        }
+    if (!best || best.len < 0.4) continue; // 断片は連結処理で拾う
+    // 成分の代表名（最長wayのtunnel:name > name）
+    let name = '';
+    let nameLen = 0;
+    for (const w of compWays[c]) {
+      let wl = 0;
+      for (let i = 1; i < w.nodes.length; i++) {
+        const u = idMap.get(w.nodes[i - 1]), v = idMap.get(w.nodes[i]);
+        if (u != null && v != null) wl += haversineKm(coords[u], coords[v]);
       }
+      const wn = w.tags?.['tunnel:name'] || w.tags?.name || '';
+      if (wn && wl > nameLen) { name = wn; nameLen = wl; }
     }
+    all.push({ name: name || '無名トンネル', len: best.len, pts: best.path.map(i => localCoords[i]) });
+    regionCount++;
   }
-  for (const cand of cands) {
-    if (cand.len < MIN_LEN_KM) continue;
-    const pts = simplify(cand.pts);
-    result.push({
-      name,
-      lenKm: Math.round(cand.len * 100) / 100,
-      path: pts.map(p => [Math.round(p.lng * 1e5) / 1e5, Math.round(p.lat * 1e5) / 1e5]),
-    });
-    console.log(`✓ ${name} ${cand.len.toFixed(2)}km ${pts.length}点`);
-  }
-  await new Promise(r => setTimeout(r, 2000)); // Overpass礼儀
+  console.log(`region [${bbox[1]}-${bbox[3]}] ways=${ways.length} 候補成分=${regionCount}`);
+  await new Promise(r => setTimeout(r, 3000)); // Overpass礼儀
 }
 
+// リージョン重複のdedupe（始点終点がほぼ同一のものを除去）
+const key = (p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+const seen = new Set();
+const cands = [];
+for (const t of all) {
+  const k = `${key(t.pts[0])}|${key(t.pts[t.pts.length - 1])}`;
+  if (seen.has(k)) continue;
+  seen.add(k);
+  cands.push(t);
+}
+
+// 端点が近く方向が連続な経路を連結（トンネル群・OSM上の名前分割対応）。Uターン連結は拒否
+let changed = true;
+while (changed) {
+  changed = false;
+  outer: for (let i = 0; i < cands.length; i++) {
+    for (let j = 0; j < cands.length; j++) {
+      if (i === j) continue;
+      const a = cands[i], b = cands[j];
+      const gap = haversineKm(a.pts[a.pts.length - 1], b.pts[0]);
+      if (gap >= CHAIN_GAP_KM) continue;
+      const a2 = a.pts[a.pts.length - 2] ?? a.pts[a.pts.length - 1];
+      const a1 = a.pts[a.pts.length - 1];
+      const b1 = b.pts[0];
+      const b2 = b.pts[1] ?? b.pts[0];
+      const ax = a1.lng - a2.lng, ay = a1.lat - a2.lat;
+      const bx = b2.lng - b1.lng, by = b2.lat - b1.lat;
+      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+      const cont = (la && lb) ? (ax * bx + ay * by) / (la * lb) : 1;
+      if (cont <= 0) continue;
+      cands[i] = { name: a.len >= b.len ? a.name : b.name, len: a.len + gap + b.len, pts: [...a.pts, ...b.pts] };
+      cands.splice(j, 1);
+      changed = true;
+      break outer;
+    }
+  }
+}
+
+const result = [];
+for (const t of cands) {
+  if (t.len < MIN_LEN_KM) continue;
+  const pts = simplify(t.pts);
+  result.push({
+    name: t.name,
+    lenKm: Math.round(t.len * 100) / 100,
+    path: pts.map(p => [Math.round(p.lng * 1e5) / 1e5, Math.round(p.lat * 1e5) / 1e5]),
+  });
+}
 result.sort((a, b) => b.lenKm - a.lenKm);
+console.log(`\n収録 ${result.length} 本:`);
+result.slice(0, 30).forEach(t => console.log(`  ${t.lenKm.toFixed(1)}km ${t.name} (${t.path.length}点)`));
+if (result.length > 30) console.log(`  … 他 ${result.length - 30} 本`);
+
 const ts = `// 自動生成: tools/gen-tunnels.mjs（OSMデータ由来 © OpenStreetMap contributors, ODbL）
-// GPS完全喪失級の既知長大トンネルの実ジオメトリ。gapBridge が決定論的に補間に使う。
-// path は [lng, lat] の順（OSRM geometry 互換）。再生成: node tools/gen-tunnels.mjs
+// 全国の高速道路トンネル（${MIN_LEN_KM}km以上・GPS喪失区間）の実ジオメトリ。
+// gapBridge が決定論的に補間に使う。path は [lng, lat] の順（OSRM geometry 互換）。
+// 再生成: node tools/gen-tunnels.mjs
 export interface TunnelGeom { name: string; lenKm: number; path: [number, number][] }
 export const TUNNELS: TunnelGeom[] = ${JSON.stringify(result)};
 `;

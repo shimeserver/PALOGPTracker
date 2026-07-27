@@ -16,6 +16,7 @@ import { detectStops, matchStopsToLandmarks } from '../../src/utils/visitDetecti
 
 const TRACK_HELP = [
   { q: '記録を開始するには？', a: '「▶ 記録開始」ボタンをタップしてください。GPS取得が始まり、移動に合わせてポイントが記録されます。' },
+  { q: '電源が落ちた/アプリが落ちたら？', a: '記録は自動でバックアップされています。再起動後に出るバナーから「▶ 続きから記録」でそのまま継続、「保存」でそこまでを保存できます。中断区間は保存時に道なりに補間されます。' },
   { q: '記録中に画面を閉じても大丈夫？', a: 'はい。バックグラウンドでも記録が続きます。ロック画面にしてもOKです。' },
   { q: '🚗 / 🚶 のモード切り替えは？', a: '記録開始前に右上のアイコンで「車」か「徒歩（散歩・公共交通含む）」を選べます。記録中は変更できません。' },
   { q: '保存時のルート名は？', a: '停止後にルート名を入力できます。空欄のまま保存すると日付が自動で入ります。' },
@@ -89,7 +90,7 @@ const MODE_CONFIG = {
 } as const;
 
 export default function TrackScreen() {
-  const { isTracking, isPaused, currentPoints, currentSpeed, startTime, startTracking, stopTracking, pauseTracking, resumeTracking, trackingMode, setTrackingMode } = useTrackingStore();
+  const { isTracking, isPaused, currentPoints, currentSpeed, startTime, startTracking, stopTracking, pauseTracking, resumeTracking, trackingMode, setTrackingMode, resumeFromRecovery } = useTrackingStore();
   const { user } = useAuthStore();
   const { activeCar } = useCarStore();
   const [elapsed, setElapsed] = useState(0);
@@ -198,6 +199,19 @@ export default function TrackScreen() {
     }
   };
 
+  // 電源断バックアップから「続きとして」記録を再開する。
+  // 中断していた区間のギャップは保存時の自動補間（bridgeGaps）が道なりに埋める
+  const handleResumeRecovery = async () => {
+    if (!recovery) return;
+    try {
+      await resumeFromRecovery(recovery);
+      setRecovery(null);
+      router.replace('/(tabs)/map');
+    } catch (e) {
+      Alert.alert('エラー', e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const handleDiscardRecovery = () => {
     Alert.alert('破棄確認', 'バックアップデータを削除しますか？', [
       { text: 'キャンセル', style: 'cancel' },
@@ -269,8 +283,11 @@ export default function TrackScreen() {
             {Date.now() - recovery.startTime > 86400000 ? `（${Math.floor((Date.now() - recovery.startTime) / 86400000)}日前）` : ''}
           </Text>
           <View style={styles.recoveryButtons}>
+            <TouchableOpacity style={styles.recoveryResumeBtn} onPress={handleResumeRecovery}>
+              <Text style={styles.recoverySaveBtnText}>▶ 続きから記録</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.recoverySaveBtn} onPress={handleSaveRecovery}>
-              <Text style={styles.recoverySaveBtnText}>保存する</Text>
+              <Text style={styles.recoverySaveBtnText}>保存</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.recoveryDiscardBtn} onPress={handleDiscardRecovery}>
               <Text style={styles.recoveryDiscardBtnText}>破棄</Text>
@@ -468,6 +485,7 @@ const styles = StyleSheet.create({
   recoveryTitle: { color: '#92400e', fontWeight: '700', fontSize: 14, marginBottom: 2 },
   recoveryDesc: { color: '#78350f', fontSize: 12, marginBottom: 10 },
   recoveryButtons: { flexDirection: 'row', gap: 8 },
+  recoveryResumeBtn: { flex: 1.4, backgroundColor: '#16a34a', borderRadius: 8, padding: 10, alignItems: 'center' },
   recoverySaveBtn: { flex: 1, backgroundColor: '#2563eb', borderRadius: 8, padding: 10, alignItems: 'center' },
   recoverySaveBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   recoveryDiscardBtn: { backgroundColor: '#f3f4f6', borderRadius: 8, padding: 10, paddingHorizontal: 16, alignItems: 'center' },

@@ -2,6 +2,9 @@ import { useEffect } from 'react';
 import { Stack, router } from 'expo-router';
 import { useAuthStore } from '../src/store/authStore';
 import { useCarStore } from '../src/store/carStore';
+import { initErrorReporting } from '../src/utils/errorLog';
+
+initErrorReporting();
 
 export default function RootLayout() {
   const { user, loading, init } = useAuthStore();

@@ -79,8 +79,44 @@ function processRoute(key: string, r: Route): RouteCache {
   return cache;
 }
 
-// 色ごとのポリライン集合（フル解像度・bbox付き）
-interface Line { pts: WPt[]; minX: number; maxX: number; minY: number; maxY: number }
+// 色ごとのポリライン集合（フル解像度・bbox付き）。lowRes は低ズーム描画用の
+// Douglas-Peucker 簡略化版（初回参照時に生成してキャッシュ）
+interface Line { pts: WPt[]; minX: number; maxX: number; minY: number; maxY: number; lowRes?: WPt[] }
+
+// Douglas-Peucker 簡略化（反復版）。tol はワールド座標系の許容偏差
+function simplifyDP(pts: WPt[], tol: number): WPt[] {
+  if (pts.length <= 2) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = 1; keep[pts.length - 1] = 1;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  const tol2 = tol * tol;
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    if (b - a < 2) continue;
+    const ax = pts[a].x, ay = pts[a].y;
+    const dx = pts[b].x - ax, dy = pts[b].y - ay;
+    const len2 = dx * dx + dy * dy;
+    let worst = -1, worstD = tol2;
+    for (let i = a + 1; i < b; i++) {
+      const px = pts[i].x - ax, py = pts[i].y - ay;
+      let d2: number;
+      if (len2 === 0) { d2 = px * px + py * py; }
+      else {
+        const t = Math.max(0, Math.min(1, (px * dx + py * dy) / len2));
+        const ex = px - t * dx, ey = py - t * dy;
+        d2 = ex * ex + ey * ey;
+      }
+      if (d2 > worstD) { worstD = d2; worst = i; }
+    }
+    if (worst >= 0) { keep[worst] = 1; stack.push([a, worst], [worst, b]); }
+  }
+  const out: WPt[] = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
+// 低ズーム用の許容偏差 ≈ z9で1px相当（ワールド座標単位）
+const LOWRES_TOL = 1 / 512;
 type Buckets = Line[][]; // [colorIdx] -> lines
 
 function buildBuckets(routes: Route[]): Buckets {
@@ -189,8 +225,9 @@ export default function DensityOverlay({ map, routes }: Props) {
         ctx.lineWidth = lw;
         ctx.globalAlpha = 0.9;
 
-        // 超低ズームのみ点を間引く（z10以上はフル解像度＝カーブを削らない）
-        const stride = zoom >= 10 ? 1 : zoom >= 8 ? 4 : 8;
+        // 低ズームはDouglas-Peucker簡略化版を使う（stride間引きと違い形が崩れず、
+        // 点数は1/10以下。z10以上はフル解像度＝カーブを削らない）
+        const useLowRes = zoom <= 9;
 
         // 青(1回)→赤(多数)の順に重ねる。
         // タイルに掛かる線は「全体」を描く（canvasが自動クリップするので正確。
@@ -203,13 +240,11 @@ export default function DensityOverlay({ map, routes }: Props) {
           let drew = false;
           for (const line of lines) {
             if (line.maxX < wxMin || line.minX > wxMax || line.maxY < wyMin || line.minY > wyMax) continue;
-            const pts = line.pts;
+            const pts = useLowRes ? (line.lowRes ??= simplifyDP(line.pts, LOWRES_TOL)) : line.pts;
             ctx.moveTo((pts[0].x - wx0) * scale, (pts[0].y - wy0) * scale);
-            for (let i = 1; i < pts.length - 1; i += stride) {
+            for (let i = 1; i < pts.length; i++) {
               ctx.lineTo((pts[i].x - wx0) * scale, (pts[i].y - wy0) * scale);
             }
-            const last = pts[pts.length - 1];
-            ctx.lineTo((last.x - wx0) * scale, (last.y - wy0) * scale);
             drew = true;
           }
           if (drew) ctx.stroke();

@@ -1,9 +1,11 @@
-import { View, TouchableOpacity, Text } from 'react-native';
+import { useEffect } from 'react';
+import { View, TouchableOpacity, Text, AppState } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCarStore } from '../../src/store/carStore';
 import { useUiStore } from '../../src/store/uiStore';
+import { useTrackingStore } from '../../src/store/trackingStore';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -22,6 +24,16 @@ export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const maintenanceWarning = useCarStore(s => s.maintenanceWarning);
   const setHelpTarget = useUiStore(s => s.setHelpTarget);
+  const backupNow = useTrackingStore(s => s.backupNow);
+
+  // 記録中にアプリがバックグラウンドへ行く瞬間に即バックアップ
+  // （電源断・強制終了・OSキルへの備え。通常の30点ごとバックアップの補完）
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'background' || state === 'inactive') backupNow();
+    });
+    return () => sub.remove();
+  }, [backupNow]);
   return (
     <Tabs
       screenOptions={({ route }) => ({

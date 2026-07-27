@@ -1,0 +1,74 @@
+rules_version = '2';
+
+// PALOGPTracker Firestore セキュリティルール（リポジトリ管理版）
+//
+// ⚠️ 初回デプロイ前に Firebase コンソールの現行ルールと見比べること。
+// デプロイするとコンソール側のルールはこの内容で置き換えられる。
+// デプロイ: GitHub Actions「Deploy Firestore Rules」を手動実行（FIREBASE_TOKEN シークレット必須）
+//          または `firebase deploy --only firestore:rules`
+//
+// 設計:
+// - 全データはオーナー（userId == auth.uid）のみ読み書き可
+// - サブコレクション（pts/bak/visits/fuelLogs/maintenanceLogs）は親docのuserIdで判定
+//   → 親docを先に作る書き込み順序が前提（アプリ実装もこの順序）
+// - clientErrors はエラーレポート用: 認証済みユーザーの作成のみ許可（読み取りはコンソールで）
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner(data) {
+      return signedIn() && data.userId == request.auth.uid;
+    }
+    function parentOwner(coll, id) {
+      return signedIn()
+        && get(/databases/$(database)/documents/$(coll)/$(id)).data.userId == request.auth.uid;
+    }
+
+    match /routes/{routeId} {
+      allow read, update, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+
+      match /pts/{chunkId} {
+        allow read, write: if parentOwner('routes', routeId);
+      }
+      match /bak/{chunkId} {
+        allow read, write: if parentOwner('routes', routeId);
+      }
+    }
+
+    match /landmarks/{landmarkId} {
+      allow read, update, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+
+      match /visits/{visitId} {
+        allow read, write: if parentOwner('landmarks', landmarkId);
+      }
+    }
+
+    match /cars/{carId} {
+      allow read, update, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+
+      match /fuelLogs/{logId} {
+        allow read, write: if parentOwner('cars', carId);
+      }
+      match /maintenanceLogs/{logId} {
+        allow read, write: if parentOwner('cars', carId);
+      }
+    }
+
+    match /tags/{tagId} {
+      allow read, update, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+    }
+
+    // エラーレポート: 作成のみ（改ざん・覗き見不可。閲覧はFirebaseコンソールから）
+    match /clientErrors/{errorId} {
+      allow create: if signedIn();
+      allow read, update, delete: if false;
+    }
+  }
+}

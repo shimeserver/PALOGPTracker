@@ -90,6 +90,8 @@ interface TrackingState {
   setTrackingMode: (mode: TrackingMode) => void;
   addPoints: (locations: Location.LocationObject[]) => void;
   startTracking: () => Promise<void>;
+  resumeFromRecovery: (data: RecoveryData) => Promise<void>;
+  backupNow: () => void;
   pauseTracking: () => Promise<void>;
   resumeTracking: () => Promise<void>;
   stopTracking: (userId: string, name?: string, tagIds?: string[]) => Promise<string | 'queued' | null>;
@@ -158,8 +160,23 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     });
   },
 
+  // 任意タイミングの即時バックアップ（アプリのバックグラウンド遷移時などに呼ぶ）
+  backupNow: () => {
+    const { isTracking, currentPoints, startTime, trackingMode } = get();
+    if (!isTracking || !startTime || currentPoints.length < 2) return;
+    if (currentPoints.length === lastBackupLen) return; // 前回から変化なし
+    lastBackupLen = currentPoints.length;
+    saveRecovery(currentPoints, startTime, trackingMode);
+  },
+
   pauseTracking: async () => {
     set({ isPaused: true, currentSpeed: 0 });
+    // 一時停止のタイミングでも必ずバックアップ（電源断に備える）
+    const { currentPoints, startTime, trackingMode } = get();
+    if (startTime && currentPoints.length >= 2) {
+      lastBackupLen = currentPoints.length;
+      saveRecovery(currentPoints, startTime, trackingMode);
+    }
     // GPSも止めてバッテリー消費を抑える（再開時に再取得）
     const running = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
     if (running) await Location.stopLocationUpdatesAsync(LOCATION_TASK).catch(() => {});
@@ -183,6 +200,26 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
 
     await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS);
+  },
+
+  // 電源断・強制終了で失われた記録を「続きから」再開する。
+  // バックアップ点列を復元して記録状態に戻す（中断区間のギャップは保存時のbridgeGapsが道なりに補間）
+  resumeFromRecovery: async (data) => {
+    const fg = await Location.requestForegroundPermissionsAsync();
+    if (fg.status !== 'granted') throw new Error('位置情報の許可が必要です');
+    const bg = await Location.requestBackgroundPermissionsAsync();
+    if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です');
+    lastBackupLen = data.points.length;
+    reentryRejects = 0;
+    set({
+      isTracking: true, isPaused: false,
+      currentPoints: data.points,
+      startTime: data.startTime,
+      trackingMode: data.mode,
+      currentSpeed: 0,
+    });
+    const running = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
+    if (!running) await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS);
   },
 
   stopTracking: async (userId, name, tagIds) => {
