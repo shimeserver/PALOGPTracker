@@ -81,7 +81,6 @@ const dayKey = (ms: number) => {
 export default function StatsPanel({ open, onClose, routes, cars, tags }: Props) {
   const [highways, setHighways] = useState<HighwayGeom[] | null>(null);
   const [year, setYear] = useState(() => new Date().getFullYear());
-  const [showAllHighways, setShowAllHighways] = useState(false);
 
   // 路線データは重い(数百KB)ので初回オープン時に遅延ロード
   useEffect(() => {
@@ -173,61 +172,55 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
   const pointsLoading = routes.some(r => (!r.points || r.points.length === 0) && (r.pointCount ?? 0) > 0);
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.3)' }} onClick={onClose}>
-      <div
-        style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: '#fff', borderRadius: 14, padding: 24, width: 680, maxWidth: '94vw', maxHeight: '86vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ color: '#1f2937', fontSize: 16, fontWeight: 700 }}>📊 走行ダッシュボード</h3>
+    <>
+      <div style={s.overlay} onClick={e => { if (e.clientX < 360) onClose(); }} />
+      <div style={s.panel}>
+        <div style={s.header}>
+          <h3 style={{ color: '#1f2937', fontSize: 17, fontWeight: 700 }}>📊 走行ダッシュボード</h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 18 }}>✕</button>
         </div>
-
-        {/* ---- 高速道路走破率 ---- */}
-        <section style={{ marginBottom: 24 }}>
-          <p style={s.sectionTitle}>🛣️ 高速道路走破率</p>
-          {pointsLoading && <p style={{ color: '#d97706', fontSize: 12, marginBottom: 8 }}>⏳ 点データ読み込み中のため走破率が低めに出ることがあります</p>}
-          {!highways ? (
-            <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データを読み込み中...</p>
-          ) : highways.length === 0 ? (
-            <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データが未生成です（node tools/gen-highways.mjs）</p>
-          ) : (
-            <>
-              {/* コンパクト表示: 2列グリッド×1行レイアウト。既定は上位10路線のみ */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 20, rowGap: 5 }}>
-                {(showAllHighways ? covered : covered.slice(0, 10)).map(hw => (
-                  <div key={hw.name} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
-                    title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
-                    <span style={{ fontSize: 12, color: '#1f2937', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hw.name}</span>
-                    <div style={{ width: 64, height: 7, background: '#f3f4f6', borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
-                      <div style={{ width: `${Math.max(2, hw.pct * 100)}%`, height: '100%', background: hw.pct >= 0.995 ? '#16a34a' : '#2563eb', borderRadius: 4 }} />
-                    </div>
-                    <span style={{ fontSize: 11, color: '#6b7280', width: 34, textAlign: 'right', flexShrink: 0 }}>{Math.round(hw.pct * 100)}%</span>
+        <div style={s.body}>
+          {/* 左カラム: 高速道路走破率（全路線をゆったり表示） */}
+          <div>
+            <section>
+              <p style={s.sectionTitle}>🛣️ 高速道路走破率</p>
+              {pointsLoading && <p style={{ color: '#d97706', fontSize: 12, marginBottom: 8 }}>⏳ 点データ読み込み中のため走破率が低めに出ることがあります</p>}
+              {!highways ? (
+                <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データを読み込み中...</p>
+              ) : highways.length === 0 ? (
+                <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データが未生成です（node tools/gen-highways.mjs）</p>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {covered.map(hw => (
+                      <div key={hw.name} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}
+                        title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
+                        <span style={{ fontSize: 12.5, color: '#1f2937', fontWeight: 600, width: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>{hw.name}</span>
+                        <div style={{ flex: 1, height: 8, background: '#f3f4f6', borderRadius: 4, overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.max(2, hw.pct * 100)}%`, height: '100%', background: hw.pct >= 0.995 ? '#16a34a' : '#2563eb', borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontSize: 11.5, color: '#6b7280', width: 92, textAlign: 'right', flexShrink: 0 }}>
+                          {Math.round(hw.pct * 100)}%（{Math.round(hw.lenKm * hw.pct)}/{hw.lenKm}km）
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {covered.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 8 }}>
-                {covered.length > 10 && (
-                  <button
-                    onClick={() => setShowAllHighways(v => !v)}
-                    style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 12, padding: 0 }}
-                  >
-                    {showAllHighways ? '▲ 上位10路線だけ表示' : `▼ 走行済みをすべて表示（${covered.length}路線）`}
-                  </button>
-                )}
-                {uncovered.length > 0 && (
-                  <details style={{ fontSize: 12 }}>
-                    <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
-                    <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
-                      {uncovered.map(h => h.name).join('・')}
-                    </p>
-                  </details>
-                )}
-              </div>
-            </>
-          )}
-        </section>
+                  {covered.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
+                  {uncovered.length > 0 && (
+                    <details style={{ fontSize: 12, marginTop: 10 }}>
+                      <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
+                      <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
+                        {uncovered.map(h => h.name).join('・')}
+                      </p>
+                    </details>
+                  )}
+                </>
+              )}
+            </section>
+          </div>
+
+          {/* 右カラム: カレンダー草・時間帯・車種別 */}
+          <div>
 
         {/* ---- カレンダー草 ---- */}
         <section style={{ marginBottom: 24 }}>
@@ -311,11 +304,17 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
             })}
           </section>
         )}
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
 const s: Record<string, React.CSSProperties> = {
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000 },
+  panel: { position: 'fixed', top: 0, left: 360, right: 0, height: '100vh', background: '#fff', zIndex: 2001, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', borderLeft: '1px solid #e8eaed' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 20px', borderBottom: '1px solid #e8eaed', flexShrink: 0 },
+  body: { flex: 1, overflowY: 'auto', padding: 24, display: 'grid', gridTemplateColumns: 'minmax(340px, 1fr) minmax(380px, 1.2fr)', gap: 32, alignContent: 'start' },
   sectionTitle: { color: '#9ca3af', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700, marginBottom: 10 },
 };
