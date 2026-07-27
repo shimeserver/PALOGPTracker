@@ -167,9 +167,14 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
 
   const maxHour = Math.max(1, ...hourHist);
   const yearKm = weeks.flat().filter(c => c.inYear).reduce((s, c) => s + c.km, 0);
-  const covered = coverage.filter(c => c.pct > 0.005);
+  const complete = coverage.filter(c => c.pct >= 0.995);           // 完全走破 → バッジ表示
+  const partial = coverage.filter(c => c.pct > 0.005 && c.pct < 0.995); // 走行中 → バー表示
   const uncovered = coverage.filter(c => c.pct <= 0.005);
   const pointsLoading = routes.some(r => (!r.points || r.points.length === 0) && (r.pointCount ?? 0) > 0);
+
+  // サマリータイル用
+  const totalKm = routes.reduce((s2, r) => s2 + r.totalDistance, 0);
+  const totalHours = hourHist.reduce((a, b) => a + b, 0);
 
   return (
     <>
@@ -180,130 +185,166 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 18 }}>✕</button>
         </div>
         <div style={s.body}>
-          {/* 左カラム: 高速道路走破率（全路線をゆったり表示） */}
-          <div>
-            <section>
-              <p style={s.sectionTitle}>🛣️ 高速道路走破率</p>
-              {pointsLoading && <p style={{ color: '#d97706', fontSize: 12, marginBottom: 8 }}>⏳ 点データ読み込み中のため走破率が低めに出ることがあります</p>}
-              {!highways ? (
-                <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データを読み込み中...</p>
-              ) : highways.length === 0 ? (
-                <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データが未生成です（node tools/gen-highways.mjs）</p>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    {covered.map(hw => (
-                      <div key={hw.name} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}
-                        title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
-                        <span style={{ fontSize: 12.5, color: '#1f2937', fontWeight: 600, width: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>{hw.name}</span>
-                        <div style={{ flex: 1, height: 8, background: '#f3f4f6', borderRadius: 4, overflow: 'hidden' }}>
-                          <div style={{ width: `${Math.max(2, hw.pct * 100)}%`, height: '100%', background: hw.pct >= 0.995 ? '#16a34a' : '#2563eb', borderRadius: 4 }} />
-                        </div>
-                        <span style={{ fontSize: 11.5, color: '#6b7280', width: 92, textAlign: 'right', flexShrink: 0 }}>
-                          {Math.round(hw.pct * 100)}%（{Math.round(hw.lenKm * hw.pct)}/{hw.lenKm}km）
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {covered.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
-                  {uncovered.length > 0 && (
-                    <details style={{ fontSize: 12, marginTop: 10 }}>
-                      <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
-                      <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
-                        {uncovered.map(h => h.name).join('・')}
-                      </p>
-                    </details>
-                  )}
-                </>
-              )}
-            </section>
-          </div>
+          <div style={{ maxWidth: 1040, margin: '0 auto' }}>
 
-          {/* 右カラム: カレンダー草・時間帯・車種別 */}
-          <div>
-
-        {/* ---- カレンダー草 ---- */}
-        <section style={{ marginBottom: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            <p style={{ ...s.sectionTitle, marginBottom: 0 }}>📅 日別走行（{year}年: {Math.round(yearKm).toLocaleString()}km）</p>
-            <select value={year} onChange={e => setYear(Number(e.target.value))}
-              style={{ background: '#f3f4f6', border: 'none', borderRadius: 6, padding: '2px 8px', fontSize: 12, cursor: 'pointer' }}>
-              {years.map(y => <option key={y} value={y}>{y}年</option>)}
-            </select>
-          </div>
-          <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {weeks.map((col, wi) => (
-                <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {col.map(c => (
-                    <div
-                      key={c.key}
-                      title={c.inYear ? `${c.key}: ${c.km > 0 ? c.km.toFixed(1) + 'km' : '走行なし'}` : ''}
-                      style={{ width: 10, height: 10, borderRadius: 2, background: c.inYear ? cellColor(c.km) : 'transparent' }}
-                    />
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 11, color: '#9ca3af' }}>
-            少 {['#f3f4f6', '#bfdbfe', '#60a5fa', '#2563eb', '#1e3a8a'].map(c => (
-              <span key={c} style={{ width: 10, height: 10, borderRadius: 2, background: c, display: 'inline-block' }} />
-            ))} 多
-          </div>
-        </section>
-
-        {/* ---- 時間帯分布 ---- */}
-        <section style={{ marginBottom: 24 }}>
-          <p style={s.sectionTitle}>🕐 走行時間帯（全期間・合計{Math.round(hourHist.reduce((a, b) => a + b, 0))}時間）</p>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 64 }}>
-            {hourHist.map((v, h) => (
-              <div key={h} title={`${h}時台: ${v.toFixed(1)}時間`}
-                style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
-                <div style={{ height: `${Math.max(v > 0 ? 4 : 1, (v / maxHour) * 100)}%`, background: h >= 6 && h < 18 ? '#f59e0b' : '#2563eb', borderRadius: '3px 3px 0 0' }} />
+            {/* サマリータイル */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+              <div style={s.tile}>
+                <div style={s.tileValue}>{Math.round(totalKm).toLocaleString()}<span style={s.tileUnit}> km</span></div>
+                <div style={s.tileLabel}>総走行距離</div>
               </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#9ca3af', marginTop: 2 }}>
-            <span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>23時</span>
-          </div>
-          <p style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>🟠 昼（6-18時） / 🔵 夜</p>
-        </section>
+              <div style={s.tile}>
+                <div style={s.tileValue}>{routes.length.toLocaleString()}<span style={s.tileUnit}> 回</span></div>
+                <div style={s.tileLabel}>記録数</div>
+              </div>
+              <div style={s.tile}>
+                <div style={s.tileValue}>{Math.round(totalHours).toLocaleString()}<span style={s.tileUnit}> 時間</span></div>
+                <div style={s.tileLabel}>総走行時間</div>
+              </div>
+              <div style={s.tile}>
+                <div style={s.tileValue}>{complete.length}<span style={s.tileUnit}> / {coverage.length}路線</span></div>
+                <div style={s.tileLabel}>高速 完全走破</div>
+              </div>
+            </div>
 
-        {/* ---- 車種別 ---- */}
-        {carStats.length > 0 && (
-          <section>
-            <p style={s.sectionTitle}>🚗 車種別</p>
-            {carStats.map(cs => {
-              const maxKm = carStats[0].km || 1;
-              const carMaxHour = Math.max(1, ...cs.hours);
-              return (
-                <div key={cs.car.id} style={{ marginBottom: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: cs.color, flexShrink: 0 }} />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#1f2937', flex: 1 }}>{cs.car.nickname}</span>
-                    <span style={{ fontSize: 12, color: '#6b7280' }}>
-                      {Math.round(cs.km).toLocaleString()}km ・ {cs.count}回 ・ 最高{Math.round(cs.maxSpeed)}km/h
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                    <div style={{ flex: 2, height: 8, background: '#f3f4f6', borderRadius: 4, overflow: 'hidden' }}
-                      title={`走行距離 ${Math.round(cs.km).toLocaleString()}km`}>
-                      <div style={{ width: `${(cs.km / maxKm) * 100}%`, height: '100%', background: cs.color, borderRadius: 4 }} />
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) minmax(400px, 1.1fr)', gap: 16, alignItems: 'start' }}>
+
+              {/* 左: 高速道路走破率 */}
+              <div style={s.card}>
+                <p style={s.sectionTitle}>🛣️ 高速道路走破率</p>
+                {pointsLoading && <p style={{ color: '#d97706', fontSize: 12, marginBottom: 8 }}>⏳ 点データ読み込み中のため低めに出ることがあります</p>}
+                {!highways ? (
+                  <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データを読み込み中...</p>
+                ) : highways.length === 0 ? (
+                  <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データが未生成です（node tools/gen-highways.mjs）</p>
+                ) : (
+                  <>
+                    {/* 完全走破はバッジで畳む（同じ100%バーを並べない） */}
+                    {complete.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: partial.length > 0 ? 14 : 0 }}>
+                        {complete.map(hw => (
+                          <span key={hw.name} title={`${hw.name} 全線走破（約${hw.lenKm}km）`}
+                            style={{ fontSize: 11.5, fontWeight: 600, color: '#15803d', background: '#dcfce7', borderRadius: 20, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                            ✓ {hw.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {partial.map(hw => (
+                        <div key={hw.name} title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                            <span style={{ color: '#1f2937', fontWeight: 600 }}>{hw.name}</span>
+                            <span style={{ color: '#9ca3af' }}>
+                              <span style={{ color: '#2563eb', fontWeight: 700 }}>{Math.round(hw.pct * 100)}%</span>
+                              {' '}{Math.round(hw.lenKm * hw.pct)}/{hw.lenKm}km
+                            </span>
+                          </div>
+                          <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.max(1.5, hw.pct * 100)}%`, height: '100%', background: '#2563eb', borderRadius: 3 }} />
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {/* 時間帯ミニヒストグラム */}
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1, height: 22 }}
-                      title={`${cs.car.nickname} の走行時間帯（0〜23時）`}>
-                      {cs.hours.map((v, h) => (
-                        <div key={h} style={{ flex: 1, height: `${Math.max(v > 0 ? 12 : 4, (v / carMaxHour) * 100)}%`, background: cs.color, opacity: v > 0 ? 0.9 : 0.15, borderRadius: 1 }} />
+                    {complete.length === 0 && partial.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
+                    {uncovered.length > 0 && (
+                      <details style={{ fontSize: 12, marginTop: 12 }}>
+                        <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
+                        <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
+                          {uncovered.map(h => h.name).join('・')}
+                        </p>
+                      </details>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* 右: カレンダー草・時間帯・車種別 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                <div style={s.card}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <p style={{ ...s.sectionTitle, marginBottom: 0 }}>📅 日別走行 — {year}年 {Math.round(yearKm).toLocaleString()}km</p>
+                    <select value={year} onChange={e => setYear(Number(e.target.value))}
+                      style={{ background: '#f3f4f6', border: 'none', borderRadius: 6, padding: '3px 8px', fontSize: 12, cursor: 'pointer', color: '#374151' }}>
+                      {years.map(y => <option key={y} value={y}>{y}年</option>)}
+                    </select>
+                  </div>
+                  <div style={{ overflowX: 'auto', paddingBottom: 2 }}>
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      {weeks.map((col, wi) => (
+                        <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {col.map(c => (
+                            <div
+                              key={c.key}
+                              title={c.inYear ? `${c.key}: ${c.km > 0 ? c.km.toFixed(1) + 'km' : '走行なし'}` : ''}
+                              style={{ width: 9, height: 9, borderRadius: 2, background: c.inYear ? cellColor(c.km) : 'transparent' }}
+                            />
+                          ))}
+                        </div>
                       ))}
                     </div>
                   </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 11, color: '#9ca3af' }}>
+                    少 {['#f3f4f6', '#bfdbfe', '#60a5fa', '#2563eb', '#1e3a8a'].map(c => (
+                      <span key={c} style={{ width: 9, height: 9, borderRadius: 2, background: c, display: 'inline-block' }} />
+                    ))} 多
+                  </div>
                 </div>
-              );
-            })}
-          </section>
-        )}
+
+                <div style={s.card}>
+                  <p style={s.sectionTitle}>🕐 走行時間帯 — 合計{Math.round(totalHours).toLocaleString()}時間</p>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 52 }}>
+                    {hourHist.map((v, h) => (
+                      <div key={h} title={`${h}時台: ${v.toFixed(1)}時間`}
+                        style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
+                        <div style={{ height: `${Math.max(v > 0 ? 5 : 2, (v / maxHour) * 100)}%`, background: h >= 6 && h < 18 ? '#60a5fa' : '#1e3a8a', borderRadius: 2 }} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#9ca3af', marginTop: 4 }}>
+                    <span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>23時</span>
+                  </div>
+                  <p style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
+                    <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: '#60a5fa', marginRight: 4 }} />昼（6-18時）
+                    <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: '#1e3a8a', margin: '0 4px 0 12px' }} />夜
+                  </p>
+                </div>
+
+                {carStats.length > 0 && (
+                  <div style={s.card}>
+                    <p style={s.sectionTitle}>🚗 車種別</p>
+                    {carStats.map((cs, i) => {
+                      const maxKm = carStats[0].km || 1;
+                      const carMaxHour = Math.max(1, ...cs.hours);
+                      return (
+                        <div key={cs.car.id} style={{ marginBottom: i < carStats.length - 1 ? 16 : 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span style={{ width: 9, height: 9, borderRadius: '50%', background: cs.color, flexShrink: 0 }} />
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#1f2937', flex: 1 }}>{cs.car.nickname}</span>
+                            <span style={{ fontSize: 12, color: '#6b7280' }}>
+                              {Math.round(cs.km).toLocaleString()}km ・ {cs.count}回 ・ 最高{Math.round(cs.maxSpeed)}km/h
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                            <div style={{ flex: 2, height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}
+                              title={`走行距離 ${Math.round(cs.km).toLocaleString()}km`}>
+                              <div style={{ width: `${(cs.km / maxKm) * 100}%`, height: '100%', background: cs.color, borderRadius: 3 }} />
+                            </div>
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1.5, height: 20 }}
+                              title={`${cs.car.nickname} の走行時間帯（0〜23時）`}>
+                              {cs.hours.map((v, h) => (
+                                <div key={h} style={{ flex: 1, height: `${Math.max(v > 0 ? 12 : 4, (v / carMaxHour) * 100)}%`, background: cs.color, opacity: v > 0 ? 0.85 : 0.15, borderRadius: 1 }} />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -313,8 +354,13 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
 
 const s: Record<string, React.CSSProperties> = {
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000 },
-  panel: { position: 'fixed', top: 0, left: 360, right: 0, height: '100vh', background: '#fff', zIndex: 2001, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', borderLeft: '1px solid #e8eaed' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 20px', borderBottom: '1px solid #e8eaed', flexShrink: 0 },
-  body: { flex: 1, overflowY: 'auto', padding: 24, display: 'grid', gridTemplateColumns: 'minmax(340px, 1fr) minmax(380px, 1.2fr)', gap: 32, alignContent: 'start' },
+  panel: { position: 'fixed', top: 0, left: 360, right: 0, height: '100vh', background: '#f4f6f9', zIndex: 2001, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 32px rgba(0,0,0,0.18)', borderLeft: '1px solid #e8eaed' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px', borderBottom: '1px solid #e8eaed', flexShrink: 0, background: '#fff' },
+  body: { flex: 1, overflowY: 'auto', padding: 20 },
+  card: { background: '#fff', borderRadius: 12, padding: '16px 18px', border: '1px solid #e8eaed' },
+  tile: { background: '#fff', borderRadius: 12, padding: '14px 16px', border: '1px solid #e8eaed' },
+  tileValue: { color: '#1f2937', fontSize: 24, fontWeight: 800, lineHeight: 1.2 },
+  tileUnit: { fontSize: 13, fontWeight: 600, color: '#6b7280' },
+  tileLabel: { color: '#9ca3af', fontSize: 11, fontWeight: 600, marginTop: 2 },
   sectionTitle: { color: '#9ca3af', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700, marginBottom: 10 },
 };
