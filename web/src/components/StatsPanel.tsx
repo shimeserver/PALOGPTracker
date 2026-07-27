@@ -81,6 +81,7 @@ const dayKey = (ms: number) => {
 export default function StatsPanel({ open, onClose, routes, cars, tags }: Props) {
   const [highways, setHighways] = useState<HighwayGeom[] | null>(null);
   const [year, setYear] = useState(() => new Date().getFullYear());
+  const [showAllHighways, setShowAllHighways] = useState(false);
 
   // 路線データは重い(数百KB)ので初回オープン時に遅延ロード
   useEffect(() => {
@@ -192,26 +193,38 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
             <p style={{ color: '#9ca3af', fontSize: 13 }}>路線データが未生成です（node tools/gen-highways.mjs）</p>
           ) : (
             <>
-              {covered.map(hw => (
-                <div key={hw.name} style={{ marginBottom: 8 }} title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
-                    <span style={{ color: '#1f2937', fontWeight: 600 }}>{hw.name}</span>
-                    <span style={{ color: '#6b7280' }}>{Math.round(hw.pct * 100)}%（約{Math.round(hw.lenKm * hw.pct)} / {hw.lenKm}km）</span>
+              {/* コンパクト表示: 2列グリッド×1行レイアウト。既定は上位10路線のみ */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 20, rowGap: 5 }}>
+                {(showAllHighways ? covered : covered.slice(0, 10)).map(hw => (
+                  <div key={hw.name} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+                    title={`${hw.name}: 全長約${hw.lenKm}kmのうち約${Math.round(hw.lenKm * hw.pct)}kmを走行`}>
+                    <span style={{ fontSize: 12, color: '#1f2937', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hw.name}</span>
+                    <div style={{ width: 64, height: 7, background: '#f3f4f6', borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+                      <div style={{ width: `${Math.max(2, hw.pct * 100)}%`, height: '100%', background: hw.pct >= 0.995 ? '#16a34a' : '#2563eb', borderRadius: 4 }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: '#6b7280', width: 34, textAlign: 'right', flexShrink: 0 }}>{Math.round(hw.pct * 100)}%</span>
                   </div>
-                  <div style={{ height: 10, background: '#f3f4f6', borderRadius: 5, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.max(1.5, hw.pct * 100)}%`, height: '100%', background: hw.pct >= 0.995 ? '#16a34a' : '#2563eb', borderRadius: 5 }} />
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
               {covered.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
-              {uncovered.length > 0 && (
-                <details style={{ marginTop: 8 }}>
-                  <summary style={{ fontSize: 12, color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
-                  <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
-                    {uncovered.map(h => h.name).join('・')}
-                  </p>
-                </details>
-              )}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 8 }}>
+                {covered.length > 10 && (
+                  <button
+                    onClick={() => setShowAllHighways(v => !v)}
+                    style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                  >
+                    {showAllHighways ? '▲ 上位10路線だけ表示' : `▼ 走行済みをすべて表示（${covered.length}路線）`}
+                  </button>
+                )}
+                {uncovered.length > 0 && (
+                  <details style={{ fontSize: 12 }}>
+                    <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
+                    <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
+                      {uncovered.map(h => h.name).join('・')}
+                    </p>
+                  </details>
+                )}
+              </div>
             </>
           )}
         </section>
