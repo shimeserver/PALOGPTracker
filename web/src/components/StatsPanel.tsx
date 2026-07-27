@@ -247,12 +247,15 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
                     </div>
                     {complete.length === 0 && partial.length === 0 && <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ走行した路線がありません</p>}
                     {uncovered.length > 0 && (
-                      <details style={{ fontSize: 12, marginTop: 12 }}>
-                        <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>未走行 {uncovered.length}路線</summary>
-                        <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.8 }}>
-                          {uncovered.map(h => h.name).join('・')}
-                        </p>
-                      </details>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
+                        <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600 }}>未走行</span>
+                        {uncovered.map(hw => (
+                          <span key={hw.name} title={`${hw.name}（約${hw.lenKm}km）`}
+                            style={{ fontSize: 11.5, color: '#9ca3af', background: '#f3f4f6', borderRadius: 20, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                            {hw.name}
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </>
                 )}
