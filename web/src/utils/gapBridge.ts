@@ -9,10 +9,12 @@ import { findTunnelPath } from './tunnelBridge';
 
 const OSRM = 'https://router.project-osrm.org/route/v1/';
 export const GAP_MIN_DIST_KM = 0.3;  // 連続点がこれ以上離れていればギャップ（GPS喪失）とみなす
-const DEFAULT_MAX_GAPS = 100;
+const DEFAULT_MAX_GAPS = 150;
 const CALL_TIMEOUT_MS = 6000;
-const DEFAULT_BUDGET_MS = 60000;
-const MAX_FAILS = 3;
+const DEFAULT_BUDGET_MS = 90000;
+const MAX_FAILS = 5;
+const FAIL_BACKOFF_MS = 600;  // OSRM失敗（レート制限含む）後の待機。連続失敗の誤判定を防ぐ
+const CALL_INTERVAL_MS = 120; // 公開OSRMへの連続リクエスト間隔（レート制限リスペクト）
 const MAX_DETOUR_RATIO = 1.5; // OSRM経路が直線のこれ倍超＝回り道になるので不採用（直線のまま残す方がマシ）
 const SEA_MIN_KM = 5;         // これ以上のギャップで経路が大回りになる場合＝海上・航路とみなす
 const SEA_DETOUR_RATIO = 3;   // 道路経路が直線の3倍超＝湾・海峡を回り込んでいる＝航路の可能性大
@@ -354,6 +356,47 @@ export function recalcSpeeds(points: TrackPoint[]): TrackPoint[] {
 
 const MAX_CORRIDOR_CALLS = 5; // Overpass負荷を抑えるため1回のクリーンアップでの上限
 
+// ギャップが大量な都市部ルート向け: 上限打ち切り('limit')や一時失敗('failed')が
+// 残らなくなるまで bridgeGaps を自動で複数パス実行する。
+// 従来はユーザーが手動でクリーンアップを何度も押す必要があった。
+export async function bridgeGapsFully(
+  points: TrackPoint[], mode?: string,
+  opts?: BridgeOptions & { maxPasses?: number; onPass?: (pass: number) => void }
+): Promise<BridgeResult> {
+  const maxPasses = opts?.maxPasses ?? 6;
+  let cur = points;
+  let last: BridgeResult | null = null;
+  let bridged = 0, corridorBridged = 0, tunnelBridged = 0;
+  const detected = routeGapStats(points).count;
+  let noProgressRetried = false;
+  for (let pass = 0; pass < maxPasses; pass++) {
+    opts?.onPass?.(pass + 1);
+    const r = await bridgeGaps(cur, mode, opts);
+    cur = r.points;
+    bridged += r.bridged;
+    corridorBridged += r.corridorBridged;
+    tunnelBridged += r.tunnelBridged;
+    last = r;
+    const retriable = r.unresolved.some(g => g.reason === 'limit' || g.reason === 'failed');
+    if (!retriable) break;
+    if (r.bridged === 0) {
+      // 進捗ゼロ: OSRM側の一時不調の可能性が高い。1回だけ待って再挑戦し、それでもダメなら諦める
+      if (noProgressRetried) break;
+      noProgressRetried = true;
+      await new Promise(res => setTimeout(res, 3000));
+    }
+  }
+  return {
+    points: cur,
+    bridged, corridorBridged, tunnelBridged,
+    detected,
+    rejectedDetour: last?.rejectedDetour ?? 0,
+    failed: last?.failed ?? 0,
+    sea: last?.sea ?? 0,
+    unresolved: last?.unresolved ?? [],
+  };
+}
+
 export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: BridgeOptions): Promise<BridgeResult> {
   const empty: BridgeResult = { points, bridged: 0, corridorBridged: 0, detected: 0, tunnelBridged: 0, rejectedDetour: 0, failed: 0, sea: 0, unresolved: [] };
   if (points.length < 2) return empty;
@@ -409,8 +452,11 @@ export async function bridgeGaps(points: TrackPoint[], mode?: string, opts?: Bri
           for (let k = 1; k < p.length; k++) total += haversineKm(p[k - 1], p[k]);
           detourTotal = total;
           if (total >= distKm * 0.9 && total <= distKm * MAX_DETOUR_RATIO) path = p;
+          await new Promise(r => setTimeout(r, CALL_INTERVAL_MS));
         } else {
           fails++;
+          // レート制限(429)や一時エラーを「連続失敗」と誤判定しないよう少し待つ
+          await new Promise(r => setTimeout(r, FAIL_BACKOFF_MS));
         }
       }
       // 海上判定: 一定以上のギャップで道路経路が直線の3倍超＝湾・海峡を回り込む＝航路とみなす

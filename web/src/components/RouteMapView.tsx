@@ -5,7 +5,7 @@ import type { Route, Landmark, TagDef, TrackPoint, Car } from '../firebase/data'
 import type { MapSettings } from './SettingsPanel';
 import { detectStops, matchStopsToLandmarks } from '../utils/visitDetection';
 import type { StopCluster } from '../utils/visitDetection';
-import { bridgeGaps, removeGeoWarps } from '../utils/gapBridge';
+import { bridgeGapsFully, removeGeoWarps } from '../utils/gapBridge';
 import type { UnresolvedGap } from '../utils/gapBridge';
 import { categorizeByName, placeTypeToCategory, SPOT_CATEGORIES } from '../utils/spotCategory';
 import { corridorRoute } from '../utils/osmCorridor';
@@ -558,7 +558,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setSavingEdit(true);
       try {
         const cleaned = removeGeoWarps(editPoints);
-        const r = await bridgeGaps(cleaned.points, routeModeRef.current);
+        // ギャップ大量の都市部ルートでも1回で終わるよう、上限打ち切りが消えるまで自動で複数パス
+        const r = await bridgeGapsFully(cleaned.points, routeModeRef.current);
         setUnresolvedGaps(r.unresolved);
         if (r.bridged === 0 && cleaned.removed === 0) {
           alert('補正が必要な区間は見つかりませんでした。\n（短距離ワープや、GPS喪失によるギャップなし）');
@@ -578,7 +579,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         if (r.rejectedDetour > 0) msgs.push(`回り道になる補間は不採用（直線のまま）${r.rejectedDetour}か所`);
         if (r.failed > 0) msgs.push(`経路取得失敗 ${r.failed}か所`);
         const limitCount = r.unresolved.filter(g => g.reason === 'limit').length;
-        if (limitCount > 0) msgs.push(`上限で未処理 ${limitCount}か所（もう一度実行すると続きを修復）`);
+        if (limitCount > 0) msgs.push(`未処理 ${limitCount}か所（経路サーバー混雑の可能性・時間を置いて再実行を）`);
         if (r.unresolved.length > 0) msgs.push('残ったギャップは地図上に⚠で表示中');
         alert(`${msgs.join(' / ')}。\n内容を確認して「保存」してください。`);
       } catch (e) {

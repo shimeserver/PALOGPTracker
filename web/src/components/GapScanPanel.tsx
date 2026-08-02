@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Route, TrackPoint } from '../firebase/data';
 import { updateRoutePoints, updateRouteGapsOk, restoreRoutePoints } from '../firebase/data';
-import { routeGapStats, bridgeGaps, removeGeoWarps, recalcSpeeds } from '../utils/gapBridge';
+import { routeGapStats, bridgeGapsFully, removeGeoWarps, recalcSpeeds } from '../utils/gapBridge';
 import type { GapStats } from '../utils/gapBridge';
 
 function haversineKm(a: TrackPoint, b: TrackPoint): number {
@@ -70,8 +70,11 @@ export default function GapScanPanel({ open, onClose, routes, onSelectRoute, onU
   // 1ルートの自動修復: ワープ除去 → ギャップ補間 → 速度再計算 → 保存
   const repairRoute = async (route: Route, statusPrefix = ''): Promise<string> => {
     const cleaned = removeGeoWarps(route.points);
-    const r = await bridgeGaps(cleaned.points, route.mode, {
-      onProgress: (done, total) => setBatchStatus(`${statusPrefix}「${route.name || '（無名）'}」ギャップ ${done}/${total} 処理中...`),
+    let passNo = 1;
+    const r = await bridgeGapsFully(cleaned.points, route.mode, {
+      onPass: p => { passNo = p; },
+      onProgress: (done, total) => setBatchStatus(
+        `${statusPrefix}「${route.name || '（無名）'}」ギャップ ${done}/${total} 処理中${passNo > 1 ? `（パス${passNo}）` : ''}...`),
     });
     if (r.bridged === 0 && cleaned.removed === 0) {
       const seaCount = r.unresolved.filter(g => g.reason === 'sea').length;
