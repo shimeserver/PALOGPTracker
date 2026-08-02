@@ -436,6 +436,50 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
     }
   };
 
+  // 燃費の内訳を表示する（どのルートが何kmカウントされたか＋期間内なのに除外されたルート）。
+  // 「数字が体感と合わない」時の原因特定用: タグ無し/他車タグ/徒歩扱いのルートが一目で分かる
+  const showEffBreakdown = (car: Car, log: FuelLog, allLogs: FuelLog[]) => {
+    const asc = [...allLogs].sort((a, b) => a.timestamp - b.timestamp);
+    const i = asc.findIndex(l => l.id === log.id);
+    let prevFullIdx = -1;
+    for (let j = i - 1; j >= 0; j--) { if (asc[j].isFull) { prevFullIdx = j; break; } }
+    if (i < 0 || prevFullIdx < 0) { alert('前回の満タン給油がないため区間燃費は計算されていません。'); return; }
+    const t0 = asc[prevFullIdx].timestamp, t1 = log.timestamp;
+    const fmt = (ts: number) => new Date(ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const litersSince = asc.slice(prevFullIdx + 1, i + 1).reduce((s2, l) => s2 + l.liters, 0);
+    const counted: string[] = [];
+    const excluded: string[] = [];
+    let total = 0;
+    for (const r of routes) {
+      if (r.endTime <= t0 || r.startTime >= t1) continue; // 期間外
+      const km = r.points?.length >= 2
+        ? distanceInWindow(r.points, t0, t1)
+        : r.totalDistance * (Math.max(0, Math.min(r.endTime, t1) - Math.max(r.startTime, t0)) / Math.max(1, r.endTime - r.startTime));
+      if (km < 0.5) continue;
+      const dateStr = new Date(r.startTime).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+      const line = `・${dateStr} ${r.name || '（無名）'}: ${km.toFixed(1)}km`;
+      const isCar = (r.mode ?? 'car') === 'car';
+      const tagOk = car.tagId ? routeMatchesCarTag(r.tags, tags, car.tagId) : false;
+      if (isCar && tagOk) { counted.push(line); total += km; }
+      else {
+        const reason = !isCar ? `${r.mode}モード` : r.tags.length === 0 ? '車タグなし' : `別タグ: ${r.tags.map(id => tags.find(t => t.id === id)?.name ?? id).join(',')}`;
+        excluded.push(`${line}（${reason}）`);
+      }
+    }
+    const eff = total > 0 && litersSince > 0 ? (total / litersSince).toFixed(1) : '—';
+    alert([
+      `⛽ 燃費の内訳 — ${fmt(t1)} の給油`,
+      `期間: ${fmt(t0)} 〜 ${fmt(t1)}`,
+      `給油量: ${litersSince.toFixed(1)}L（前回満タン後の給油を合算）`,
+      ``,
+      `カウントした走行 合計 ${total.toFixed(1)}km → ${eff}km/L`,
+      ...(counted.length ? counted : ['（なし）']),
+      ...(excluded.length ? ['', `⚠ 期間内だが未カウント（${excluded.length}件）:`, ...excluded] : []),
+      ``,
+      `※ 給油時刻より後の走行は次回給油分に計上されます`,
+    ].join('\n'));
+  };
+
   const handleOpenEditFuel = (log: FuelLog) => {
     setEditFuelLog(log);
     setEditFuelForm({
@@ -1046,6 +1090,11 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
                                   <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3 }}>
                                     走行: {log.distanceSince.toFixed(1)} km
                                     {log.efficiency && <span style={{ color: '#2563eb', fontWeight: 600, marginLeft: 8 }}> → {log.efficiency.toFixed(1)} km/L</span>}
+                                    <button
+                                      onClick={() => showEffBreakdown(car, log, fLogs)}
+                                      title="この燃費の内訳（カウントしたルート・除外されたルート）を表示"
+                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 12, marginLeft: 6, padding: 0 }}
+                                    >🔍</button>
                                   </div>
                                 )}
                                 {!log.isFull && <span style={{ fontSize: 10, color: '#f59e0b', background: '#fef3c7', borderRadius: 4, padding: '1px 5px' }}>非満タン</span>}
