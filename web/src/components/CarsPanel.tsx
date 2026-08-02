@@ -76,6 +76,19 @@ function distanceInWindow(pts: {lat:number;lng:number;timestamp:number}[], t0: n
   return dist;
 }
 
+// date / datetime-local 入力用のローカル時刻文字列。
+// toISOString()はUTCのため、表示が9時間前になり保存のたびにタイムスタンプが
+// 9時間ずつ過去へずれて燃費の時間窓が壊れる（実際に発生したバグ）。必ずこちらを使う。
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const toLocalDateStr = (ts: number) => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+const toLocalDateTimeStr = (ts: number) => {
+  const d = new Date(ts);
+  return `${toLocalDateStr(ts)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
 // ルートのタグがcarTagIdと「同名」かどうかを判定（ID直接一致 + 名前一致の両方）
 function routeMatchesCarTag(routeTags: string[], allTags: TagDef[], carTagId: string): boolean {
   const carTagName = allTags.find(t => t.id === carTagId)?.name;
@@ -241,14 +254,14 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
 
   // Add fuel log form
   const [showAddFuel, setShowAddFuel] = useState<string | null>(null);
-  const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: new Date().toISOString().slice(0, 10) });
+  const [fuelForm, setFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: toLocalDateStr(Date.now()) });
   const [editFuelLog, setEditFuelLog] = useState<FuelLog | null>(null);
   const [editFuelForm, setEditFuelForm] = useState({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: '' });
 
   // Add maintenance form
   const [showAddMaint, setShowAddMaint] = useState<string | null>(null);
   const [maintForm, setMaintForm] = useState<{ type: MaintenanceType; customLabel: string; itemType: string; date: string; odometerKm: string; cost: string; notes: string; nextDueMonths: string; nextDueKm: string }>({
-    type: 'oil', customLabel: '', itemType: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '',
+    type: 'oil', customLabel: '', itemType: '', date: toLocalDateStr(Date.now()), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '',
   });
 
   useEffect(() => {
@@ -414,7 +427,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       const log = await addFuelLog(carId, fuelData);
       setFuelLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
       setShowAddFuel(null);
-      setFuelForm({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: new Date().toISOString().slice(0, 10) });
+      setFuelForm({ liters: '', pricePerLiter: '', totalCost: '', isFull: true, notes: '', date: toLocalDateStr(Date.now()) });
       showToast('給油記録を保存しました');
     } catch {
       showToast('保存に失敗しました', 'error');
@@ -431,7 +444,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       totalCost: log.totalCost?.toString() ?? '',
       isFull: log.isFull,
       notes: log.notes ?? '',
-      date: new Date(log.timestamp).toISOString().slice(0, 16),
+      date: toLocalDateTimeStr(log.timestamp),
     });
   };
 
@@ -482,7 +495,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
       const log = await addMaintenanceLog(carId, maintData);
       setMaintLogs(prev => ({ ...prev, [carId]: [log, ...(prev[carId] || [])] }));
       setShowAddMaint(null);
-      setMaintForm({ type: 'oil', customLabel: '', itemType: '', date: new Date().toISOString().slice(0, 10), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
+      setMaintForm({ type: 'oil', customLabel: '', itemType: '', date: toLocalDateStr(Date.now()), odometerKm: '', cost: '', notes: '', nextDueMonths: '', nextDueKm: '' });
       showToast('整備記録を保存しました');
     } catch (err) {
       console.error('addMaintenanceLog error:', err);
@@ -502,7 +515,7 @@ export default function CarsPanel({ open, onClose, userId, routes, tags, activeC
   const openEditMaint = (carId: string, log: MaintenanceLog) => {
     setEditMaintModal({ carId, log });
     setEditMaintForm({
-      date: new Date(log.timestamp).toISOString().slice(0, 10),
+      date: toLocalDateStr(log.timestamp),
       itemType: log.itemType || '',
       nextDueMonths: log.nextDueMonths?.toString() || '',
       nextDueKm: log.nextDueKm?.toString() || '',
