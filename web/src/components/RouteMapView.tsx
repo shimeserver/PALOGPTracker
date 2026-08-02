@@ -1224,60 +1224,55 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               <span style={{ color:'#ef4444', fontWeight:700, fontSize:14 }}>✏️ ルート編集</span>
               <span style={{ color:'#6b7280', fontSize:12 }}>{editPoints.length}pt</span>
             </div>
-            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              {hasUndo && (
-                <button onClick={applyUndo} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
-                  ↩ 元に戻す
-                </button>
-              )}
-              <button
-                onClick={forceRecalcSpeeds}
-                disabled={savingEdit}
-                style={{ padding:'7px 14px', fontSize:13, background:'#7c3aed', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="座標+タイムスタンプから全速度を強制再計算（速度データが壊れた場合に使用）"
-              >
-                🔄 速度再計算
-              </button>
+            <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+              {/* 修復ツール（ラベル付き・主要3つ） */}
               <button
                 onClick={snapToRoads}
                 disabled={savingEdit}
-                style={{ padding:'7px 14px', fontSize:13, background:'#059669', color:'#fff', border:'none', borderRadius:6, cursor: savingEdit ? 'default' : 'pointer', fontWeight:600 }}
-                title="GPSの飛び（ワープ）を除去し、GPS喪失区間だけ道なりに補間します。実測点はそのまま残します"
+                style={{ ...ui.toolBtn, background:'#059669' }}
+                title="記録クリーンアップ: GPSの飛び（ワープ）を除去し、GPS喪失区間だけ道なりに補間します。実測点はそのまま残します"
               >
-                🛣️ 記録クリーンアップ
+                🛣️ クリーンアップ
               </button>
               <button
                 onClick={() => { setSectionMode(m => !m); setSectionStart(null); setSectionVias([]); setExtendMode(false); }}
                 disabled={savingEdit}
-                style={{ padding:'7px 14px', fontSize:13, background: sectionMode ? '#d97706' : '#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="始点と終点をルート上でクリック。間に地図上の任意の道をクリックすると「実際に通った道」を経由地に指定できます"
+                style={{ ...ui.toolBtn, background: sectionMode ? '#d97706' : '#f59e0b' }}
+                title="区間修正: 始点と終点をルート上でクリック。間に地図上の任意の道をクリックすると「実際に通った道」を経由地に指定できます"
               >
                 {sectionMode
-                  ? (sectionStart == null ? '✂️ 始点をクリック…' : `✂️ 経由地/終点…${sectionVias.length > 0 ? `(${sectionVias.length})` : ''}`)
+                  ? (sectionStart == null ? '✂️ 始点…' : `✂️ 経由/終点…${sectionVias.length > 0 ? `(${sectionVias.length})` : ''}`)
                   : '✂️ 区間修正'}
               </button>
               <button
                 onClick={() => { setExtendMode(m => !m); setSectionMode(false); setSectionStart(null); setSectionVias([]); }}
                 disabled={savingEdit}
-                style={{ padding:'7px 14px', fontSize:13, background: extendMode ? '#7c3aed' : '#8b5cf6', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="記録し忘れた先頭/末尾の欠けを補完: 地図上の任意地点をクリックすると、ルートの端（近い方）からそこまで道なりに追記します"
+                style={{ ...ui.toolBtn, background: extendMode ? '#6d28d9' : '#8b5cf6' }}
+                title="延長: 記録し忘れた先頭/末尾の欠けを補完。地図上の任意地点をクリックすると、ルートの端（近い方）からそこまで道なりに追記します"
               >
-                {extendMode ? '➕ 追記先をクリック…' : '➕ 延長'}
+                {extendMode ? '➕ 追記先…' : '➕ 延長'}
               </button>
-              <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
-                style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
-                {savingEdit ? '保存中...' : '💾 保存'}
-              </button>
+
+              {/* 低頻度操作（アイコンのみ） */}
+              <span style={{ width:1, height:24, background:'#e8eaed', margin:'0 2px' }} />
+              {hasUndo && (
+                <button onClick={applyUndo} style={ui.iconBtn} title="元に戻す（直前の修復・置換を取消）">↺</button>
+              )}
+              <button onClick={forceRecalcSpeeds} disabled={savingEdit} style={ui.iconBtn}
+                title="速度再計算: 座標+タイムスタンプから全速度を計算し直す（速度データが壊れた場合に）">🔄</button>
               {route?.hasBackup && (
                 <button onClick={restoreFromBackup} disabled={savingEdit}
-                  title="修復前の点列に戻す（もう一度実行すると修復後に戻る）"
-                  style={{ padding:'7px 12px', fontSize:13, background:'#fff7ed', border:'1.5px solid #fed7aa', borderRadius:6, cursor:'pointer', color:'#c2410c', fontWeight:600 }}>
-                  ↩ 修復前に戻す
-                </button>
+                  style={{ ...ui.iconBtn, background:'#fff7ed', borderColor:'#fed7aa', color:'#c2410c' }}
+                  title="修復前に戻す（保存済みバックアップと交換・もう一度押すと修復後に戻る）">↩</button>
               )}
-              <button onClick={cancelEditMode} style={{ padding:'7px 12px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151' }}>
-                キャンセル
+
+              {/* 確定操作 */}
+              <span style={{ width:1, height:24, background:'#e8eaed', margin:'0 2px' }} />
+              <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
+                style={{ ...ui.toolBtn, background:'#2563eb', padding:'7px 16px' }}>
+                {savingEdit ? '保存中...' : '💾 保存'}
               </button>
+              <button onClick={cancelEditMode} style={ui.iconBtn} title="編集をやめる（変更を破棄）">✕</button>
             </div>
           </div>
         )}
@@ -1363,6 +1358,8 @@ const ui: Record<string, React.CSSProperties> = {
     border:'1px solid #e8eaed', boxShadow:'0 4px 16px rgba(0,0,0,0.12)', backdropFilter:'blur(8px)', maxWidth:'90%',
   },
   routeInfo: { display:'flex', flexDirection:'column', gap:2 },
+  toolBtn: { padding:'7px 12px', fontSize:12.5, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600, whiteSpace:'nowrap' as const },
+  iconBtn: { width:32, height:32, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', flexShrink:0 },
   select: { background:'#f8f9fa', color:'#1f2937', border:'1.5px solid #e8eaed', borderRadius:6, padding:'4px 8px', fontSize:13 },
   stopBtn: { background:'#ef4444', color:'#fff', border:'none', borderRadius:6, padding:'6px 14px', cursor:'pointer', fontSize:13, fontWeight:600 },
   allModeBadge: {
