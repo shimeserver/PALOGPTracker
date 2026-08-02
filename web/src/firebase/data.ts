@@ -307,10 +307,12 @@ export async function updateRoutePoints(routeId: string, points: TrackPoint[]): 
   } catch { /* バックアップ失敗時は上書きのみ実行 */ }
   const { totalDistance, avgSpeed, maxSpeed, endTime } = computeRouteStats(points);
   // pointsはチャンク側に保存し、本体からは除去（旧形式ルートもこの操作でチャンク化される）。
-  // メタ更新は最終チャンクと同一コミット（キャッシュのフィンガープリント整合性のため）
+  // メタ更新は最終チャンクと同一コミット（キャッシュのフィンガープリント整合性のため）。
+  // startTimeも更新: ➕延長で先頭に追記した場合に開始時刻が変わるため
   await writeChunkDocs(routeId, 'pts', points, {
     points: deleteField(), ptsChunked: true, pointCount: points.length,
     totalDistance, avgSpeed, maxSpeed,
+    startTime: Timestamp.fromMillis(points[0].timestamp),
     endTime: Timestamp.fromMillis(endTime),
     ...(backedUp ? { hasBackup: true, backupAt: Date.now() } : {}),
   });
@@ -328,6 +330,7 @@ export async function restoreRoutePoints(routeId: string): Promise<TrackPoint[]>
   await writeChunkDocs(routeId, 'pts', bakPoints, {
     points: deleteField(), ptsChunked: true, pointCount: bakPoints.length,
     totalDistance, avgSpeed, maxSpeed,
+    startTime: Timestamp.fromMillis(bakPoints[0].timestamp),
     endTime: Timestamp.fromMillis(endTime),
     hasBackup: true, backupAt: Date.now(),
   });

@@ -12,7 +12,7 @@ import { corridorRoute } from '../utils/osmCorridor';
 import ElevationProfile, { hasElevationData } from './ElevationProfile';
 import DensityOverlay from './DensityOverlay';
 
-function haversineKm(a: TrackPoint, b: TrackPoint): number {
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6371;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLng = ((b.lng - a.lng) * Math.PI) / 180;
@@ -139,6 +139,10 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // 区間修正モード: ルート上の2点をクリック→間をOSRMの道なり経路で置き換え
     const [sectionMode, setSectionMode] = useState(false);
     const [sectionStart, setSectionStart] = useState<number | null>(null);
+    // 経由地（区間修正で「実際に通った道」を地図上の任意クリックで指定）
+    const [sectionVias, setSectionVias] = useState<{ lat: number; lng: number }[]>([]);
+    // 延長モード: 記録し忘れた先頭/末尾を任意地点まで道なりに追記
+    const [extendMode, setExtendMode] = useState(false);
     // 複数の経路候補（高速/下道など）からクリックで選ばせる
     const [sectionCandidates, setSectionCandidates] = useState<{ a: number; b: number; routes: [number, number][][] } | null>(null);
     // 標高プロファイル
@@ -166,6 +170,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [mapObj, setMapObj] = useState<google.maps.Map | null>(null);
     const sectionModeRef = useRef(false);
     const sectionStartRef = useRef<number | null>(null);
+    const sectionViasRef = useRef<{ lat: number; lng: number }[]>([]);
+    const extendModeRef = useRef(false);
+    const viaBlockUntilRef = useRef(0); // ルート上クリック直後のmapクリックを経由地に誤登録しないためのガード
     const editPointsRef = useRef<TrackPoint[]>([]);
     const routeModeRef = useRef<string | undefined>(undefined);
     const prevEditPointsRef = useRef<TrackPoint[]>([]);
@@ -207,6 +214,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => { editPointsRef.current = editPoints; }, [editPoints]);
     useEffect(() => { sectionModeRef.current = sectionMode; }, [sectionMode]);
     useEffect(() => { sectionStartRef.current = sectionStart; }, [sectionStart]);
+    useEffect(() => { sectionViasRef.current = sectionVias; }, [sectionVias]);
+    useEffect(() => { extendModeRef.current = extendMode; }, [extendMode]);
     useEffect(() => { routeModeRef.current = route?.mode; }, [route?.mode]);
     useEffect(() => { savingEditRef.current = savingEdit; }, [savingEdit]);
 
@@ -449,22 +458,28 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         const profile = routeModeRef.current === 'walk' ? 'foot'
           : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
         const p1 = pts[a], p2 = pts[b];
-        const base = `https://router.project-osrm.org/route/v1/${profile}/${p1.lng},${p1.lat};${p2.lng},${p2.lat}`;
+        // 経由地あり: 始点→経由地…→終点 を通る1本の経路を要求（OSRMはvia付きだと代替案なし）。
+        // 「実際に通ったのに記録されていない道」をユーザーが明示指定するケース
+        const vias = sectionViasRef.current;
+        const coordStr = [p1, ...vias, p2].map(p => `${p.lng},${p.lat}`).join(';');
+        const base = `https://router.project-osrm.org/route/v1/${profile}/${coordStr}`;
         // 進行方位ヒント（前後の点から算出、許容±60°）
         const brgStart = Math.round(bearingDeg(p1, pts[Math.min(a + 1, pts.length - 1)]));
         const brgEnd = Math.round(bearingDeg(pts[Math.max(b - 1, 0)], p2));
         // 方位ヒント付き/無しの両方を取得して候補を合流する。
         // ヒントが端点を誤ったエッジ（逆方向ランプ等）にスナップさせて変な経路になるケースがあるため、
         // 素の候補も必ず混ぜる（山手トンネル区間の実測でヒント無しが正解だった）。
-        const urls = [
-          `${base}?overview=full&geometries=geojson&alternatives=true&bearings=${brgStart},60;${brgEnd},60`,
-          `${base}?overview=full&geometries=geojson&alternatives=true`,
-        ];
+        const urls = vias.length > 0
+          ? [`${base}?overview=full&geometries=geojson`]
+          : [
+            `${base}?overview=full&geometries=geojson&alternatives=true&bearings=${brgStart},60;${brgEnd},60`,
+            `${base}?overview=full&geometries=geojson&alternatives=true`,
+          ];
         const routes: [number, number][][] = [];
         const seen = new Set<string>();
         // 高速コリドー候補（OSM直読み）を最優先で取得。
         // 公開OSRMは首都高・アクアライン等の有料道路を使わないため、これが唯一の正解になる区間がある。
-        const corridorPromise = profile === 'driving' ? corridorRoute(p1, p2).catch(() => null) : Promise.resolve(null);
+        const corridorPromise = profile === 'driving' && vias.length === 0 ? corridorRoute(p1, p2).catch(() => null) : Promise.resolve(null);
         for (const url of urls) {
           try {
             const res = await fetch(url);
@@ -498,6 +513,65 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     };
 
+    // ルート延長: 記録し忘れた先頭/末尾の欠けを、クリックした任意地点まで道なりに追記する。
+    // 追記先はルートの始点/終点のうちクリック地点に近い方から伸ばす。
+    // タイムスタンプは実測がないため、ルートの平均移動速度（15〜120km/hにクランプ）で外挿する。
+    const extendRoute = async (target: { lat: number; lng: number }) => {
+      const pts = editPointsRef.current;
+      if (pts.length < 2 || savingEditRef.current) return;
+      setSavingEdit(true);
+      try {
+        const profile = routeModeRef.current === 'walk' ? 'foot'
+          : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
+        const head = pts[0], tail = pts[pts.length - 1];
+        const isTail = haversineKm(tail, target) <= haversineKm(head, target);
+        const from = isTail ? tail : target;
+        const to = isTail ? target : head;
+        const url = `https://router.project-osrm.org/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+        let coords: [number, number][] | null = null;
+        try {
+          const res = await fetch(url);
+          const j = await res.json();
+          if (j.code === 'Ok' && j.routes?.length) coords = j.routes[0].geometry.coordinates;
+        } catch { /* コリドーへ */ }
+        if (!coords && profile === 'driving') coords = await corridorRoute(from, to).catch(() => null);
+        if (!coords || coords.length < 2) { alert('道路経路を取得できませんでした'); return; }
+        const path = coords.map(([lng, lat]) => ({ lat, lng }));
+        const dists: number[] = [];
+        let total = 0;
+        for (let k = 1; k < path.length; k++) { const d = haversineKm(path[k - 1], path[k]); dists.push(d); total += d; }
+        // 平均移動速度で時刻を外挿
+        let routeDist = 0;
+        for (let i = 1; i < pts.length; i++) routeDist += haversineKm(pts[i - 1], pts[i]);
+        const durH = Math.max(1 / 3600, (tail.timestamp - head.timestamp) / 3600000);
+        const v = Math.min(120, Math.max(15, routeDist / durH));
+        saveUndo(editPointsRef.current);
+        if (isTail) {
+          let t = tail.timestamp;
+          const seg: TrackPoint[] = [];
+          for (let k = 1; k < path.length; k++) {
+            t += (dists[k - 1] / v) * 3600000;
+            seg.push({ lat: path[k].lat, lng: path[k].lng, timestamp: Math.round(t), speed: 0 });
+          }
+          setEditPoints(filterSpeedOutliers(calcSpeedsForSegment([...pts, ...seg])));
+        } else {
+          let t = head.timestamp - (total / v) * 3600000;
+          const seg: TrackPoint[] = [{ lat: path[0].lat, lng: path[0].lng, timestamp: Math.round(t), speed: 0 }];
+          for (let k = 1; k < path.length - 1; k++) {
+            t += (dists[k - 1] / v) * 3600000;
+            seg.push({ lat: path[k].lat, lng: path[k].lng, timestamp: Math.round(t), speed: 0 });
+          }
+          setEditPoints(filterSpeedOutliers(calcSpeedsForSegment([...seg, ...pts])));
+        }
+        alert(`ルート${isTail ? '末尾' : '先頭'}に約${total.toFixed(1)}kmを道なりに追記しました。\n形を確認して「保存」してください（↺元に戻すで取消可）。`);
+      } catch (e) {
+        alert(`延長失敗: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSavingEdit(false);
+        setExtendMode(false);
+      }
+    };
+
     const handleEditPolylineMouseDown = useCallback((e: google.maps.MapMouseEvent) => {
       if (!e.latLng || savingEditRef.current) return;
       const lat = e.latLng.lat(), lng = e.latLng.lng();
@@ -508,8 +582,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
         if (d < minD) { minD = d; ni = i; }
       });
 
-      // 区間修正モード: クリックで始点→終点を選び、間を道なりに置き換え
+      // 区間修正モード: クリックで始点→（任意で経由地）→終点を選び、間を道なりに置き換え
       if (sectionModeRef.current) {
+        viaBlockUntilRef.current = Date.now() + 400; // 直後のmapクリックを経由地に誤登録しない
         const start = sectionStartRef.current;
         if (start == null) {
           setSectionStart(ni);
@@ -525,6 +600,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // （古いa/b indexで applySectionGeometry すると別区間を壊す/範囲外エラーになるため）
     const invalidateSectionState = () => {
       setSectionCandidates(null); setSectionMode(false); setSectionStart(null);
+      setSectionVias([]); setExtendMode(false);
     };
 
     const saveUndo = (pts: TrackPoint[]) => {
@@ -633,6 +709,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           totalDistance: totalDist,
           avgSpeed: speeds.length > 0 ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
           maxSpeed: speeds.reduce((m, s) => s > m ? s : m, 0),
+          startTime: fixed[0].timestamp, // ➕先頭延長を反映
           endTime: fixed[fixed.length - 1].timestamp,
           // updateRoutePoints がバックアップを作るので「↩ 修復前に戻す」を即座に出せるようにする
           hasBackup: true, backupAt: Date.now(),
@@ -710,10 +787,21 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           onLoad={onLoad}
           options={mapOptions}
           onClick={(e: google.maps.MapMouseEvent) => {
+            const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
+            if (lat === undefined || lng === undefined) return;
             if (onMapRightClick) {
               const placeId = (e as any).placeId as string | undefined;
-              const lat = e.latLng?.lat(); const lng = e.latLng?.lng();
-              if (lat !== undefined && lng !== undefined) onMapRightClick(lat, lng, placeId);
+              onMapRightClick(lat, lng, placeId);
+              return;
+            }
+            // ➕延長: 任意地点までルートを道なりに追記
+            if (editMode && extendMode && !savingEdit) {
+              void extendRoute({ lat, lng });
+              return;
+            }
+            // ✂️区間修正の経由地: 始点選択後のルート外クリックは「実際に通った道」の指定
+            if (editMode && sectionMode && sectionStart != null && !savingEdit && Date.now() > viaBlockUntilRef.current) {
+              setSectionVias(prev => (prev.length >= 8 ? prev : [...prev, { lat, lng }]));
             }
           }}
         >
@@ -856,6 +944,16 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           )}
 
           {/* 区間修正: 選択済み始点マーカー */}
+          {/* 経由地マーカー（区間修正で指定した「実際に通った道」） */}
+          {editMode && sectionMode && sectionVias.map((v, i) => (
+            <Marker
+              key={`via-${i}`}
+              position={v}
+              label={{ text: String(i + 1), color: '#fff', fontSize: '11px', fontWeight: '700' }}
+              icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#0284c7', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }}
+              title={`経由地${i + 1}（この道を通る経路で修正）`}
+            />
+          ))}
           {editMode && sectionMode && sectionStart != null && editPoints[sectionStart] && (
             <Marker
               position={{ lat: editPoints[sectionStart].lat, lng: editPoints[sectionStart].lng }}
@@ -1068,8 +1166,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
           <div style={{ position:'absolute', top:10, left:'50%', transform:'translateX(-50%)', zIndex:1001, background: sectionMode ? 'rgba(245,158,11,0.95)' : 'rgba(37,99,235,0.95)', color:'#fff', padding:'8px 20px', borderRadius:24, fontSize:13, fontWeight:600, boxShadow:'0 2px 8px rgba(0,0,0,0.2)', whiteSpace:'nowrap' }}>
             {savingEdit ? '🔄 ルート計算中...'
             : sectionCandidates ? `🎨 経路候補が${sectionCandidates.routes.length}本あります — 実際に走った色の線をクリック`
+            : extendMode ? '➕ 記録し忘れた到達地点を地図上でクリック — 先頭/末尾の近い方から道なりに追記します'
             : sectionMode && sectionStart == null ? '✂️ おかしい区間の【始点】をルート上でクリック'
-            : sectionMode ? '✂️ 続けて【終点】をクリック — 間が道なりに置き換わります'
+            : sectionMode ? `✂️ 実際に通った道を地図上でクリック（任意・${sectionVias.length}か所）→ 最後に【終点】をルート上でクリック`
             : '✏️ 編集モード — ✂️区間修正で形を直せます'}
             {sectionCandidates && (
               <button onClick={() => setSectionCandidates(null)} style={{ marginLeft: 10, background: 'rgba(255,255,255,0.25)', border: 'none', borderRadius: 12, color: '#fff', padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>やめる</button>
@@ -1148,14 +1247,22 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 🛣️ 記録クリーンアップ
               </button>
               <button
-                onClick={() => { setSectionMode(m => !m); setSectionStart(null); }}
+                onClick={() => { setSectionMode(m => !m); setSectionStart(null); setSectionVias([]); setExtendMode(false); }}
                 disabled={savingEdit}
                 style={{ padding:'7px 14px', fontSize:13, background: sectionMode ? '#d97706' : '#f59e0b', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
-                title="おかしい区間の始点と終点をルート上でクリックすると、その間を道なりの経路に置き換えます"
+                title="始点と終点をルート上でクリック。間に地図上の任意の道をクリックすると「実際に通った道」を経由地に指定できます"
               >
                 {sectionMode
-                  ? (sectionStart == null ? '✂️ 始点をクリック…' : '✂️ 終点をクリック…')
+                  ? (sectionStart == null ? '✂️ 始点をクリック…' : `✂️ 経由地/終点…${sectionVias.length > 0 ? `(${sectionVias.length})` : ''}`)
                   : '✂️ 区間修正'}
+              </button>
+              <button
+                onClick={() => { setExtendMode(m => !m); setSectionMode(false); setSectionStart(null); setSectionVias([]); }}
+                disabled={savingEdit}
+                style={{ padding:'7px 14px', fontSize:13, background: extendMode ? '#7c3aed' : '#8b5cf6', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}
+                title="記録し忘れた先頭/末尾の欠けを補完: 地図上の任意地点をクリックすると、ルートの端（近い方）からそこまで道なりに追記します"
+              >
+                {extendMode ? '➕ 追記先をクリック…' : '➕ 延長'}
               </button>
               <button onClick={saveEditedRoute} disabled={savingEdit || editPoints.length < 2}
                 style={{ padding:'7px 16px', fontSize:13, background:'#2563eb', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:600 }}>
