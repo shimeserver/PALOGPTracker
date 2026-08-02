@@ -70,8 +70,9 @@ function haversine(p1: TrackPoint, p2: TrackPoint): number {
 }
 
 // モード別のジャンプ判定上限（km/h）。これ超の移動を示す点はGPSジャンプとみなして捨てる。
-// walk は公共交通（新幹線=最高320km/h）を含むため上限を高くしている。
-const MODE_MAX_KMH: Record<TrackingMode, number> = { car: 300, walk: 330, bicycle: 120 };
+// car はサーキット走行（世界的には300km/h超もあり得る）を巻き込まないよう400に設定。
+// walk は公共交通（新幹線=最高320km/h）を含むため高め。
+const MODE_MAX_KMH: Record<TrackingMode, number> = { car: 400, walk: 360, bicycle: 120 };
 
 // GPS復帰直後（60秒以上受信が途切れた後）の最初のfixは精度が悪いことが多い。
 // その場合は精度30m以下を要求する。ただし連続3点まで＝それ以降は通常基準(50m)に
@@ -80,13 +81,9 @@ const REENTRY_GAP_MS = 60000;
 const REENTRY_MAX_ACC_M = 30;
 let reentryRejects = 0;
 
-// 加速度妥当性フィルタ（車・自転車）: 「直前の速度から物理的に到達できない速度」を弾く。
-// 市街地マルチパスの200m級ジャンプは実効240km/h等で上限300km/hを素通りしていた。
-// 許容加速 25km/h毎秒 ≈ 7m/s²（スーパーカーのフル加速相当）+ 余裕30km/h。
-const ACCEL_KMH_PER_SEC = 25;
-const ACCEL_SLACK_KMH = 30;
-
-// 1点遅延スパイク除去: 「飛んで戻る」点を次の点の到着時に判定して記録前に破棄する。
+// 1点遅延スパイク除去: 「特定の地点に飛んで戻る」ワープ点だけを、次の点の到着時に
+// 幾何形状（鋭い折り返し）で判定して記録前に破棄する。速度ベースの判定は
+// サーキット走行等の速い実走を巻き込むリスクがあるため意図的に使わない。
 // 判定条件はWeb修復の removeSpikeVertices と同一（実データでヘアピン誤爆なし検証済み）。
 let pendingPt: TrackPoint | null = null;
 
@@ -158,20 +155,10 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       if (chainPrev) {
         const dtSec = (pt.timestamp - chainPrev.timestamp) / 1000;
         if (dtSec > 0) {
+          // モード別の絶対上限のみ（速度ベースの複雑な判定は実走を巻き込むため行わない。
+          // 「飛んで戻る」ワープは後段の幾何スパイク判定が受け持つ）
           const impliedKmh = haversine(chainPrev, pt) / (dtSec / 3600);
-          // モード別の絶対上限
           if (impliedKmh > MODE_MAX_KMH[mode]) continue;
-          // 加速度妥当性（車・自転車）: 直近の速度から物理的に届かない位置ジャンプを弾く。
-          // 直近速度はDoppler速度と直前区間の実効速度の大きい方（Doppler=0の誤報に耐性）
-          if (mode === 'car' || mode === 'bicycle') {
-            const before = lastCommitted();
-            let recentKmh = chainPrev.speed;
-            if (before && before !== chainPrev) {
-              const dtPrev = (chainPrev.timestamp - before.timestamp) / 3600000;
-              if (dtPrev > 0) recentKmh = Math.max(recentKmh, before.speed, haversine(before, chainPrev) / dtPrev);
-            }
-            if (impliedKmh > recentKmh + ACCEL_KMH_PER_SEC * dtSec + ACCEL_SLACK_KMH) continue;
-          }
         }
       }
       reentryRejects = 0; // 採用が確定した点のみカウンタをリセット（ジャンプ棄却点では再武装しない）
