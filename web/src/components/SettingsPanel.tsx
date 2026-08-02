@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { TileKey, ColorMode } from './RouteMapView';
-import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks } from '../firebase/data';
+import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks, deleteRoute } from '../firebase/data';
 import { resetDensityCache } from './DensityOverlay';
 import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
 import { exportRoutesGpx, exportRoutesCsv, downloadBlob, exportFilename } from '../utils/exportRoutes';
@@ -50,6 +50,36 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
   if (!open) return null;
 
   const set = (patch: Partial<MapSettings>) => onSettings({ ...settings, ...patch });
+
+  // 二重保存されたルートの検出・削除。
+  // 「開始時刻が2分以内 かつ 距離がほぼ同じ」ペアを重複とみなし、点数の少ない方を消す
+  // （電波不安定時の保存リトライで同一記録が2件できるケースの掃除用）
+  const handleDedupeRoutes = async () => {
+    const sorted = [...routes].sort((a, b) => a.startTime - b.startTime);
+    const dupes: { keep: Route; drop: Route }[] = [];
+    const dropped = new Set<string>();
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      if (dropped.has(a.id!)) continue;
+      for (let j = i + 1; j < sorted.length && sorted[j].startTime - a.startTime < 120_000; j++) {
+        const b = sorted[j];
+        if (dropped.has(b.id!)) continue;
+        const distOk = Math.min(a.totalDistance, b.totalDistance) / Math.max(a.totalDistance, b.totalDistance, 0.001) > 0.9;
+        if (!distOk) continue;
+        const aPts = a.pointCount ?? a.points.length;
+        const bPts = b.pointCount ?? b.points.length;
+        const [keep, drop] = aPts >= bPts ? [a, b] : [b, a];
+        dupes.push({ keep, drop });
+        dropped.add(drop.id!);
+      }
+    }
+    if (dupes.length === 0) { alert('重複ルートは見つかりませんでした。'); return; }
+    const list = dupes.map(d => `・「${d.drop.name || '（無名）'}」${new Date(d.drop.startTime).toLocaleString('ja-JP')}（${d.drop.pointCount ?? d.drop.points.length}pt を削除 / ${d.keep.pointCount ?? d.keep.points.length}pt を残す）`).join('\n');
+    if (!confirm(`重複とみられるルートが ${dupes.length}件 見つかりました。\n点数の少ない方を削除します:\n\n${list}`)) return;
+    for (const d of dupes) await deleteRoute(d.drop.id!);
+    alert(`${dupes.length}件を削除しました。`);
+    onImportDone(); // 一覧再読込
+  };
 
   const handleExport = (format: 'gpx' | 'csv') => async () => {
     if (exporting) return;
@@ -335,6 +365,14 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
             {migrating ? `📦 最適化中... ${migrateProgress}` : '📦 ストレージ最適化（ルートを軽量形式に移行）'}
           </button>
           <p style={s.deleteNote}>GPS点列をルート本体から分離して保存。一覧の読み込みが速く・安くなります（1回でOK）</p>
+          <button
+            style={{ ...s.deleteBtn, background: '#fff7ed', color: '#c2410c', borderColor: '#fed7aa', marginBottom: 8 }}
+            onClick={handleDedupeRoutes}
+            disabled={routeCount === 0}
+          >
+            👯 重複ルートを検出・削除
+          </button>
+          <p style={s.deleteNote}>電波不安定時の保存リトライ等で二重になった記録（開始時刻2分以内・距離ほぼ同一）を検出して片方を削除します</p>
           <button style={s.deleteBtn} onClick={handleDeleteAllRoutes} disabled={routeCount === 0}>
             🗑 全ルートを削除（{routeCount}件）
           </button>

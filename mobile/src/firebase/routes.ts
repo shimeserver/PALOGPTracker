@@ -1,5 +1,5 @@
 import {
-  collection, addDoc, getDocs, doc, getDoc,
+  collection, getDocs, doc, getDoc, setDoc,
   query, where, Timestamp, deleteDoc, orderBy, writeBatch
 } from 'firebase/firestore';
 import { db, auth } from './config';
@@ -43,7 +43,12 @@ async function deletePointChunks(routeId: string): Promise<void> {
 // ルート保存（軽量形式: 本体メタデータ + pts チャンク）
 export async function saveRoute(route: Omit<Route, 'id'>): Promise<string> {
   const { points, ...meta } = route;
-  const docRef = await addDoc(collection(db, 'routes'), {
+  // 決定的docID（uid+記録開始時刻）で保存を冪等化する。
+  // 「サーバーには届いたが応答前に通信断→クライアントは失敗と判断→キュー再送」
+  // のケースで同一ルートが二重保存される問題を、再送=同一docの上書きにして根絶する。
+  const docId = `${route.userId}_${route.startTime}`;
+  const docRef = doc(db, 'routes', docId);
+  await setDoc(docRef, {
     ...meta,
     startTime: Timestamp.fromMillis(route.startTime),
     endTime: Timestamp.fromMillis(route.endTime),
