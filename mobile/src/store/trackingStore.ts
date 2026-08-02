@@ -80,6 +80,26 @@ const REENTRY_GAP_MS = 60000;
 const REENTRY_MAX_ACC_M = 30;
 let reentryRejects = 0;
 
+// 加速度妥当性フィルタ（車・自転車）: 「直前の速度から物理的に到達できない速度」を弾く。
+// 市街地マルチパスの200m級ジャンプは実効240km/h等で上限300km/hを素通りしていた。
+// 許容加速 25km/h毎秒 ≈ 7m/s²（スーパーカーのフル加速相当）+ 余裕30km/h。
+const ACCEL_KMH_PER_SEC = 25;
+const ACCEL_SLACK_KMH = 30;
+
+// 1点遅延スパイク除去: 「飛んで戻る」点を次の点の到着時に判定して記録前に破棄する。
+// 判定条件はWeb修復の removeSpikeVertices と同一（実データでヘアピン誤爆なし検証済み）。
+let pendingPt: TrackPoint | null = null;
+
+function isSpike(a: TrackPoint, b: TrackPoint, c: TrackPoint): boolean {
+  const ax = b.lng - a.lng, ay = b.lat - a.lat;
+  const bx = c.lng - b.lng, by = c.lat - b.lat;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (la === 0 || lb === 0) return false;
+  const tc = (ax * bx + ay * by) / (la * lb);
+  const arm = Math.min(haversine(a, b), haversine(b, c));
+  return (tc < -0.5 && arm > 0.04) || (tc < 0 && arm > 0.1);
+}
+
 interface TrackingState {
   isTracking: boolean;
   isPaused: boolean;
@@ -110,13 +130,16 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   addPoints: (locations) => {
     if (get().isPaused) return;
     const existing = get().currentPoints;
-    const newPoints: TrackPoint[] = [];
+    const mode = get().trackingMode;
+    const newPoints: TrackPoint[] = []; // 確定した点（pendingPt はまだ含まない）
+    const lastCommitted = () => newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
     for (const loc of locations) {
       // 精度が50m超の場合はスキップ（GPSが安定していない）
       if (loc.coords.accuracy != null && loc.coords.accuracy > 50) continue;
+      // 直前の採用点 = 保留中の点があればそれ、なければ確定済みの末尾
+      const chainPrev = pendingPt ?? lastCommitted();
       // GPS復帰直後の低精度fixを破棄（最大3点まで）
-      const lastPt = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
-      if (lastPt && loc.timestamp - lastPt.timestamp > REENTRY_GAP_MS
+      if (chainPrev && loc.timestamp - chainPrev.timestamp > REENTRY_GAP_MS
         && loc.coords.accuracy != null && loc.coords.accuracy > REENTRY_MAX_ACC_M
         && reentryRejects < 3) {
         reentryRejects++;
@@ -132,19 +155,40 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         // 高度(m)。標高プロファイル用。undefinedはFirestoreが拒否するため条件付きで付与
         ...(loc.coords.altitude != null ? { alt: Math.round(loc.coords.altitude * 10) / 10 } : {}),
       };
-      // 直前点との速度チェック（モード別上限超 = GPSジャンプとみなしてスキップ）
-      const prev = newPoints[newPoints.length - 1] ?? existing[existing.length - 1];
-      if (prev) {
-        const dtH = (pt.timestamp - prev.timestamp) / 3600000;
-        if (dtH > 0) {
-          const distKm = haversine(prev, pt);
-          if (distKm / dtH > MODE_MAX_KMH[get().trackingMode]) continue;
+      if (chainPrev) {
+        const dtSec = (pt.timestamp - chainPrev.timestamp) / 1000;
+        if (dtSec > 0) {
+          const impliedKmh = haversine(chainPrev, pt) / (dtSec / 3600);
+          // モード別の絶対上限
+          if (impliedKmh > MODE_MAX_KMH[mode]) continue;
+          // 加速度妥当性（車・自転車）: 直近の速度から物理的に届かない位置ジャンプを弾く。
+          // 直近速度はDoppler速度と直前区間の実効速度の大きい方（Doppler=0の誤報に耐性）
+          if (mode === 'car' || mode === 'bicycle') {
+            const before = lastCommitted();
+            let recentKmh = chainPrev.speed;
+            if (before && before !== chainPrev) {
+              const dtPrev = (chainPrev.timestamp - before.timestamp) / 3600000;
+              if (dtPrev > 0) recentKmh = Math.max(recentKmh, before.speed, haversine(before, chainPrev) / dtPrev);
+            }
+            if (impliedKmh > recentKmh + ACCEL_KMH_PER_SEC * dtSec + ACCEL_SLACK_KMH) continue;
+          }
         }
       }
       reentryRejects = 0; // 採用が確定した点のみカウンタをリセット（ジャンプ棄却点では再武装しない）
-      newPoints.push(pt);
+      // 1点遅延スパイク判定: (確定末尾, 保留中, 新着) が「飛んで戻る」形なら保留中を破棄
+      const anchor = lastCommitted();
+      if (pendingPt && anchor && isSpike(anchor, pendingPt, pt)) {
+        pendingPt = pt; // スパイクだった保留点を捨て、新着を保留に
+        continue;
+      }
+      if (pendingPt) newPoints.push(pendingPt); // 保留点をスパイクでないと確定
+      pendingPt = pt;
     }
-    if (newPoints.length === 0) return;
+    const latest = pendingPt ?? newPoints[newPoints.length - 1];
+    if (newPoints.length === 0) {
+      if (latest) set({ currentSpeed: latest.speed }); // 表示速度だけ更新
+      return;
+    }
     set(state => {
       const updated = [...state.currentPoints, ...newPoints];
       // 30pt以上たまるごとにAsyncStorageへ自動バックアップ（電源断対策）
@@ -155,13 +199,14 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       }
       return {
         currentPoints: updated,
-        currentSpeed: newPoints[newPoints.length - 1]?.speed ?? state.currentSpeed,
+        currentSpeed: latest?.speed ?? state.currentSpeed,
       };
     });
   },
 
   // 任意タイミングの即時バックアップ（アプリのバックグラウンド遷移時などに呼ぶ）
   backupNow: () => {
+    flushPendingPoint();
     const { isTracking, currentPoints, startTime, trackingMode } = get();
     if (!isTracking || !startTime || currentPoints.length < 2) return;
     if (currentPoints.length === lastBackupLen) return; // 前回から変化なし
@@ -170,6 +215,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   },
 
   pauseTracking: async () => {
+    flushPendingPoint();
     set({ isPaused: true, currentSpeed: 0 });
     // 一時停止のタイミングでも必ずバックアップ（電源断に備える）
     const { currentPoints, startTime, trackingMode } = get();
@@ -197,6 +243,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     await clearRecovery(); // 前回の残存データをクリア
     lastBackupLen = 0;
     reentryRejects = 0;
+    pendingPt = null;
     set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
 
     await Location.startLocationUpdatesAsync(LOCATION_TASK, LOCATION_OPTIONS);
@@ -211,6 +258,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です');
     lastBackupLen = data.points.length;
     reentryRejects = 0;
+    pendingPt = null;
     set({
       isTracking: true, isPaused: false,
       currentPoints: data.points,
@@ -225,6 +273,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   stopTracking: async (userId, name, tagIds) => {
     const isRunning = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false);
     if (isRunning) await Location.stopLocationUpdatesAsync(LOCATION_TASK);
+    flushPendingPoint();
     set({ isTracking: false, isPaused: false });
 
     const { currentPoints, startTime, trackingMode } = get();
@@ -274,6 +323,15 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
 
   clearTrack: () => set({ currentPoints: [], startTime: null }),
 }));
+
+// 保留中の1点（スパイク判定待ち）を確定して点列へ流す。
+// 一時停止・停止・バックアップ等、点列を読む直前に必ず呼ぶ
+function flushPendingPoint() {
+  if (!pendingPt) return;
+  const p = pendingPt;
+  pendingPt = null;
+  useTrackingStore.setState(s => ({ currentPoints: [...s.currentPoints, p] }));
+}
 
 // バックグラウンドタスク定義（モジュールのトップレベルで必須）
 TaskManager.defineTask(LOCATION_TASK, ({ data, error }: TaskManager.TaskManagerTaskBody) => {
