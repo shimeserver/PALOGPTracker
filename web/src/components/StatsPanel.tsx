@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Route, Car, TagDef } from '../firebase/data';
 import type { HighwayGeom } from '../data/highways';
+import type { SapaGeom } from '../data/sapa';
 
 // 走行ダッシュボード:
 //  1) 高速道路走破率（メジャー路線・OSMサンプル点×走行軌跡の近接判定）
@@ -28,6 +29,51 @@ function buildDrivenGrid(routes: Route[]): Set<number> {
     for (const p of r.points) s.add(gridKey(p.lat, p.lng));
   }
   return s;
+}
+
+// ---- SA/PA踏破: 「敷地外周の近く（約90〜180m）に低速の走行点がある」= 立ち寄ったと判定 ----
+// 低速条件(<15km/h)で本線を高速通過しただけの誤判定を防ぎ、
+// 外周サンプル点（データ側で約50m間隔）で海老名級の大型施設の端の駐車も拾う
+const SAPA_GRID = 0.0009;
+const SAPA_SLOW_KMH = 15;
+const sapaKey = (lat: number, lng: number) =>
+  (Math.round(lat / SAPA_GRID) + 1200000) * 8000000 + (Math.round(lng / SAPA_GRID) + 2400000);
+
+function buildSapaGrid(routes: Route[]): Set<number> {
+  const s = new Set<number>();
+  for (const r of routes) {
+    if (r.mode && r.mode !== 'car') continue;
+    const pts = r.points;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      // 低速点のみ登録。speed=0（補間点など）の場合は前後点から実効速度を推定
+      let kmh = p.speed;
+      if (kmh <= 0 && i > 0) {
+        const q = pts[i - 1];
+        const dtH = (p.timestamp - q.timestamp) / 3600000;
+        if (dtH > 0) {
+          const R = 6371, dLat = (p.lat - q.lat) * Math.PI / 180, dLng = (p.lng - q.lng) * Math.PI / 180;
+          const x = Math.sin(dLat / 2) ** 2 + Math.cos(q.lat * Math.PI / 180) * Math.cos(p.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+          kmh = (R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))) / dtH;
+        }
+      }
+      if (kmh <= SAPA_SLOW_KMH) s.add(sapaKey(p.lat, p.lng));
+    }
+  }
+  return s;
+}
+
+function sapaVisited(sapa: SapaGeom, slowGrid: Set<number>): boolean {
+  for (const [lng, lat] of sapa.pts) {
+    const ci = Math.round(lat / SAPA_GRID) + 1200000;
+    const cj = Math.round(lng / SAPA_GRID) + 2400000;
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        if (slowGrid.has((ci + di) * 8000000 + (cj + dj))) return true;
+      }
+    }
+  }
+  return false;
 }
 
 function coverageOf(hw: HighwayGeom, driven: Set<number>): number {
@@ -80,12 +126,14 @@ const dayKey = (ms: number) => {
 
 export default function StatsPanel({ open, onClose, routes, cars, tags }: Props) {
   const [highways, setHighways] = useState<HighwayGeom[] | null>(null);
+  const [sapas, setSapas] = useState<SapaGeom[] | null>(null);
   const [year, setYear] = useState(() => new Date().getFullYear());
 
-  // 路線データは重い(数百KB)ので初回オープン時に遅延ロード
+  // 路線・SA/PAデータは重いので初回オープン時に遅延ロード
   useEffect(() => {
     if (!open || highways) return;
     import('../data/highways').then(m => setHighways(m.HIGHWAYS)).catch(() => setHighways([]));
+    import('../data/sapa').then(m => setSapas(m.SAPAS)).catch(() => setSapas([]));
   }, [open, highways]);
 
   const drivenGrid = useMemo(() => (open ? buildDrivenGrid(routes) : new Set<number>()), [open, routes]);
@@ -96,6 +144,21 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
       .map(hw => ({ ...hw, pct: coverageOf(hw, drivenGrid) }))
       .sort((a, b) => b.pct - a.pct);
   }, [open, highways, drivenGrid]);
+
+  // SA/PA踏破（細グリッドで施設近傍の通過を判定）
+  const sapaGrid = useMemo(() => (open && sapas && sapas.length > 0 ? buildSapaGrid(routes) : new Set<number>()), [open, sapas, routes]);
+  const sapaResult = useMemo(() => {
+    if (!open || !sapas) return { visited: [] as SapaGeom[], total: 0, saVisited: 0, saTotal: 0, paVisited: 0, paTotal: 0 };
+    const visited = sapas.filter(s2 => sapaVisited(s2, sapaGrid));
+    return {
+      visited,
+      total: sapas.length,
+      saVisited: visited.filter(s2 => s2.type === 'SA').length,
+      saTotal: sapas.filter(s2 => s2.type === 'SA').length,
+      paVisited: visited.filter(s2 => s2.type === 'PA').length,
+      paTotal: sapas.filter(s2 => s2.type === 'PA').length,
+    };
+  }, [open, sapas, sapaGrid]);
 
   // カレンダー草: 日別距離
   const daily = useMemo(() => {
@@ -209,7 +272,8 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) minmax(400px, 1.1fr)', gap: 16, alignItems: 'start' }}>
 
-              {/* 左: 高速道路走破率 */}
+              {/* 左: 高速道路走破率 + SA/PA踏破 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={s.card}>
                 <p style={s.sectionTitle}>🛣️ 高速道路走破率</p>
                 {pointsLoading && <p style={{ color: '#d97706', fontSize: 12, marginBottom: 8 }}>⏳ 点データ読み込み中のため低めに出ることがあります</p>}
@@ -259,6 +323,50 @@ export default function StatsPanel({ open, onClose, routes, cars, tags }: Props)
                     )}
                   </>
                 )}
+              </div>
+
+              {/* SA/PA踏破図鑑 */}
+              <div style={s.card}>
+                <p style={s.sectionTitle}>
+                  🅿️ SA/PA踏破 — {sapaResult.visited.length} / {sapaResult.total}
+                  <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}>
+                    （SA {sapaResult.saVisited}/{sapaResult.saTotal} ・ PA {sapaResult.paVisited}/{sapaResult.paTotal}）
+                  </span>
+                </p>
+                {!sapas ? (
+                  <p style={{ color: '#9ca3af', fontSize: 13 }}>データを読み込み中...</p>
+                ) : sapas.length === 0 ? (
+                  <p style={{ color: '#9ca3af', fontSize: 13 }}>SA/PAデータが未生成です（node tools/gen-sapa.mjs）</p>
+                ) : (
+                  <>
+                    {sapaResult.visited.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {sapaResult.visited.map(sp => (
+                          <span key={sp.name}
+                            style={{ fontSize: 11.5, fontWeight: 600, borderRadius: 20, padding: '3px 10px', whiteSpace: 'nowrap',
+                              color: sp.type === 'SA' ? '#7c3aed' : '#0369a1',
+                              background: sp.type === 'SA' ? '#f3e8ff' : '#e0f2fe' }}>
+                            {sp.type === 'SA' ? '🅂' : '🅿'} {sp.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p style={{ color: '#9ca3af', fontSize: 13 }}>まだ踏破したSA/PAがありません</p>
+                    )}
+                    <details style={{ fontSize: 12, marginTop: 10 }}>
+                      <summary style={{ color: '#9ca3af', cursor: 'pointer' }}>
+                        未踏破 {sapaResult.total - sapaResult.visited.length}か所を表示
+                      </summary>
+                      <p style={{ color: '#9ca3af', marginTop: 6, lineHeight: 1.9 }}>
+                        {sapas.filter(sp => !sapaResult.visited.includes(sp)).map(sp => sp.name).join('・')}
+                      </p>
+                    </details>
+                    <p style={{ color: '#c4c9d1', fontSize: 10.5, marginTop: 8 }}>
+                      判定: 施設の敷地近くで低速（15km/h未満）だった記録がある = 立ち寄り。本線の高速通過はカウントしません
+                    </p>
+                  </>
+                )}
+              </div>
               </div>
 
               {/* 右: カレンダー草・時間帯・車種別 */}
