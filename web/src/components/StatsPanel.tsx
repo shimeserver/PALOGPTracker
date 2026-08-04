@@ -46,18 +46,22 @@ function buildSapaGrid(routes: Route[]): Set<number> {
     const pts = r.points;
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
-      // 低速点のみ登録。speed=0（補間点など）の場合は前後点から実効速度を推定
+      // 低速点のみ登録。speed=0（補間点など）の場合は前後点から実効速度を推定。
+      // 速度が「判定不能」な点（タイムスタンプが潰れた統合インポート等でdt=0）は
+      // 低速扱いにしない — 全点が低速扱いになり通過した全SA/PAが誤踏破になるため
       let kmh = p.speed;
-      if (kmh <= 0 && i > 0) {
+      let known = kmh > 0;
+      if (!known && i > 0) {
         const q = pts[i - 1];
         const dtH = (p.timestamp - q.timestamp) / 3600000;
         if (dtH > 0) {
           const R = 6371, dLat = (p.lat - q.lat) * Math.PI / 180, dLng = (p.lng - q.lng) * Math.PI / 180;
           const x = Math.sin(dLat / 2) ** 2 + Math.cos(q.lat * Math.PI / 180) * Math.cos(p.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
           kmh = (R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))) / dtH;
+          known = true;
         }
       }
-      if (kmh <= SAPA_SLOW_KMH) s.add(sapaKey(p.lat, p.lng));
+      if (known && kmh <= SAPA_SLOW_KMH) s.add(sapaKey(p.lat, p.lng));
     }
   }
   return s;

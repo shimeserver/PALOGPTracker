@@ -230,12 +230,31 @@ export function parseGoogleTimelineJson(json: string): {
   routes: { name: string; points: TrackPoint[] }[];
   placeSpots: ClusteredSpot[];
 } {
-  const data = JSON.parse(json) as { timelineEdits: any[] };
+  const data = JSON.parse(json) as { timelineEdits?: any[]; semanticSegments?: any[] };
   const entries: any[] = data.timelineEdits || [];
 
   const positions: TrackPoint[] = [];
   const seenPlaceIds = new Set<string>();
   const placeSpots: ClusteredSpot[] = [];
+
+  // 新形式（端末からの「タイムラインをエクスポート」= semanticSegments + timelinePath）にも対応。
+  // point は "35.68056°, 139.75124°" や "geo:35.68,139.75" 等の表記ゆれがあるため正規表現で抽出
+  for (const seg of data.semanticSegments ?? []) {
+    const segStart = seg.startTime ? new Date(seg.startTime).getTime() : NaN;
+    for (const tp of seg.timelinePath ?? []) {
+      const m = String(tp.point ?? '').match(/(-?\d+\.\d+)[^-\d]+(-?\d+\.\d+)/);
+      if (!m) continue;
+      const lat = parseFloat(m[1]);
+      const lng = parseFloat(m[2]);
+      let timestamp = tp.time ? new Date(tp.time).getTime() : NaN;
+      if (isNaN(timestamp) && tp.durationMinutesOffsetFromStartTime != null && !isNaN(segStart)) {
+        timestamp = segStart + Number(tp.durationMinutesOffsetFromStartTime) * 60000;
+      }
+      if (!isNaN(lat) && !isNaN(lng) && !isNaN(timestamp)) {
+        positions.push({ lat, lng, timestamp, speed: 0 });
+      }
+    }
+  }
 
   for (const entry of entries) {
     const pos: TimelinePosition | undefined = entry.rawSignal?.signal?.position;
@@ -296,6 +315,48 @@ export function parseGoogleTimelineJson(json: string): {
   });
 
   return { routes, placeSpots };
+}
+
+// Googleタイムラインのルート（実タイムスタンプ付き）を通常ルートとしてインポートする。
+// 統合GPX等と違い時刻・速度が生きているため、燃費・SA/PA踏破・統計にも正しく効く
+export async function importTimelineRoutes(
+  json: string,
+  userId: string,
+  onProgress?: (current: number, total: number) => void
+): Promise<{ success: number; failed: number }> {
+  const { routes } = parseGoogleTimelineJson(json);
+  let success = 0, failed = 0;
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+  for (let i = 0; i < routes.length; i++) {
+    onProgress?.(i + 1, routes.length);
+    try {
+      const pts = routes[i].points;
+      if (pts.length < 5) continue;
+      let totalDist = 0;
+      for (let j = 1; j < pts.length; j++) totalDist += haversineKm(pts[j - 1], pts[j]);
+      if (totalDist < 0.3) continue; // 建物内の揺らぎ等は捨てる
+      const speeds = pts.map(p => p.speed).filter(s => s > 0 && s <= 300);
+      await saveRouteChunked({
+        userId,
+        name: routes[i].name,
+        tags: [],
+        startTime: pts[0].timestamp,
+        endTime: pts[pts.length - 1].timestamp,
+        totalDistance: totalDist,
+        avgSpeed: speeds.length ? speeds.reduce((a, b) => a + b) / speeds.length : 0,
+        maxSpeed: speeds.length ? speeds.reduce((m, s) => s > m ? s : m, 0) : 0,
+        points: pts,
+        source: 'imported',
+        createdAt: Date.now(),
+      });
+      success++;
+      await delay(150);
+    } catch {
+      failed++;
+      await delay(400);
+    }
+  }
+  return { success, failed };
 }
 
 export function extractSpotsFromTimeline(json: string): {

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { TileKey, ColorMode } from './RouteMapView';
 import { deleteAllUserRoutes, deleteAllUserLandmarks, getUserLandmarks, getVisits, deleteVisit, updateLandmark, uploadLandmarkPhotoFromUrl, migrateRoutesToChunks, deleteRoute } from '../firebase/data';
 import { resetDensityCache } from './DensityOverlay';
-import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots } from '../utils/csvImport';
+import { importRouteHistoryCsv, extractSpotsFromTimeline, saveDetectedSpots, parseGoogleTimelineJson, importTimelineRoutes } from '../utils/csvImport';
 import { exportRoutesGpx, exportRoutesCsv, downloadBlob, exportFilename } from '../utils/exportRoutes';
 import type { Route } from '../firebase/data';
 
@@ -157,10 +157,18 @@ export default function SettingsPanel({ open, onClose, settings, onSettings, use
     setImporting(true); setImportProgress('JSONを解析中...');
     try {
       const text = await file.text();
+      // ルート（実タイムスタンプ・速度付きの移動履歴）のインポート
+      const { routes: tlRoutes } = parseGoogleTimelineJson(text);
+      if (tlRoutes.length > 0 && confirm(`移動ルートが ${tlRoutes.length}件 見つかりました。ルートとしてインポートしますか？\n（タイムスタンプ・速度付きなので統計・SA/PA踏破にも正しく反映されます）`)) {
+        const r = await importTimelineRoutes(text, userId, (cur, total) => setImportProgress(`ルート保存中... ${cur} / ${total}`));
+        alert(`ルートインポート完了: 成功 ${r.success}件${r.failed ? ` / 失敗 ${r.failed}件` : ''}`);
+        onImportDone();
+      }
+      // スポット候補の抽出
       const { clusters, placeSpots } = extractSpotsFromTimeline(text);
       const allSpots = [...placeSpots, ...clusters];
       if (allSpots.length === 0) {
-        alert('スポット候補が見つかりませんでした。');
+        if (tlRoutes.length === 0) alert('ルート・スポット候補が見つかりませんでした。');
       } else {
         const save = confirm(`スポット候補 ${placeSpots.length}件（Google判定）+ ${clusters.length}件（停車検知）見つかりました。保存しますか？`);
         if (save) {
