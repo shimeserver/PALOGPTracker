@@ -13,6 +13,18 @@ const firebaseConfig = {
   appId:             process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
+// ビルド時にEXPO_PUBLIC_*が注入されていないと initializeAuth が
+// 「auth/invalid-api-key」で同期throwし、エラーレポータ(errorLog)自体も
+// このモジュールに依存しているため無言の起動クラッシュになる。
+// 原因を即特定できるよう、欠けているキーを明示してから落とす。
+const missingKeys = Object.entries(firebaseConfig).filter(([, v]) => !v).map(([k]) => k);
+if (missingKeys.length > 0) {
+  throw new Error(
+    `Firebase設定がビルドに含まれていません: ${missingKeys.join(', ')} — ` +
+    'CIならジョブレベルenvのEXPO_PUBLIC_*、ローカルならmobile/.envを確認してください'
+  );
+}
+
 let app;
 let auth;
 
