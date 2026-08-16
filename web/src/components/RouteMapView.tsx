@@ -125,7 +125,8 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const [savingFuel, setSavingFuel] = useState(false);
     const [loadedCars, setLoadedCars] = useState<Car[]>(cars);
     const [stopCandidates, setStopCandidates] = useState<StopCluster[]>([]);
-    const [addStopModal, setAddStopModal] = useState<StopCluster | null>(null);
+    // placeId: 地図上のPOI（施設アイコン）を直接クリックした場合に入る。候補の最優先＋自動入力に使う
+    const [addStopModal, setAddStopModal] = useState<(StopCluster & { placeId?: string }) | null>(null);
     const [newSpotName, setNewSpotName] = useState('');
     const [newSpotCategory, setNewSpotCategory] = useState('その他');
     const [newSpotPlaceId, setNewSpotPlaceId] = useState<string | null>(null);
@@ -250,17 +251,43 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setNewSpotPlaceId(null);
       if (!addStopModal || !mapRef.current || !window.google?.maps?.places) return;
       const svc = new google.maps.places.PlacesService(mapRef.current);
+      const clickedId = addStopModal.placeId;
+      // POIを直接クリックした場合: その施設を最優先で取得し、名前・カテゴリを自動入力
+      if (clickedId) {
+        svc.getDetails({ placeId: clickedId, fields: ['name', 'types', 'place_id'] }, (r, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && r?.name) {
+            const c = { name: r.name, placeId: r.place_id, types: r.types ?? [] };
+            setNearbySpots(prev => [c, ...prev.filter(x => x.placeId !== c.placeId)].slice(0, 7));
+            pickNearbySpot(c);
+          }
+        });
+      }
       svc.nearbySearch(
         { location: { lat: addStopModal.lat, lng: addStopModal.lng }, radius: 150 },
         (results, status) => {
           if (status !== google.maps.places.PlacesServiceStatus.OK || !results) return;
           const EXCLUDE = ['political', 'route', 'plus_code', 'locality', 'sublocality', 'postal_code', 'premise', 'neighborhood'];
-          setNearbySpots(results
+          // Placesの既定は知名度順で、目の前のコンビニより有名施設が優先されてしまう。
+          // クリック地点からの距離順に並べ替えてから上位を出す
+          const sorted = results
             .filter(r => r.name && !(r.types ?? []).some(t => EXCLUDE.includes(t)))
+            .map(r => ({
+              name: r.name!, placeId: r.place_id, types: r.types ?? [],
+              d: r.geometry?.location
+                ? (r.geometry.location.lat() - addStopModal.lat) ** 2 + (r.geometry.location.lng() - addStopModal.lng) ** 2
+                : Infinity,
+            }))
+            .sort((a, b) => a.d - b.d)
             .slice(0, 6)
-            .map(r => ({ name: r.name!, placeId: r.place_id, types: r.types ?? [] })));
+            .map(({ name, placeId, types }) => ({ name, placeId, types }));
+          // クリックしたPOI（getDetailsで先頭に入る）は保持しつつ合流
+          setNearbySpots(prev => {
+            const head = prev.filter(p => p.placeId && p.placeId === clickedId);
+            return [...head, ...sorted.filter(c => !head.some(h => h.placeId === c.placeId))].slice(0, 7);
+          });
         }
       );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [addStopModal]);
 
     const pickNearbySpot = (c: { name: string; placeId?: string; types: string[] }) => {
@@ -818,6 +845,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             // 📍立ち寄り: クリック地点をスポットとして登録（訪問日時=最寄りルート地点の通過時刻）。
             // ルート形状は変更しない
             if (!isAllMode && route && !editMode && visitMode && route.points.length > 0) {
+              // POI（施設アイコン）を直接クリックした場合はplaceIdでその施設を特定できる
+              const clickedPlaceId = (e as any).placeId as string | undefined;
+              if (clickedPlaceId) e.stop(); // Google既定のPOI情報ウィンドウを抑止
               let nearestTs = route.points[0].timestamp, minD = Infinity;
               for (const p of route.points) {
                 const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2;
@@ -825,7 +855,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               }
               setVisitMode(false);
               setNewSpotName(''); setNewSpotCategory('その他');
-              setAddStopModal({ lat, lng, startTime: nearestTs, endTime: nearestTs, durationMs: 0 });
+              setAddStopModal({ lat, lng, startTime: nearestTs, endTime: nearestTs, durationMs: 0, ...(clickedPlaceId ? { placeId: clickedPlaceId } : {}) });
               return;
             }
             // ✂️区間修正の経由地: 始点選択後のルート外クリックは「実際に通った道」の指定
