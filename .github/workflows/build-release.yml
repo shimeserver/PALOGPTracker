@@ -12,6 +12,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # ⚠ EXPO_PUBLIC_* はジョブレベルで全ステップに渡すこと。
+    # GradleのassembleReleaseは自前でJSを再バンドル（export:embed）するため、
+    # ステップ単位のenvにすると再バンドル時にFirebase設定がundefinedになり、
+    # 配布APKが起動即クラッシュする（auth/invalid-api-key）。
+    env:
+      EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+      EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+      EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+      EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+      EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+      EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+      EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,17 +51,9 @@ jobs:
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/app/debug.keystore
           echo "${{ secrets.GOOGLE_SERVICES_BASE64 }}" | base64 --decode > mobile/android/app/google-services.json
 
-      - name: Bundle JS
-        working-directory: mobile
-        env:
-          EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          EXPO_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
-        run: npx expo export:embed --platform android --bundle-output android/app/src/main/assets/index.android.bundle --dev false --reset-cache
+      # 手動の Bundle JS ステップは削除済み:
+      # assembleRelease が生成するバンドル（build/generated/assets/react/release/）が
+      # 常に採用されるため、手動バンドルはAPKに入らず無意味だった。
 
       - name: Build Release APK
         working-directory: mobile/android
