@@ -177,7 +177,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     const sectionViasRef = useRef<{ lat: number; lng: number }[]>([]);
     const extendModeRef = useRef(false);
     const extendFromRef = useRef<'auto' | 'head' | 'tail'>('auto');
-    const visitModeRef = useRef(false);
     const viaBlockUntilRef = useRef(0); // ルート上クリック直後のmapクリックを経由地に誤登録しないためのガード
     const editPointsRef = useRef<TrackPoint[]>([]);
     const routeModeRef = useRef<string | undefined>(undefined);
@@ -224,7 +223,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     useEffect(() => { sectionViasRef.current = sectionVias; }, [sectionVias]);
     useEffect(() => { extendModeRef.current = extendMode; }, [extendMode]);
     useEffect(() => { extendFromRef.current = extendFrom; }, [extendFrom]);
-    useEffect(() => { visitModeRef.current = visitMode; }, [visitMode]);
     useEffect(() => { routeModeRef.current = route?.mode; }, [route?.mode]);
     useEffect(() => { savingEditRef.current = savingEdit; }, [savingEdit]);
 
@@ -412,6 +410,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditPoints([...route.points]);
       setEditMode(true);
       setPlayback(false);
+      setVisitMode(false);
       setUnresolvedGaps([]); // 前回クリーンアップの⚠マーカーを持ち越さない
     };
 
@@ -419,7 +418,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       setEditMode(false); setEditPoints([]);
       setHasUndo(false);
       setSectionMode(false); setSectionStart(null); setSectionCandidates(null);
-      setExtendMode(false); setVisitMode(false); setExtendFrom('auto');
+      setExtendMode(false); setExtendFrom('auto');
       setUnresolvedGaps([]);
       prevEditPointsRef.current = [];
     };
@@ -584,97 +583,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
       }
     };
 
-    // 立ち寄り追加: 後から行った（記録に残っていない）スポットを、
-    // 最寄りのルート地点から道なりに往復した形でルートに追記する。
-    // 次の記録点までの時間窓に走行が収まる場合は残り時間をスポット滞在に割り当てる。
-    // 滞在は同座標2点（dt>0・速度0）で表現し、SA/PA踏破判定（施設近傍の低速点）と
-    // 停車検出（3分以上で青ピン→スポット登録）にそのまま乗る。
-    const addSpotVisit = async (target: { lat: number; lng: number }) => {
-      const pts = editPointsRef.current;
-      if (pts.length < 2 || savingEditRef.current) return;
-      setSavingEdit(true);
-      try {
-        const profile = routeModeRef.current === 'walk' ? 'foot'
-          : routeModeRef.current === 'bicycle' ? 'cycling' : 'driving';
-        let ni = 0, minD = Infinity;
-        pts.forEach((p, i) => {
-          const d = (p.lat - target.lat) ** 2 + (p.lng - target.lng) ** 2;
-          if (d < minD) { minD = d; ni = i; }
-        });
-        const base = pts[ni];
-        const straight = haversineKm(base, target);
-        // 往路・復路を別々に取得（一方通行・ランプ対応）。
-        // 高速本線→SA等で公開OSRMが有料道路を避けて大回りする場合は直結線にフォールバック
-        // （SAの側道スパーは数百mなので直線でも実用上問題ない）。
-        const fetchLeg = async (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
-          try {
-            const res = await fetch(`https://router.project-osrm.org/route/v1/${profile}/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`);
-            const j = await res.json();
-            if (j.code === 'Ok' && j.routes?.length) {
-              const path = (j.routes[0].geometry.coordinates as [number, number][]).map(([lng, lat]) => ({ lat, lng }));
-              let d = 0;
-              for (let k = 1; k < path.length; k++) d += haversineKm(path[k - 1], path[k]);
-              if (d <= Math.max(straight * 3, straight + 2)) return { path, dist: d };
-            }
-          } catch { /* 直結線へ */ }
-          return { path: [a, b], dist: straight };
-        };
-        const out = await fetchLeg(base, target);
-        const back = await fetchLeg(target, base);
-        // 走行時間の見積り: ルートの平均移動速度（15〜120km/hにクランプ）
-        let routeDist = 0;
-        for (let i = 1; i < pts.length; i++) routeDist += haversineKm(pts[i - 1], pts[i]);
-        const durH = Math.max(1 / 3600, (pts[pts.length - 1].timestamp - pts[0].timestamp) / 3600000);
-        const v = Math.min(120, Math.max(15, routeDist / durH));
-        const travelMs = ((out.dist + back.dist) / v) * 3600000;
-        const outFrac = out.dist / Math.max(1e-9, out.dist + back.dist);
-        const isMid = ni < pts.length - 1;
-        const windowMs = isMid ? pts[ni + 1].timestamp - base.timestamp : Infinity;
-        let outMs: number, backMs: number, dwellMs: number;
-        if (!isMid) {
-          // 末尾からの立ち寄り: 時間制約なし。走行+滞在10分を外挿（endTimeが後ろへ伸びる）
-          outMs = travelMs * outFrac; backMs = travelMs - outMs; dwellMs = 10 * 60000;
-        } else if (windowMs >= travelMs + 2000) {
-          // 記録ギャップに収まる: 余った時間はすべてスポット滞在とみなす
-          outMs = travelMs * outFrac; backMs = travelMs - outMs; dwellMs = windowMs - travelMs;
-        } else {
-          // 窓が狭い: 2割を滞在に確保し残りで走行（速度表示は非現実的になるが踏破判定は乗る）
-          dwellMs = Math.max(0, windowMs * 0.2);
-          const t = Math.max(0, windowMs - dwellMs);
-          outMs = t * outFrac; backMs = t - outMs;
-        }
-        const seg: TrackPoint[] = [];
-        const pushLeg = (path: { lat: number; lng: number }[], dist: number, tStart: number, legMs: number) => {
-          let cum = 0;
-          for (let k = 1; k < path.length; k++) {
-            cum += haversineKm(path[k - 1], path[k]);
-            const frac = dist > 0 ? cum / dist : 1;
-            seg.push({ lat: path[k].lat, lng: path[k].lng, timestamp: Math.round(tStart + legMs * frac), speed: 0 });
-          }
-        };
-        const t0 = base.timestamp;
-        pushLeg(out.path, out.dist, t0, outMs);
-        seg.push({ lat: target.lat, lng: target.lng, timestamp: Math.round(t0 + outMs), speed: 0 });
-        if (dwellMs >= 1000) seg.push({ lat: target.lat, lng: target.lng, timestamp: Math.round(t0 + outMs + dwellMs), speed: 0 });
-        pushLeg(back.path, back.dist, t0 + outMs + dwellMs, backMs);
-        saveUndo(pts);
-        const merged = isMid
-          ? [...pts.slice(0, ni + 1), ...seg, ...pts.slice(ni + 1)]
-          : [...pts, ...seg];
-        setEditPoints(filterSpeedOutliers(calcSpeedsForSegment(merged)));
-        const dwellLabel = dwellMs >= 60000 ? `滞在 約${Math.round(dwellMs / 60000)}分` : '滞在 1分未満';
-        const warn = dwellMs < 1000
-          ? '\n⚠ この区間の記録時刻が詰まっているため滞在時間を割り当てられませんでした（SA/PA踏破判定に反映されない場合があります）。'
-          : '';
-        alert(`📍 最寄りのルート地点から道なりに往復${(out.dist + back.dist).toFixed(1)}km・${dwellLabel}の立ち寄りを追記しました。\n形を確認して「保存」してください（↺元に戻すで取消可）。${warn}`);
-      } catch (e) {
-        alert(`立ち寄り追加失敗: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        setSavingEdit(false);
-        setVisitMode(false);
-      }
-    };
-
     const handleEditPolylineMouseDown = useCallback((e: google.maps.MapMouseEvent) => {
       if (!e.latLng || savingEditRef.current) return;
       const lat = e.latLng.lat(), lng = e.latLng.lng();
@@ -703,7 +611,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
     // （古いa/b indexで applySectionGeometry すると別区間を壊す/範囲外エラーになるため）
     const invalidateSectionState = () => {
       setSectionCandidates(null); setSectionMode(false); setSectionStart(null);
-      setSectionVias([]); setExtendMode(false); setVisitMode(false);
+      setSectionVias([]); setExtendMode(false);
     };
 
     const saveUndo = (pts: TrackPoint[]) => {
@@ -877,6 +785,11 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             👆 地図上のスポット（店舗・施設）をクリックして確定
           </div>
         )}
+        {!isAllMode && route && !editMode && visitMode && (
+          <div style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'rgba(8,145,178,0.95)', color: '#fff', padding: '8px 20px', borderRadius: 24, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+            📍 立ち寄ったスポット（施設・店舗）をクリック — 最寄りルート地点の通過時刻で記録します
+          </div>
+        )}
         {pinDragMode && (
           <div style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'rgba(239,68,68,0.95)', color: '#fff', padding: '8px 20px', borderRadius: 24, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
             ✥ 赤いピンをドラッグして新しい位置に移動
@@ -902,9 +815,17 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
               void extendRoute({ lat, lng });
               return;
             }
-            // 📍立ち寄り: 後から行ったスポットを最寄りルート地点から往復追記
-            if (editMode && visitMode && !savingEdit) {
-              void addSpotVisit({ lat, lng });
+            // 📍立ち寄り: クリック地点をスポットとして登録（訪問日時=最寄りルート地点の通過時刻）。
+            // ルート形状は変更しない
+            if (!isAllMode && route && !editMode && visitMode && route.points.length > 0) {
+              let nearestTs = route.points[0].timestamp, minD = Infinity;
+              for (const p of route.points) {
+                const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2;
+                if (d < minD) { minD = d; nearestTs = p.timestamp; }
+              }
+              setVisitMode(false);
+              setNewSpotName(''); setNewSpotCategory('その他');
+              setAddStopModal({ lat, lng, startTime: nearestTs, endTime: nearestTs, durationMs: 0 });
               return;
             }
             // ✂️区間修正の経由地: 始点選択後のルート外クリックは「実際に通った道」の指定
@@ -1117,7 +1038,9 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
             <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
               <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>スポットとして登録</div>
               <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>
-                停車 {Math.round(addStopModal.durationMs / 60000)}分
+                {addStopModal.durationMs > 0
+                  ? `停車 ${Math.round(addStopModal.durationMs / 60000)}分`
+                  : `立ち寄り 🕐 ${new Date(addStopModal.startTime).toLocaleString('ja-JP')}`}
               </div>
               {nearbySpots.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
@@ -1296,7 +1219,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 extendFrom === 'head' ? '➕ 到達地点を地図上でクリック — 🟢先頭（記録開始側）から道なりに追記します'
                 : extendFrom === 'tail' ? '➕ 到達地点を地図上でクリック — 🔴末尾（記録終了側）から道なりに追記します'
                 : '➕ 到達地点を地図上でクリック — 先頭/末尾の近い方から追記（下のボタンで端を指定できます）')
-            : visitMode ? '📍 立ち寄ったスポット（施設・店舗）を地図上でクリック — 最寄りのルート地点から道なりに往復を追記します'
             : sectionMode && sectionStart == null ? '✂️ おかしい区間の【始点】をルート上でクリック'
             : sectionMode ? `✂️ 実際に通った道を地図上でクリック（任意・${sectionVias.length}か所）→ 最後に【終点】をルート上でクリック`
             : '✏️ 編集モード — ✂️区間修正で形を直せます'}
@@ -1333,6 +1255,13 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 {hasElevationData(route.points) && (
                   <button onClick={() => setShowElev(e => !e)} style={{ padding:'7px 12px', fontSize:13, background: showElev ? '#eff6ff' : '#f3f4f6', border: showElev ? '1.5px solid #2563eb' : '1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color: showElev ? '#2563eb' : '#374151', fontWeight:500 }}>⛰ 標高</button>
                 )}
+                <button
+                  onClick={() => setVisitMode(m => !m)}
+                  style={{ padding:'7px 12px', fontSize:13, background: visitMode ? '#ecfeff' : '#f3f4f6', border: visitMode ? '1.5px solid #0891b2' : '1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color: visitMode ? '#0891b2' : '#374151', fontWeight:500 }}
+                  title="立ち寄り登録: 後から行ったスポットを地図上でクリックすると、最寄りルート地点の通過時刻でスポットとして記録します（ルートは変更しません）"
+                >
+                  📍 立ち寄り
+                </button>
                 {onUpdateRoute && <button onClick={startEditMode} style={{ padding:'7px 14px', fontSize:13, background:'#f3f4f6', border:'1.5px solid #e8eaed', borderRadius:6, cursor:'pointer', color:'#374151', fontWeight:500 }}>✏️ 編集</button>}
               </div>
             ) : (
@@ -1365,7 +1294,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                 🛣️ クリーンアップ
               </button>
               <button
-                onClick={() => { setSectionMode(m => !m); setSectionStart(null); setSectionVias([]); setExtendMode(false); setVisitMode(false); }}
+                onClick={() => { setSectionMode(m => !m); setSectionStart(null); setSectionVias([]); setExtendMode(false); }}
                 disabled={savingEdit}
                 style={{ ...ui.toolBtn, background: sectionMode ? '#d97706' : '#f59e0b' }}
                 title="区間修正: 始点と終点をルート上でクリック。間に地図上の任意の道をクリックすると「実際に通った道」を経由地に指定できます"
@@ -1375,7 +1304,7 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   : '✂️ 区間修正'}
               </button>
               <button
-                onClick={() => { const next = !extendMode; setExtendMode(next); if (next) setExtendFrom('auto'); setSectionMode(false); setSectionStart(null); setSectionVias([]); setVisitMode(false); }}
+                onClick={() => { const next = !extendMode; setExtendMode(next); if (next) setExtendFrom('auto'); setSectionMode(false); setSectionStart(null); setSectionVias([]); }}
                 disabled={savingEdit}
                 style={{ ...ui.toolBtn, background: extendMode ? '#6d28d9' : '#8b5cf6' }}
                 title="延長: 記録し忘れた先頭/末尾の欠けを補完。地図上の任意地点をクリックすると、ルートの端からそこまで道なりに追記します（伸ばす端は下のボタンで指定可、既定はクリック地点に近い方）"
@@ -1398,14 +1327,6 @@ const RouteMapView = forwardRef<RouteMapViewHandle, Props>(
                   ))}
                 </div>
               )}
-              <button
-                onClick={() => { setVisitMode(m => !m); setSectionMode(false); setSectionStart(null); setSectionVias([]); setExtendMode(false); }}
-                disabled={savingEdit}
-                style={{ ...ui.toolBtn, background: visitMode ? '#0e7490' : '#06b6d4' }}
-                title="立ち寄り追加: 後から行ったスポット（SA/PA・店舗など）を地図上でクリックすると、最寄りのルート地点からそこまで道なりに往復した記録を追記します（SA/PA踏破などの訪問判定に反映）"
-              >
-                {visitMode ? '📍 スポットを…' : '📍 立ち寄り'}
-              </button>
 
               {/* 低頻度操作（アイコンのみ） */}
               <span style={{ width:1, height:24, background:'#e8eaed', margin:'0 2px' }} />
