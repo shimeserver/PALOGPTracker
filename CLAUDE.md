@@ -18,9 +18,9 @@ cd mobile && npx expo export:embed --platform android --dev false \
 cd android && ./gradlew assembleDebug
 
 # 3. インストール＋再起動（実行中だと古い画面が残るため force-stop する）
-adb -s 2A151FDH3000Z7 install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s 2A151FDH3000Z7 shell am force-stop com.palow.palogptracker
-adb -s 2A151FDH3000Z7 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
+adb -s 00026258G000328 install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s 00026258G000328 shell am force-stop com.palow.palogptracker
+adb -s 00026258G000328 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
 ```
 
 パッケージ名: `com.palow.palogptracker`
@@ -34,9 +34,9 @@ debug より高速・省電力・低発熱。署名は debug.keystore と同一�
 cd mobile/android
 KEY=$(grep '^GOOGLE_MAPS_API_KEY=' local.properties | cut -d= -f2)
 ./gradlew assembleRelease -PGOOGLE_MAPS_API_KEY="$KEY"
-adb -s 2A151FDH3000Z7 install -r app/build/outputs/apk/release/app-release.apk
-adb -s 2A151FDH3000Z7 shell am force-stop com.palow.palogptracker
-adb -s 2A151FDH3000Z7 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
+adb -s 00026258G000328 install -r app/build/outputs/apk/release/app-release.apk
+adb -s 00026258G000328 shell am force-stop com.palow.palogptracker
+adb -s 00026258G000328 shell monkey -p com.palow.palogptracker -c android.intent.category.LAUNCHER 1
 ```
 
 ※ Maps キーは現状未使用（地図は WebView+Leaflet）だが CI と揃えて渡しておく。
@@ -94,7 +94,7 @@ GH="/c/Program Files/GitHub CLI/gh.exe"
 
 - GitHub: `shimeserver/PALOGPTracker`
 - Codex: codex.openai.com（PALOGPTracker 接続済み）
-- デバイス ADB ID: `2A151FDH3000Z7`
+- デバイス ADB ID: `00026258G000328`
 
 ## ブランチ戦略
 
