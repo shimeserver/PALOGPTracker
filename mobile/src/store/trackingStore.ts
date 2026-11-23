@@ -6,6 +6,7 @@ import { TrackPoint, Route, TrackingMode } from '../types';
 import { saveRoute } from '../firebase/routes';
 import { enqueuePendingRoute } from '../utils/uploadQueue';
 import { bridgeGaps } from '../utils/gapBridge';
+import type { RaceBoxFix } from '../utils/raceboxParser';
 
 const RECOVERY_KEY = 'route_recovery';
 
@@ -40,6 +41,16 @@ export const LOCATION_TASK = 'gps-background-tracking';
 
 // 前回リカバリー保存時のポイント数（バッチ受信で30の倍数を跨いでも確実に保存するため）
 let lastBackupLen = 0;
+// 前回リカバリー保存時刻。外部GPSの高レート記録で全点列のJSON書き込みが
+// 頻発しないよう、30点に加えて30秒以上の間隔も要求する
+let lastBackupAt = 0;
+const BACKUP_MIN_INTERVAL_MS = 30000;
+
+// 外部GPS（RaceBox等）の最後の有効測位時刻（GNSS時刻）。
+// この時刻+EXTERNAL_PRIORITY_MS までのスマホGPS点は捨てる（外部GPS優先）。
+// 外部GPSが途切れれば自動的にスマホGPSの点が採用される。
+let lastExternalFixTs = 0;
+const EXTERNAL_PRIORITY_MS = 3000;
 
 const LOCATION_OPTIONS: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.BestForNavigation,
@@ -105,7 +116,7 @@ interface TrackingState {
   startTime: number | null;
   trackingMode: TrackingMode;
   setTrackingMode: (mode: TrackingMode) => void;
-  addPoints: (locations: Location.LocationObject[]) => void;
+  addPoints: (locations: Location.LocationObject[], source?: 'phone' | 'external') => void;
   startTracking: () => Promise<void>;
   resumeFromRecovery: (data: RecoveryData) => Promise<void>;
   backupNow: () => void;
@@ -124,8 +135,13 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   trackingMode: 'car',
   setTrackingMode: (mode) => set({ trackingMode: mode }),
 
-  addPoints: (locations) => {
+  addPoints: (locations, source = 'phone') => {
     if (get().isPaused) return;
+    if (source === 'phone' && lastExternalFixTs > 0) {
+      // 外部GPSが生きている時間帯のスマホ点は捨てる（バックグラウンドの遅延バッチも時刻で判定）
+      locations = locations.filter(l => l.timestamp > lastExternalFixTs + EXTERNAL_PRIORITY_MS);
+      if (locations.length === 0) return;
+    }
     const existing = get().currentPoints;
     const mode = get().trackingMode;
     const newPoints: TrackPoint[] = []; // 確定した点（pendingPt はまだ含まない）
@@ -152,6 +168,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         // 高度(m)。標高プロファイル用。undefinedはFirestoreが拒否するため条件付きで付与
         ...(loc.coords.altitude != null ? { alt: Math.round(loc.coords.altitude * 10) / 10 } : {}),
       };
+      // 時刻が戻る/重複する点は捨てる（外部GPS⇔スマホGPS切替時の遅延バッチ対策）
+      if (chainPrev && pt.timestamp <= chainPrev.timestamp) continue;
       if (chainPrev) {
         const dtSec = (pt.timestamp - chainPrev.timestamp) / 1000;
         if (dtSec > 0) {
@@ -180,8 +198,10 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       const updated = [...state.currentPoints, ...newPoints];
       // 30pt以上たまるごとにAsyncStorageへ自動バックアップ（電源断対策）
       // バッチ受信で30の倍数を飛び越えても保存されるよう差分で判定
-      if (state.startTime && updated.length - lastBackupLen >= 30) {
+      if (state.startTime && updated.length - lastBackupLen >= 30
+        && Date.now() - lastBackupAt >= BACKUP_MIN_INTERVAL_MS) {
         lastBackupLen = updated.length;
+        lastBackupAt = Date.now();
         saveRecovery(updated, state.startTime, state.trackingMode);
       }
       return {
@@ -229,6 +249,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
 
     await clearRecovery(); // 前回の残存データをクリア
     lastBackupLen = 0;
+    lastBackupAt = 0;
+    lastExternalFixTs = 0;
     reentryRejects = 0;
     pendingPt = null;
     set({ isTracking: true, isPaused: false, currentPoints: [], startTime: Date.now() });
@@ -244,6 +266,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     const bg = await Location.requestBackgroundPermissionsAsync();
     if (bg.status !== 'granted') throw new Error('バックグラウンド位置情報の許可が必要です');
     lastBackupLen = data.points.length;
+    lastBackupAt = 0;
+    lastExternalFixTs = 0;
     reentryRejects = 0;
     pendingPt = null;
     set({
@@ -318,6 +342,26 @@ function flushPendingPoint() {
   const p = pendingPt;
   pendingPt = null;
   useTrackingStore.setState(s => ({ currentPoints: [...s.currentPoints, p] }));
+}
+
+// 外部GPS（RaceBox等）の測位を記録に流す。間引きは呼び出し側（externalGpsStore）で済ませる。
+// スマホGPSと同じフィルタ（精度・ジャンプ・スパイク）を通す。
+export function addExternalFix(fix: RaceBoxFix) {
+  if (!fix.validFix || fix.hAcc > 50) return;
+  lastExternalFixTs = Math.max(lastExternalFixTs, fix.timestamp);
+  const loc: Location.LocationObject = {
+    timestamp: fix.timestamp,
+    coords: {
+      latitude: fix.lat,
+      longitude: fix.lng,
+      altitude: fix.altitude,
+      accuracy: fix.hAcc,
+      altitudeAccuracy: null,
+      heading: fix.heading,
+      speed: fix.speed,
+    },
+  };
+  useTrackingStore.getState().addPoints([loc], 'external');
 }
 
 // バックグラウンドタスク定義（モジュールのトップレベルで必須）

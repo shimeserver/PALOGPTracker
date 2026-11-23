@@ -7,6 +7,7 @@ import HelpModal from '../../src/components/HelpModal';
 import { useTrackingStore, loadRecovery, clearRecovery, RecoveryData } from '../../src/store/trackingStore';
 import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
+import { useExternalGpsStore, isExternalGpsLive } from '../../src/store/externalGpsStore';
 import { saveRoute } from '../../src/firebase/routes';
 import { flushPendingRoutes, getPendingRoutes, enqueuePendingRoute } from '../../src/utils/uploadQueue';
 import { bridgeGaps } from '../../src/utils/gapBridge';
@@ -20,6 +21,7 @@ const TRACK_HELP = [
   { q: '記録中に画面を閉じても大丈夫？', a: 'はい。バックグラウンドでも記録が続きます。ロック画面にしてもOKです。' },
   { q: '🚗 / 🚶 のモード切り替えは？', a: '記録開始前に右上のアイコンで「車」か「徒歩（散歩・公共交通含む）」を選べます。記録中は変更できません。' },
   { q: '保存時のルート名は？', a: '停止後にルート名を入力できます。空欄のまま保存すると日付が自動で入ります。' },
+  { q: '外部GPS（RaceBox）を使うには？', a: '設定タブの「外部GPSレシーバー」から RaceBox を検索して接続してください。接続中は記録に外部GPSが使われ、途切れると自動でスマホのGPSに戻ります。現在どちらを使っているかは「ポイント記録済み」の下に表示されます。' },
   { q: '下のミニマップは？', a: '記録中の軌跡をリアルタイムで表示します。3ポイントごとに更新されます。' },
 ];
 
@@ -65,6 +67,22 @@ document.addEventListener('message',function(e){try{var m=JSON.parse(e.data);if(
 </script>
 </body>
 </html>`;
+
+// 現在どちらのGPSで記録しているかの表示（外部GPS登録時のみ）
+function GpsSourceBadge() {
+  const s = useExternalGpsStore();
+  if (!s.deviceId || !s.enabled) return null;
+  const live = isExternalGpsLive(s);
+  const fix = s.lastFix;
+  const text = live && fix
+    ? `📡 ${s.deviceName ?? 'RaceBox'} · ${fix.satellites}衛星 · ±${fix.hAcc.toFixed(1)}m · ${s.measuredHz}Hz`
+    : s.status === 'connected'
+      ? '📱 スマホGPS（RaceBox 測位待ち）'
+      : s.status === 'connecting' || s.status === 'reconnecting'
+        ? '📱 スマホGPS（RaceBox 接続中…）'
+        : '📱 スマホGPS（RaceBox 未接続）';
+  return <Text style={[styles.gpsSource, live && styles.gpsSourceLive]} numberOfLines={1}>{text}</Text>;
+}
 
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -349,6 +367,7 @@ export default function TrackScreen() {
       </View>
 
       <Text style={styles.points}>{currentPoints.length} ポイント記録済み</Text>
+      <GpsSourceBadge />
 
       {/* ミニマップ */}
       <View style={styles.miniMapContainer}>
@@ -443,6 +462,8 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 28, fontWeight: 'bold', color: '#1f2937' },
   metricLabel: { fontSize: 12, color: '#9ca3af', marginTop: 4 },
   points: { color: '#9ca3af', textAlign: 'center', marginBottom: 8, fontSize: 14 },
+  gpsSource: { color: '#9ca3af', textAlign: 'center', marginTop: -4, marginBottom: 8, fontSize: 12 },
+  gpsSourceLive: { color: '#16a34a', fontWeight: '600' },
   miniMapContainer: { borderRadius: 14, overflow: 'hidden', height: 200, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' },
   miniMap: { flex: 1 },
   miniMapOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(244,246,249,0.7)', justifyContent: 'center', alignItems: 'center' },

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Stack, router } from 'expo-router';
 import { useAuthStore } from '../src/store/authStore';
 import { useCarStore } from '../src/store/carStore';
+import { useExternalGpsStore } from '../src/store/externalGpsStore';
 import { initErrorReporting } from '../src/utils/errorLog';
 
 initErrorReporting();
@@ -13,6 +14,8 @@ export default function RootLayout() {
   useEffect(() => {
     const unsubscribe = init();
     loadActiveCar();
+    // 外部GPS（RaceBox）の設定読み込み＋有効なら自動接続
+    useExternalGpsStore.getState().init();
     return unsubscribe;
   }, []);
 
