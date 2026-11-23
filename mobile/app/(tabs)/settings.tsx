@@ -7,6 +7,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { deleteAllUserRoutes } from '../../src/firebase/routes';
 import { collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
+import ExternalGpsSettings from '../../src/components/ExternalGpsSettings';
 
 const VERSION = '1.5.0';
 
@@ -16,6 +17,7 @@ PALOGPTracker（以下「本アプリ」）は、以下の情報を収集・利�
 
 【収集する情報】
 ・位置情報（GPS）：ルート記録のため。バックグラウンド取得を含みます。
+・Bluetooth：外部GPSレシーバー（RaceBox）との接続のため（使用時のみ）。
 ・メールアドレス：ログイン認証のため。
 ・走行データ：ルート・スポット・愛車情報。Firebase上に保存されます。
 
@@ -55,7 +57,11 @@ https://expo.dev
 https://reactnative.dev
 
 【Zustand】
-© 2019 Paul Henschel. MIT License.`;
+© 2019 Paul Henschel. MIT License.
+
+【react-native-ble-plx】
+© Intent sp. z o.o. / dotintent. Apache License 2.0.
+https://github.com/dotintent/react-native-ble-plx`;
 
 export default function SettingsScreen() {
   const { user } = useAuthStore();
@@ -113,6 +119,9 @@ export default function SettingsScreen() {
           <Text style={styles.logoutBtnText}>ログアウト</Text>
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.sectionTitle}>外部GPSレシーバー</Text>
+      <ExternalGpsSettings />
 
       <Text style={styles.sectionTitle}>データ管理</Text>
       <View style={styles.card}>

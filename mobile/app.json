@@ -47,6 +47,14 @@
           "locationAlwaysPermission": "バックグラウンドでルートを記録するために常に位置情報を使用します。",
           "locationWhenInUsePermission": "ルート記録中に位置情報を使用します。"
         }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "外部GPSレシーバー（RaceBox）と接続してルートを記録します。"
+        }
       ]
     ],
     "scheme": "palogptracker"
