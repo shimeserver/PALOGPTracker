@@ -5,10 +5,11 @@ import { storageOperation, readPointData, writePointData, removePointData } from
 
 const LEGACY_KEY = 'pending_routes';
 const INDEX_KEY = 'pending_routes_v2';
-type PendingRoute = Omit<Route, 'id'> & { _qid?: string; _attempts?: number };
+type PendingRoute = Omit<Route, 'id'> & { _qid?: string; _attempts?: number; _revision?: string };
 export type { PendingRoute };
 const routeKey = (id: string) => INDEX_KEY + '/' + id;
 const routeId = (route: Omit<Route, 'id'>) => route.userId + '_' + route.startTime;
+const revision = () => Date.now() + '-' + Math.random().toString(36).slice(2);
 let chain: Promise<unknown> = Promise.resolve();
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
   const next = chain.then(fn, fn);
@@ -28,7 +29,7 @@ async function readIndex(): Promise<string[]> {
     for (const route of legacy) {
       const id = routeId(route);
       if (ids.includes(id)) continue;
-      await writePointData(routeKey(id), { ...route, _qid: id });
+      await writePointData(routeKey(id), { ...route, _qid: id, _revision: revision() });
       ids.push(id);
     }
     await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(ids));
@@ -57,9 +58,17 @@ export async function enqueuePendingRoute(route: Omit<Route, 'id'>): Promise<voi
   await serialize(() => storageOperation(async () => {
     const ids = await readIndex();
     const id = routeId(route);
-    if (ids.includes(id)) return;
-    await writePointData(routeKey(id), { ...route, _qid: id });
-    await AsyncStorage.setItem(INDEX_KEY, JSON.stringify([...ids, id]));
+    const exists = ids.includes(id);
+    if (exists) {
+      const saved = await readPointData<PendingRoute>(routeKey(id));
+      if (!saved) throw new Error('未送信記録を読み込めません');
+      // A recovery may coexist with its queued snapshot after an interrupted stop.
+      // Keep the resumed extension, but never replace it with an older backup.
+      if (route.endTime < saved.endTime
+        || (route.endTime === saved.endTime && route.points.length <= saved.points.length)) return;
+    }
+    await writePointData(routeKey(id), { ...route, _qid: id, _revision: revision() });
+    if (!exists) await AsyncStorage.setItem(INDEX_KEY, JSON.stringify([...ids, id]));
   }));
 }
 
@@ -77,7 +86,7 @@ export function flushPendingRoutes(): Promise<{ uploaded: number; remaining: num
     for (const id of ids) {
       const item = await serialize(() => storageOperation(() => readPointData<PendingRoute>(routeKey(id))));
       if (!item) throw new Error('未送信記録を読み込めません');
-      const { _qid, _attempts, ...route } = item;
+      const { _qid, _attempts, _revision, ...route } = item;
       try {
         await saveRoute(route);
       } catch {
@@ -85,6 +94,10 @@ export function flushPendingRoutes(): Promise<{ uploaded: number; remaining: num
         continue;
       }
       await serialize(() => storageOperation(async () => {
+        const current = await readPointData<PendingRoute>(routeKey(id));
+        if (!current) throw new Error('未送信記録を読み込めません');
+        // An older upload must not delete a newer snapshot enqueued while it waited.
+        if (current._revision !== _revision) return;
         const next = (await readIndex()).filter(value => value !== id);
         await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(next));
         await removePointData(routeKey(id)).catch(() => {});

@@ -8,7 +8,10 @@ const chunkDirectory = () => {
   if (!FileSystem.documentDirectory) throw new Error('端末内の保存先を利用できません');
   return FileSystem.documentDirectory + 'gps-point-chunks/';
 };
-const chunkPath = (key: string) => chunkDirectory() + encodeURIComponent(key) + '.json';
+// Do not use %2F in a file URI: Android decodes it into a directory separator.
+// Escape the escape character too, so different keys cannot share a filename.
+const chunkPath = (key: string) => chunkDirectory()
+  + key.replace(/[^a-zA-Z0-9-]/g, char => '_' + char.charCodeAt(0).toString(16) + '_') + '.json';
 async function deleteChunks(keys: string[]) {
   for (const key of keys) await FileSystem.deleteAsync(chunkPath(key), { idempotent: true });
 }

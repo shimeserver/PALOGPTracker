@@ -17,12 +17,18 @@ function environment() {
     'expo-file-system/legacy': {
       documentDirectory: 'file:///documents/',
       async makeDirectoryAsync() {},
-      async writeAsStringAsync(key, value) { if (calls.failFile) throw Error('disk full'); calls.writes++; files.set(key, value); },
+      async writeAsStringAsync(key, value) {
+        // Native file:// handling decodes URI escapes before opening the file.
+        const filename = decodeURIComponent(key).slice('file:///documents/gps-point-chunks/'.length);
+        assert.ok(!filename.includes('/'), 'chunk filename must not decode into nested directories');
+        if (calls.failFile) throw Error('disk full'); calls.writes++; files.set(key, value);
+      },
       async readAsStringAsync(key) { if (!files.has(key)) throw Error('missing'); return files.get(key); },
       async deleteAsync(key) { files.delete(key); },
     },
     '../firebase/routes': { async saveRoute(route) {
       if (calls.offline) throw Error('offline');
+      calls.onUpload?.();
       if (calls.uploadWait) await calls.uploadWait;
       calls.uploaded.push(route); return route.userId + '_' + route.startTime;
     } },
@@ -205,4 +211,38 @@ test('failed final save keeps all points and allows retry', async () => {
   env.calls.failKey = null;
   assert.equal(await store.getState().stopTracking('user'), 'queued');
   assert.equal((await env.load('utils/uploadQueue.ts').getPendingRoutes())[0].points.length, 100);
+});
+
+test('resumed recovery replaces an older queued snapshot without losing added points', async () => {
+  const env = environment(), queue = env.load('utils/uploadQueue.ts');
+  await queue.enqueuePendingRoute(route(600));
+  env.values.set('route_recovery', JSON.stringify({ points: points(600), startTime: 100000, mode: 'walk', savedAt: 1 }));
+  const tracking = env.load('store/trackingStore.ts');
+  await tracking.useTrackingStore.getState().resumeFromRecovery(await tracking.loadRecovery());
+  tracking.useTrackingStore.getState().addPoints(points(700).slice(600).map(p => ({ timestamp: p.timestamp, coords: { latitude: p.lat, longitude: p.lng, speed: 1, accuracy: 1 } })));
+  assert.equal(await tracking.useTrackingStore.getState().stopTracking('user'), 'queued');
+  assert.equal((await queue.getPendingRoutes())[0].points.length, 700);
+  await queue.enqueuePendingRoute(route(600));
+  assert.equal((await queue.getPendingRoutes())[0].points.length, 700);
+  assert.equal(await tracking.loadRecovery(), null);
+});
+
+test('completion of an older upload cannot delete a resumed queued recording', async () => {
+  const env = environment(), queue = env.load('utils/uploadQueue.ts');
+  await queue.enqueuePendingRoute(route(600));
+  env.calls.offline = false;
+  let finish, started;
+  const began = new Promise(resolve => { started = resolve; });
+  env.calls.onUpload = started;
+  env.calls.uploadWait = new Promise(resolve => { finish = resolve; });
+  const upload = queue.flushPendingRoutes();
+  await began;
+  await queue.enqueuePendingRoute(route(700));
+  finish();
+  await upload;
+  assert.equal((await queue.getPendingRoutes())[0].points.length, 700);
+  env.calls.uploadWait = null;
+  await queue.flushPendingRoutes();
+  assert.equal(env.calls.uploaded.at(-1).points.length, 700);
+  assert.equal((await queue.getPendingRoutes()).length, 0);
 });
