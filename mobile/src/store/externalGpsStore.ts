@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { BleManager as BleManagerType, Device, Subscription } from 'react-native-ble-plx';
 import { RaceBoxFix, RaceBoxStreamParser, base64ToBytes } from '../utils/raceboxParser';
 import { useTrackingStore, addExternalFix } from './trackingStore';
+import { FixSampler } from '../utils/fixSampler';
 
 const SETTINGS_KEY = 'external_gps_settings';
 
@@ -18,7 +19,7 @@ const RECONNECT_DELAY_MS = 3000;
 const UI_UPDATE_INTERVAL_MS = 250; // 25Hz全部で再描画しないよう UI 反映は 4Hz に間引く
 const SCAN_DURATION_MS = 10000;
 
-export type RecordHz = 1 | 2 | 5;
+export type RecordHz = 1 | 2 | 5 | 10;
 export type ExternalGpsStatus = 'off' | 'scanning' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
 export interface ScanResult { id: string; name: string; rssi: number | null }
@@ -60,7 +61,7 @@ let manualDisconnect = false;
 let connecting = false;
 const parser = new RaceBoxStreamParser();
 let lastUiUpdate = 0;
-let lastRecordedTs = 0;
+const sampler = new FixSampler();
 let hzWindowStart = 0;
 let hzCount = 0;
 
@@ -128,13 +129,10 @@ function handleFix(fix: RaceBoxFix) {
     useExternalGpsStore.setState({ lastFix: fix, lastFixAt: now });
   }
 
-  if (!fix.validFix) return;
+  if (!fix.validFix || fix.hAcc > 50) return;
   const tracking = useTrackingStore.getState();
-  if (!tracking.isTracking || tracking.isPaused) return;
-  const interval = 1000 / useExternalGpsStore.getState().recordHz;
-  // 少しの揺らぎで 1 点落ちないよう 10% のマージン
-  if (fix.timestamp - lastRecordedTs < interval * 0.9 && fix.timestamp >= lastRecordedTs) return;
-  lastRecordedTs = fix.timestamp;
+  if (!tracking.isTracking || tracking.isPaused) { sampler.reset(); return; }
+  if (!sampler.accept(fix.timestamp, useExternalGpsStore.getState().recordHz)) return;
   addExternalFix(fix);
 }
 
@@ -224,7 +222,7 @@ export const useExternalGpsStore = create<ExternalGpsState>((set, get) => ({
           enabled: !!s.enabled,
           deviceId: s.deviceId ?? null,
           deviceName: s.deviceName ?? null,
-          recordHz: s.recordHz === 2 || s.recordHz === 5 ? s.recordHz : 1,
+          recordHz: s.recordHz === 2 || s.recordHz === 5 || s.recordHz === 10 ? s.recordHz : 1,
         });
       }
     } catch {}

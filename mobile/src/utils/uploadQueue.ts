@@ -1,78 +1,99 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Route } from '../types';
 import { saveRoute } from '../firebase/routes';
+import { storageOperation, readPointData, writePointData, removePointData } from './pointStorage';
 
-const QUEUE_KEY = 'pending_routes';
-const MAX_ATTEMPTS = 5; // これを超えて失敗し続けるルートはキューから外す（毒データ対策）
-
-// クライアント側で採番する一意ID（保存の冪等性・重複排除用）
+const LEGACY_KEY = 'pending_routes';
+const INDEX_KEY = 'pending_routes_v2';
 type PendingRoute = Omit<Route, 'id'> & { _qid?: string; _attempts?: number };
 export type { PendingRoute };
-
-// enqueue と flush の read-modify-write を直列化する簡易ミューテックス
-let opChain: Promise<unknown> = Promise.resolve();
+const routeKey = (id: string) => INDEX_KEY + '/' + id;
+const routeId = (route: Omit<Route, 'id'>) => route.userId + '_' + route.startTime;
+let chain: Promise<unknown> = Promise.resolve();
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
-  const run = opChain.then(fn, fn);
-  opChain = run.catch(() => {});
-  return run;
+  const next = chain.then(fn, fn);
+  chain = next.catch(() => {});
+  return next;
 }
 
-let flushing = false;
-
-async function readQueue(): Promise<PendingRoute[]> {
-  try {
-    const raw = await AsyncStorage.getItem(QUEUE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
-}
-
-async function writeQueue(queue: PendingRoute[]): Promise<void> {
-  if (queue.length === 0) await AsyncStorage.removeItem(QUEUE_KEY);
-  else await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+// Called under storageOperation. Failed reads must never become an empty queue.
+async function readIndex(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(INDEX_KEY);
+  const ids: string[] = raw ? JSON.parse(raw) : [];
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('未送信一覧を読み込めません');
+  const legacyRaw = await AsyncStorage.getItem(LEGACY_KEY);
+  if (legacyRaw) {
+    const legacy: PendingRoute[] = JSON.parse(legacyRaw);
+    if (!Array.isArray(legacy)) throw new Error('以前の未送信記録を読み込めません');
+    for (const route of legacy) {
+      const id = routeId(route);
+      if (ids.includes(id)) continue;
+      await writePointData(routeKey(id), { ...route, _qid: id });
+      ids.push(id);
+    }
+    await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(ids));
+    await AsyncStorage.removeItem(LEGACY_KEY);
+  }
+  return ids;
 }
 
 export async function getPendingRoutes(): Promise<PendingRoute[]> {
-  return readQueue();
+  return serialize(() => storageOperation(async () => {
+    const routes: PendingRoute[] = [];
+    for (const id of await readIndex()) {
+      const route = await readPointData<PendingRoute>(routeKey(id));
+      if (!route) throw new Error('未送信記録を読み込めません。データは削除していません。');
+      routes.push(route);
+    }
+    return routes;
+  }));
+}
+
+export async function getPendingRouteCount(): Promise<number> {
+  return serialize(() => storageOperation(async () => (await readIndex()).length));
 }
 
 export async function enqueuePendingRoute(route: Omit<Route, 'id'>): Promise<void> {
-  await serialize(async () => {
-    const queue = await readQueue();
-    // 一意ID（時刻+ポイント数+開始/終了）で重複enqueueを防ぐ
-    const qid = `${route.startTime}_${route.endTime}_${route.points.length}`;
-    if (queue.some(r => r._qid === qid)) return;
-    queue.push({ ...route, _qid: qid, _attempts: 0 });
-    await writeQueue(queue);
-  });
+  await serialize(() => storageOperation(async () => {
+    const ids = await readIndex();
+    const id = routeId(route);
+    if (ids.includes(id)) return;
+    await writePointData(routeKey(id), { ...route, _qid: id });
+    await AsyncStorage.setItem(INDEX_KEY, JSON.stringify([...ids, id]));
+  }));
 }
 
-// キュー内のルートを順に送信。成功分は除去、失敗はattemptsを増やし、上限超過分は破棄。
-export async function flushPendingRoutes(): Promise<{ uploaded: number; remaining: number; dropped: number }> {
-  if (flushing) return { uploaded: 0, remaining: (await readQueue()).length, dropped: 0 };
-  flushing = true;
-  try {
-    return await serialize(async () => {
-      const queue = await readQueue();
-      if (queue.length === 0) return { uploaded: 0, remaining: 0, dropped: 0 };
+export async function hasPendingRoute(userId: string, startTime: number): Promise<boolean> {
+  return serialize(() => storageOperation(async () => (await readIndex()).includes(userId + '_' + startTime)));
+}
 
-      const keep: PendingRoute[] = [];
-      let uploaded = 0, dropped = 0;
-      for (const item of queue) {
-        try {
-          const { _qid, _attempts, ...route } = item;
-          void _qid; void _attempts;
-          await saveRoute(route);
-          uploaded++;
-        } catch {
-          const attempts = (item._attempts ?? 0) + 1;
-          if (attempts >= MAX_ATTEMPTS) { dropped++; continue; } // 破棄
-          keep.push({ ...item, _attempts: attempts });
-        }
+let inFlight: Promise<{ uploaded: number; remaining: number; dropped: number }> | null = null;
+export function flushPendingRoutes(): Promise<{ uploaded: number; remaining: number; dropped: number }> {
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    const ids = await serialize(() => storageOperation(readIndex));
+    let uploaded = 0;
+    let remaining = [...ids];
+    for (const id of ids) {
+      const item = await serialize(() => storageOperation(() => readPointData<PendingRoute>(routeKey(id))));
+      if (!item) throw new Error('未送信記録を読み込めません');
+      const { _qid, _attempts, ...route } = item;
+      try {
+        await saveRoute(route);
+      } catch {
+        // Keep the durable copy regardless of failure count or cause.
+        continue;
       }
-      await writeQueue(keep);
-      return { uploaded, remaining: keep.length, dropped };
-    });
-  } finally {
-    flushing = false;
-  }
+      await serialize(() => storageOperation(async () => {
+        const next = (await readIndex()).filter(value => value !== id);
+        await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(next));
+        await removePointData(routeKey(id)).catch(() => {});
+        remaining = next;
+      }));
+      uploaded++;
+    }
+    remaining = await serialize(() => storageOperation(readIndex));
+    return { uploaded, remaining: remaining.length, dropped: 0 };
+  })().finally(() => { inFlight = null; });
+  return inFlight;
 }

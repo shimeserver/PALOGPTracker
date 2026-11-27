@@ -11,7 +11,7 @@ const STATUS_LABEL: Record<ExternalGpsStatus, string> = {
   error: 'エラー',
 };
 
-const HZ_OPTIONS: RecordHz[] = [1, 2, 5];
+const HZ_OPTIONS: RecordHz[] = [1, 2, 5, 10];
 
 export default function ExternalGpsSettings() {
   const s = useExternalGpsStore();
@@ -30,7 +30,7 @@ export default function ExternalGpsSettings() {
   return (
     <View style={styles.card}>
       <Text style={styles.desc}>
-        RaceBox Mini / Mini S / Micro を Bluetooth で接続すると、記録に外部GPS（最大25Hz・高精度）を使います。
+        RaceBox Mini / Mini S / Micro を Bluetooth で接続し、最大25Hzで受信した位置情報を、選択した頻度（最大10Hz）で記録します。
         外部GPSが途切れた区間は自動でスマホのGPSに切り替わります。
       </Text>
 
@@ -118,7 +118,7 @@ export default function ExternalGpsSettings() {
             ))}
           </View>
           <Text style={styles.note}>
-            1Hz=1秒ごと。サーキット走行など細かく残したいときは 2〜5Hz（データ量が増えます）。
+            1Hz=1秒ごと。細かく残したいときは 2〜10Hz。10Hzは平均で毎秒10点です（受信状況により少なくなります）。
           </Text>
         </>
       )}
