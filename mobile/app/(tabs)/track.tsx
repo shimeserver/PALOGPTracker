@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useUiStore } from '../../src/store/uiStore';
+import { mapPreview } from '../../src/utils/mapPreview';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput, Modal } from 'react-native';
 import WebView from 'react-native-webview';
 import { router } from 'expo-router';
@@ -9,7 +10,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { useCarStore } from '../../src/store/carStore';
 import { useExternalGpsStore, isExternalGpsLive } from '../../src/store/externalGpsStore';
 import { saveRoute } from '../../src/firebase/routes';
-import { flushPendingRoutes, getPendingRoutes, enqueuePendingRoute } from '../../src/utils/uploadQueue';
+import { flushPendingRoutes, getPendingRouteCount, enqueuePendingRoute } from '../../src/utils/uploadQueue';
 import { bridgeGaps } from '../../src/utils/gapBridge';
 import { getUserLandmarks } from '../../src/firebase/landmarks';
 import { recordVisit } from '../../src/firebase/landmarks';
@@ -22,7 +23,7 @@ const TRACK_HELP = [
   { q: '🚗 / 🚶 のモード切り替えは？', a: '記録開始前に右上のアイコンで「車」か「徒歩（散歩・公共交通含む）」を選べます。記録中は変更できません。' },
   { q: '保存時のルート名は？', a: '停止後にルート名を入力できます。空欄のまま保存すると日付が自動で入ります。' },
   { q: '外部GPS（RaceBox）を使うには？', a: '設定タブの「外部GPSレシーバー」から RaceBox を検索して接続してください。接続中は記録に外部GPSが使われ、途切れると自動でスマホのGPSに戻ります。現在どちらを使っているかは「ポイント記録済み」の下に表示されます。' },
-  { q: '下のミニマップは？', a: '記録中の軌跡をリアルタイムで表示します。3ポイントごとに更新されます。' },
+  { q: '下のミニマップは？', a: '記録中の軌跡を約1秒ごとに更新します。表示用の軌跡は軽量化していますが、保存データは設定した頻度のまま残します。' },
 ];
 
 const MINI_MAP_HTML = `<!DOCTYPE html>
@@ -108,7 +109,7 @@ const MODE_CONFIG = {
 } as const;
 
 export default function TrackScreen() {
-  const { isTracking, isPaused, currentPoints, currentSpeed, startTime, startTracking, stopTracking, pauseTracking, resumeTracking, trackingMode, setTrackingMode, resumeFromRecovery } = useTrackingStore();
+  const { isTracking, isPaused, currentPoints, currentSpeed, currentDistance, storageError, isSaving, startTime, startTracking, stopTracking, pauseTracking, resumeTracking, trackingMode, setTrackingMode, resumeFromRecovery } = useTrackingStore();
   const { user } = useAuthStore();
   const { activeCar } = useCarStore();
   const [elapsed, setElapsed] = useState(0);
@@ -119,7 +120,6 @@ export default function TrackScreen() {
   const [flushing, setFlushing] = useState(false);
   const miniMapRef = useRef<WebView>(null);
   const miniMapReady = useRef(false);
-  const prevMiniMapLen = useRef(0);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'track';
 
@@ -134,16 +134,20 @@ export default function TrackScreen() {
     if (isTracking) return; // 記録中は不要
     loadRecovery().then(data => {
       if (data && data.points.length >= 2) setRecovery(data);
+    }).catch(() => {
+      useTrackingStore.setState({ storageError: 'バックアップを読み込めません。端末内のデータは削除していません。' });
     });
     // 未送信キューがあれば自動再送
     (async () => {
-      const pending = await getPendingRoutes();
-      if (pending.length === 0) return;
-      setPendingCount(pending.length);
+      const count = await getPendingRouteCount();
+      if (count === 0) return;
+      setPendingCount(count);
       const { uploaded, remaining } = await flushPendingRoutes();
       setPendingCount(remaining);
       if (uploaded > 0) Alert.alert('自動送信完了', `未送信だった ${uploaded} 件のルートを保存しました`);
-    })();
+    })().catch(() => {
+      useTrackingStore.setState({ storageError: '未送信記録の読み込み・送信に失敗しました。端末内のデータは保持しています。' });
+    });
   }, []);
 
   const handleFlushPending = async () => {
@@ -154,14 +158,15 @@ export default function TrackScreen() {
       setPendingCount(remaining);
       if (uploaded > 0) Alert.alert('送信完了', `${uploaded} 件のルートを保存しました`);
       else Alert.alert('送信失敗', '通信環境を確認してもう一度お試しください');
+    } catch {
+      Alert.alert('送信できません', '未送信記録の読み込み・送信に失敗しました。端末内のデータは保持しています。');
     } finally { setFlushing(false); }
   };
 
   const handleMiniMapLoad = () => {
     miniMapReady.current = true;
-    prevMiniMapLen.current = 0;
     if (currentPoints.length >= 1) {
-      const coords = currentPoints.map(p => [p.lat, p.lng]);
+      const coords = mapPreview(currentPoints);
       miniMapRef.current?.injectJavaScript(
         `window.updateRoute(${JSON.stringify(coords)});true;`
       );
@@ -170,17 +175,13 @@ export default function TrackScreen() {
 
   useEffect(() => {
     if (!miniMapReady.current) return;
-    if (currentPoints.length - prevMiniMapLen.current < 3 && currentPoints.length !== 0) return;
-    prevMiniMapLen.current = currentPoints.length;
-    const coords = currentPoints.map(p => [p.lat, p.lng]);
+    const coords = mapPreview(currentPoints);
     miniMapRef.current?.injectJavaScript(
       `window.updateRoute(${JSON.stringify(coords)});true;`
     );
   }, [currentPoints.length]);
 
-  const totalDist = currentPoints.length > 1
-    ? currentPoints.reduce((acc, p, i) => i === 0 ? 0 : acc + haversine(currentPoints[i - 1], p), 0)
-    : 0;
+  const totalDist = currentDistance;
 
   const handleSaveRecovery = async () => {
     if (!user || !recovery) return;
@@ -253,7 +254,8 @@ export default function TrackScreen() {
     if (!user) return;
     try {
       const tagIds = trackingMode === 'car' && activeCar?.tagId ? [activeCar.tagId] : undefined;
-      const savedPoints = currentPoints;
+      useTrackingStore.getState().backupNow();
+      const savedPoints = useTrackingStore.getState().currentPoints;
       const id = await stopTracking(user.uid, routeName || undefined, tagIds);
       if (id === 'queued') {
         setPendingCount(c => c + 1);
@@ -368,6 +370,7 @@ export default function TrackScreen() {
 
       <Text style={styles.points}>{currentPoints.length} ポイント記録済み</Text>
       <GpsSourceBadge />
+      {storageError && <Text style={{ color: '#dc2626', textAlign: 'center', marginBottom: 8 }}>{storageError}</Text>}
 
       {/* ミニマップ */}
       <View style={styles.miniMapContainer}>
@@ -394,18 +397,19 @@ export default function TrackScreen() {
       </View>
 
       {!isTracking ? (
-        <TouchableOpacity style={styles.startButton} onPress={handleStart}>
-          <Text style={styles.startButtonText}>▶ 記録開始</Text>
+        <TouchableOpacity style={styles.startButton} onPress={currentPoints.length >= 2 ? () => setShowNameModal(true) : handleStart} disabled={isSaving}>
+          <Text style={styles.startButtonText}>{isSaving ? '保存中…' : currentPoints.length >= 2 ? '保存を再試行' : '▶ 記録開始'}</Text>
         </TouchableOpacity>
       ) : (
         <View style={styles.trackingButtons}>
           <TouchableOpacity
             style={[styles.pauseButton, isPaused && styles.resumeButton]}
+            disabled={isSaving}
             onPress={() => isPaused ? resumeTracking() : pauseTracking()}
           >
             <Text style={styles.pauseButtonText}>{isPaused ? '▶ 再開' : '⏸ 一時停止'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.stopButton} onPress={() => setShowNameModal(true)}>
+          <TouchableOpacity style={styles.stopButton} onPress={() => setShowNameModal(true)} disabled={isSaving}>
             <Text style={styles.stopButtonText}>■ 停止・保存</Text>
           </TouchableOpacity>
         </View>

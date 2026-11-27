@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useUiStore } from '../../src/store/uiStore';
+import { mapPreview } from '../../src/utils/mapPreview';
 import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
@@ -165,7 +166,6 @@ export default function MapScreen() {
   const landmarksRef = useRef<Landmark[]>([]);
   const landmarksCachedUidRef = useRef<string | null>(null);
   const locUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevPointsLen = useRef(0);
   const { helpTarget, setHelpTarget } = useUiStore();
   const showHelp = helpTarget === 'map';
   const [following, setFollowing] = useState(false);
@@ -297,13 +297,12 @@ export default function MapScreen() {
   const handleLoad = () => {
     const lat = currentLocation?.lat ?? 35.681236;
     const lng = currentLocation?.lng ?? 139.767125;
-    const route = currentPoints.map(p => [p.lat, p.lng]);
+    const route = mapPreview(currentPoints);
     const lms = lmPayload(landmarksRef.current, spotCatsRef.current);
     webviewRef.current?.injectJavaScript(
       `window.initMap(${lat},${lng},${JSON.stringify(route)},${JSON.stringify(lms)});true;`
     );
     initialized.current = true;
-    prevPointsLen.current = currentPoints.length;
   };
 
   // 位置更新（デバウンス: 2秒）
@@ -324,12 +323,10 @@ export default function MapScreen() {
     };
   }, [currentLocation]);
 
-  // ルート更新（5点ごと）
+  // 約1秒ごとの記録スナップショットを表示用に間引いて反映
   useEffect(() => {
     if (!initialized.current) return;
-    if (currentPoints.length - prevPointsLen.current < 5 && currentPoints.length !== 0) return;
-    prevPointsLen.current = currentPoints.length;
-    const coords = currentPoints.map(p => [p.lat, p.lng]);
+    const coords = mapPreview(currentPoints);
     webviewRef.current?.injectJavaScript(
       `window.updateRoute(${JSON.stringify(coords)});true;`
     );
